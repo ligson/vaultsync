@@ -4,6 +4,7 @@
 
 - `docs/specs/`：需求和设计文档。
 - `docs/notes/`：可复用决策、约定和实现说明。
+- `docs/superpowers/plans/`：可执行的实现计划。
 
 ## 使用原则
 

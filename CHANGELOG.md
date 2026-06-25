@@ -4,6 +4,8 @@
 
 ## 2026-06-25
 
+- 新增 Go + SQLite 后端 MVP 实现计划文档，路径为 `docs/superpowers/plans/2026-06-25-go-sqlite-backend-mvp.md`。
+- 补充规则：实现计划统一放在 `docs/superpowers/plans/`。
 - 将根目录 `README.md` 中文化。
 - 将项目文档规则改为尽可能使用中文编写，技术名词和代码标识可保留英文。
 - 将现有规则、说明和决策文档中的英文说明改为中文。

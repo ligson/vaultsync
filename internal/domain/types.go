@@ -31,3 +31,32 @@ type SyncRoot struct {
 	ArchivePath   string `json:"archive_path"`
 	CreatedAt     string `json:"created_at"`
 }
+
+type UploadSession struct {
+	ID            string `json:"id"`
+	UserID        string `json:"user_id"`
+	DeviceID      string `json:"device_id"`
+	SyncRootID    string `json:"sync_root_id"`
+	ObjectID      string `json:"object_id"`
+	VersionID     string `json:"version_id"`
+	EncryptedName string `json:"encrypted_name"`
+	TotalSize     int64  `json:"total_size"`
+	ChunkSize     int64  `json:"chunk_size"`
+	ReceivedSize  int64  `json:"received_size"`
+	Status        string `json:"status"`
+	MetadataJSON  string `json:"metadata_json"`
+	CreatedAt     string `json:"created_at"`
+}
+
+type FileVersion struct {
+	ID            string `json:"id"`
+	UserID        string `json:"user_id"`
+	SyncRootID    string `json:"sync_root_id"`
+	ObjectID      string `json:"object_id"`
+	EncryptedName string `json:"encrypted_name"`
+	ContentPath   string `json:"content_path"`
+	ContentHash   string `json:"content_hash"`
+	SizeBytes     int64  `json:"size_bytes"`
+	MetadataJSON  string `json:"metadata_json"`
+	CreatedAt     string `json:"created_at"`
+}

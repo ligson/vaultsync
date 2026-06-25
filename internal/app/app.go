@@ -11,9 +11,11 @@ import (
 )
 
 type App struct {
-	Config      config.Config
-	db          *sql.DB
-	authService *service.AuthService
+	Config          config.Config
+	db              *sql.DB
+	authService     *service.AuthService
+	deviceService   *service.DeviceService
+	syncRootService *service.SyncRootService
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -23,16 +25,23 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	authRepo := store.NewAuthRepo(db)
+	deviceRepo := store.NewDeviceRepo(db)
+	syncRootRepo := store.NewSyncRootRepo(db)
 	return &App{
-		Config:      cfg,
-		db:          db,
-		authService: service.NewAuthService(authRepo, cfg.TokenSecret),
+		Config:          cfg,
+		db:              db,
+		authService:     service.NewAuthService(authRepo, cfg.TokenSecret),
+		deviceService:   service.NewDeviceService(deviceRepo),
+		syncRootService: service.NewSyncRootService(syncRootRepo),
 	}, nil
 }
 
 func (a *App) Dependencies() httpapi.Dependencies {
 	return httpapi.Dependencies{
-		AuthHandler: handlers.NewAuthHandler(a.authService),
+		AuthHandler:     handlers.NewAuthHandler(a.authService),
+		DeviceHandler:   handlers.NewDeviceHandler(a.deviceService),
+		SyncRootHandler: handlers.NewSyncRootHandler(a.syncRootService),
+		AuthService:     a.authService,
 	}
 }
 

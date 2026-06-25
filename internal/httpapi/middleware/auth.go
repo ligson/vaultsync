@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/ligson/vaultsync/internal/service"
+	"github.com/ligson/vaultsync/internal/token"
 )
 
 type contextKey string
@@ -24,7 +24,11 @@ func MustUserID(ctx context.Context) string {
 	return userID
 }
 
-func Auth(authService *service.AuthService, next http.Handler) http.Handler {
+type TokenVerifier interface {
+	VerifyToken(value string) (token.Claims, error)
+}
+
+func Auth(tokenVerifier TokenVerifier, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := r.Header.Get("Authorization")
 		tokenValue, ok := strings.CutPrefix(header, "Bearer ")
@@ -33,7 +37,7 @@ func Auth(authService *service.AuthService, next http.Handler) http.Handler {
 			return
 		}
 
-		claims, err := authService.VerifyToken(tokenValue)
+		claims, err := tokenVerifier.VerifyToken(tokenValue)
 		if err != nil {
 			http.Error(w, "invalid bearer token", http.StatusUnauthorized)
 			return

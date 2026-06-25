@@ -1,6 +1,7 @@
 package testutil
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -30,4 +31,19 @@ func NewTestServer(t *testing.T) *httptest.Server {
 	server := httptest.NewServer(httpapi.NewRouter(instance.Dependencies()))
 	t.Cleanup(server.Close)
 	return server
+}
+
+func NewAuthenticatedServer(t *testing.T) (*httptest.Server, string) {
+	t.Helper()
+
+	server := NewTestServer(t)
+	registerBody := `{"email":"alice@example.com","password":"passw0rd!"}`
+	resp := JSONRequest(t, server, http.MethodPost, "/api/v1/auth/register", registerBody, "")
+	AssertStatus(t, resp, http.StatusCreated)
+
+	loginBody := `{"email":"alice@example.com","password":"passw0rd!"}`
+	resp = JSONRequest(t, server, http.MethodPost, "/api/v1/auth/login", loginBody, "")
+	AssertStatus(t, resp, http.StatusOK)
+	token := MustReadJSONField(t, resp, "token")
+	return server, token
 }

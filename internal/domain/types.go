@@ -60,3 +60,11 @@ type FileVersion struct {
 	MetadataJSON  string `json:"metadata_json"`
 	CreatedAt     string `json:"created_at"`
 }
+
+type CursorChange struct {
+	CursorValue int64  `json:"cursor_value"`
+	VersionID   string `json:"version_id"`
+	ObjectID    string `json:"object_id"`
+	SyncRootID  string `json:"sync_root_id"`
+	CreatedAt   string `json:"created_at"`
+}

@@ -32,3 +32,15 @@ func TestUploadCiphertextAndCompleteVersion(t *testing.T) {
 	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions/"+sessionID+"/complete", `{}`, token)
 	testutil.AssertStatus(t, resp, http.StatusCreated)
 }
+
+func TestListChangesAndDownloadCiphertext(t *testing.T) {
+	app, token, versionID := testutil.NewUploadedVersionServer(t)
+
+	resp := testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/changes?cursor=0", "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	testutil.AssertJSONContains(t, resp, versionID)
+
+	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/objects/"+versionID, "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	testutil.AssertHeader(t, resp, "Content-Type", "application/octet-stream")
+}

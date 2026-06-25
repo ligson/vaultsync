@@ -18,6 +18,8 @@ type App struct {
 	deviceService   *service.DeviceService
 	syncRootService *service.SyncRootService
 	uploadService   *service.UploadService
+	changeService   *service.ChangeService
+	downloadService *service.DownloadService
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -38,6 +40,8 @@ func New(cfg config.Config) (*App, error) {
 		deviceService:   service.NewDeviceService(deviceRepo),
 		syncRootService: service.NewSyncRootService(syncRootRepo),
 		uploadService:   service.NewUploadService(objectRepo, fsStorage),
+		changeService:   service.NewChangeService(db, cfg.DataDir),
+		downloadService: service.NewDownloadService(db, cfg.DataDir),
 	}, nil
 }
 
@@ -47,6 +51,8 @@ func (a *App) Dependencies() httpapi.Dependencies {
 		DeviceHandler:   handlers.NewDeviceHandler(a.deviceService),
 		SyncRootHandler: handlers.NewSyncRootHandler(a.syncRootService),
 		UploadHandler:   handlers.NewUploadHandler(a.uploadService),
+		ChangeHandler:   handlers.NewChangeHandler(a.changeService),
+		DownloadHandler: handlers.NewDownloadHandler(a.downloadService),
 		AuthService:     a.authService,
 	}
 }

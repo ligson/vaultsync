@@ -12,6 +12,8 @@ type Dependencies struct {
 	DeviceHandler   *handlers.DeviceHandler
 	SyncRootHandler *handlers.SyncRootHandler
 	UploadHandler   *handlers.UploadHandler
+	ChangeHandler   *handlers.ChangeHandler
+	DownloadHandler *handlers.DownloadHandler
 	AuthService     middleware.TokenVerifier
 }
 
@@ -32,8 +34,12 @@ func RegisterRoutes(mux *http.ServeMux, deps Dependencies) {
 	secured.HandleFunc("POST /api/v1/upload-sessions", deps.UploadHandler.CreateSession)
 	secured.HandleFunc("PUT /api/v1/upload-sessions/{sessionID}/parts/{partIndex}", deps.UploadHandler.UploadPart)
 	secured.HandleFunc("POST /api/v1/upload-sessions/{sessionID}/complete", deps.UploadHandler.Complete)
+	secured.HandleFunc("GET /api/v1/changes", deps.ChangeHandler.List)
+	secured.HandleFunc("GET /api/v1/objects/{versionID}", deps.DownloadHandler.Download)
 	mux.Handle("/api/v1/devices", middleware.Auth(deps.AuthService, secured))
 	mux.Handle("/api/v1/sync-roots", middleware.Auth(deps.AuthService, secured))
 	mux.Handle("/api/v1/upload-sessions", middleware.Auth(deps.AuthService, secured))
 	mux.Handle("/api/v1/upload-sessions/", middleware.Auth(deps.AuthService, secured))
+	mux.Handle("/api/v1/changes", middleware.Auth(deps.AuthService, secured))
+	mux.Handle("/api/v1/objects/", middleware.Auth(deps.AuthService, secured))
 }

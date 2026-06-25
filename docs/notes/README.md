@@ -1,12 +1,11 @@
-# Notes
+# 项目笔记
 
-This folder is for reusable project memory.
+这里用于保存可复用的项目记忆。
 
-Examples:
+适合记录：
 
-- technical decisions
-- naming conventions
-- sync protocol notes
-- encryption assumptions
-- lessons learned
-
+- 技术决策
+- 命名约定
+- 同步协议说明
+- 加密假设
+- 经验教训

@@ -1,20 +1,20 @@
-# Repository Rules
+# 仓库规则
 
-This repository is documentation-first for now.
+当前阶段以文档优先。
 
-## Working rules
+## 工作规则
 
-- Keep design, requirements, and notes in `docs/`.
-- Keep reusable patterns and decisions in `docs/notes/`.
-- Keep formal specs and architecture docs in `docs/specs/`.
-- Update `CHANGELOG.md` for every meaningful change.
-- Prefer small, focused documents over one giant note.
-- When a decision becomes stable, write it down instead of keeping it only in chat.
+- 项目文档尽可能使用中文编写；技术名词、命令、代码标识、库名和协议名可保留英文。
+- 设计、需求和说明文档放在 `docs/`。
+- 可复用模式、长期决策和经验沉淀放在 `docs/notes/`。
+- 正式需求、架构和设计文档放在 `docs/specs/`。
+- 每次有意义的变更都要更新 `CHANGELOG.md`。
+- 优先写小而聚焦的文档，避免把所有内容塞进一个大文件。
+- 稳定下来的决策要写入仓库，不只保留在聊天记录中。
 
-## Current project direction
+## 当前项目方向
 
-- Backend target: Go + SQLite.
-- Deployment target: single NAS instance.
-- Security target: client-side encryption with server-side ciphertext only.
-- Do not design for multi-instance or cluster deployment in the first version.
-
+- 后端目标：Go + SQLite。
+- 部署目标：单机 NAS。
+- 安全目标：客户端加密，服务器只保存密文。
+- 第一版不设计多实例或集群部署。

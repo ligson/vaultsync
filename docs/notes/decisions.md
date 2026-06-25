@@ -1,17 +1,17 @@
-# Current Decisions
+# 当前决策
 
-## Locked in
+## 已确定
 
-- Backend: Go.
-- Metadata store: SQLite.
-- Deployment: single NAS instance.
-- Files on disk: ciphertext only.
-- Key management: client-side, never stored as plaintext on the server.
-- Scope: private sync first, shared folders later if ever needed.
+- 后端：Go。
+- 元数据存储：SQLite。
+- 部署方式：单机 NAS。
+- 磁盘文件：只保存密文。
+- 密钥管理：由客户端负责，服务器不保存明文密钥。
+- 范围：优先做私有同步，如后续确有需要再考虑共享文件夹。
 
-## Documentation habits
+## 文档习惯
 
-- Update `CHANGELOG.md` for every meaningful change.
-- Save durable knowledge in `docs/notes/`.
-- Put formal product or architecture writeups in `docs/specs/`.
-
+- 文档尽可能使用中文编写；技术名词、命令、代码标识、库名和协议名可保留英文。
+- 每次有意义的变更都要更新 `CHANGELOG.md`。
+- 长期有效的知识沉淀到 `docs/notes/`。
+- 正式产品、需求和架构文档放在 `docs/specs/`。

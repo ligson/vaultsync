@@ -1,11 +1,13 @@
-# Changelog
+# 变更记录
 
-All notable changes to this repository should be recorded here.
+所有有意义的项目变更都应记录在这里。
 
 ## 2026-06-25
 
-- Added repository rules in `AGENTS.md`.
-- Added documentation structure under `docs/`.
-- Added the first VaultSync design/spec document.
-- Added a notes area for reusable decisions and project memory.
-
+- 将根目录 `README.md` 中文化。
+- 将项目文档规则改为尽可能使用中文编写，技术名词和代码标识可保留英文。
+- 将现有规则、说明和决策文档中的英文说明改为中文。
+- 新增 `AGENTS.md` 仓库规则。
+- 新增 `docs/` 文档结构。
+- 新增第一版 VaultSync 设计稿。
+- 新增用于沉淀决策和项目记忆的 `docs/notes/`。

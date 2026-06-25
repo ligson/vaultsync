@@ -1,11 +1,10 @@
-# Docs Index
+# 文档索引
 
-## Structure
+## 目录结构
 
-- `docs/specs/` - requirements and design documents.
-- `docs/notes/` - reusable decisions, conventions, and implementation notes.
+- `docs/specs/`：需求和设计文档。
+- `docs/notes/`：可复用决策、约定和实现说明。
 
-## Rule of thumb
+## 使用原则
 
-If it will matter after this chat, put it here.
-
+如果一件事在这次聊天之后仍然重要，就把它写到这里。

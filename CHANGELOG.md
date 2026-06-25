@@ -4,6 +4,7 @@
 
 ## 2026-06-25
 
+- 收紧 Go 后端工程骨架基线：降低 Go 版本目标、补充配置测试，并忽略本地构建产物。
 - 初始化 Go 后端工程骨架，新增配置加载、应用装配、服务入口和基础测试。
 - 新增 `.gitignore`，忽略 `.worktrees/` 隔离工作区目录。
 - 新增 Go + SQLite 后端 MVP 实现计划文档，路径为 `docs/superpowers/plans/2026-06-25-go-sqlite-backend-mvp.md`。

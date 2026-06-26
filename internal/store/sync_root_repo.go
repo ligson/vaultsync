@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/ligson/vaultsync/internal/domain"
 )
@@ -20,6 +21,22 @@ func (r *SyncRootRepo) Create(ctx context.Context, root domain.SyncRoot) (domain
 		INSERT INTO sync_roots (id, user_id, device_id, encrypted_path, cleanup_policy, archive_path, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`, root.ID, root.UserID, root.DeviceID, root.EncryptedPath, root.CleanupPolicy, root.ArchivePath, root.CreatedAt)
+	if err != nil {
+		return domain.SyncRoot{}, err
+	}
+	return root, nil
+}
+
+func (r *SyncRootRepo) GetForUser(ctx context.Context, userID, rootID string) (domain.SyncRoot, error) {
+	var root domain.SyncRoot
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, user_id, device_id, encrypted_path, cleanup_policy, archive_path, created_at
+		FROM sync_roots
+		WHERE user_id = ? AND id = ?
+	`, userID, rootID).Scan(&root.ID, &root.UserID, &root.DeviceID, &root.EncryptedPath, &root.CleanupPolicy, &root.ArchivePath, &root.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.SyncRoot{}, ErrNotFound
+	}
 	if err != nil {
 		return domain.SyncRoot{}, err
 	}

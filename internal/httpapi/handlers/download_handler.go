@@ -21,7 +21,7 @@ func (h *DownloadHandler) Download(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("versionID")
 	reader, err := h.service.OpenCiphertext(r.Context(), userID, versionID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	defer reader.Close()

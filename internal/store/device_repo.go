@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/ligson/vaultsync/internal/domain"
 )
@@ -24,4 +25,20 @@ func (r *DeviceRepo) Create(ctx context.Context, device domain.Device) (domain.D
 		return domain.Device{}, err
 	}
 	return device, nil
+}
+
+func (r *DeviceRepo) ExistsForUser(ctx context.Context, userID, deviceID string) (bool, error) {
+	var id string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id
+		FROM devices
+		WHERE user_id = ? AND id = ?
+	`, userID, deviceID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }

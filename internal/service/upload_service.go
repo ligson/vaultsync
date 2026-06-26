@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,16 +15,20 @@ import (
 )
 
 type UploadService struct {
-	repo    *store.ObjectRepo
-	storage *storage.FSStorage
-	now     func() time.Time
+	repo         *store.ObjectRepo
+	deviceRepo   *store.DeviceRepo
+	syncRootRepo *store.SyncRootRepo
+	storage      *storage.FSStorage
+	now          func() time.Time
 }
 
-func NewUploadService(repo *store.ObjectRepo, storage *storage.FSStorage) *UploadService {
+func NewUploadService(repo *store.ObjectRepo, deviceRepo *store.DeviceRepo, syncRootRepo *store.SyncRootRepo, storage *storage.FSStorage) *UploadService {
 	return &UploadService{
-		repo:    repo,
-		storage: storage,
-		now:     func() time.Time { return time.Now().UTC() },
+		repo:         repo,
+		deviceRepo:   deviceRepo,
+		syncRootRepo: syncRootRepo,
+		storage:      storage,
+		now:          func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -45,6 +50,20 @@ func (s *UploadService) CreateSession(ctx context.Context, userID, deviceID, syn
 	}
 	if totalSize < 0 || chunkSize <= 0 {
 		return domain.UploadSession{}, errors.New("invalid upload size")
+	}
+	deviceExists, err := s.deviceRepo.ExistsForUser(ctx, userID, strings.TrimSpace(deviceID))
+	if err != nil {
+		return domain.UploadSession{}, err
+	}
+	if !deviceExists {
+		return domain.UploadSession{}, errors.New("device does not belong to user")
+	}
+	root, err := s.syncRootRepo.GetForUser(ctx, userID, strings.TrimSpace(syncRootID))
+	if err != nil {
+		return domain.UploadSession{}, errors.New("sync root does not belong to user")
+	}
+	if root.DeviceID != strings.TrimSpace(deviceID) {
+		return domain.UploadSession{}, errors.New("sync root does not belong to device")
 	}
 
 	mergedMetadata, err := mergeUploadMetadata(metadataJSON, encryptedName)
@@ -71,7 +90,21 @@ func (s *UploadService) CreateSession(ctx context.Context, userID, deviceID, syn
 }
 
 func (s *UploadService) AppendChunk(ctx context.Context, userID, sessionID string, chunk io.Reader) error {
-	written, err := s.storage.AppendChunk(userID, sessionID, chunk)
+	session, err := s.repo.GetUploadSession(ctx, userID, sessionID)
+	if err != nil {
+		return err
+	}
+	if session.Status != "pending" {
+		return errors.New("upload session is not pending")
+	}
+	payload, err := io.ReadAll(chunk)
+	if err != nil {
+		return err
+	}
+	if session.ReceivedSize+int64(len(payload)) > session.TotalSize {
+		return errors.New("upload exceeds total size")
+	}
+	written, err := s.storage.AppendChunk(userID, sessionID, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -82,6 +115,12 @@ func (s *UploadService) Complete(ctx context.Context, userID, sessionID string) 
 	session, err := s.repo.GetUploadSession(ctx, userID, sessionID)
 	if err != nil {
 		return domain.FileVersion{}, err
+	}
+	if session.Status != "pending" {
+		return domain.FileVersion{}, errors.New("upload session is not pending")
+	}
+	if session.ReceivedSize != session.TotalSize {
+		return domain.FileVersion{}, errors.New("upload is incomplete")
 	}
 	contentPath, hashValue, size, err := s.storage.FinalizeUpload(userID, sessionID, session.VersionID)
 	if err != nil {

@@ -39,8 +39,8 @@ func New(cfg config.Config) (*App, error) {
 		db:              db,
 		authService:     service.NewAuthService(authRepo, cfg.TokenSecret),
 		deviceService:   service.NewDeviceService(deviceRepo),
-		syncRootService: service.NewSyncRootService(syncRootRepo),
-		uploadService:   service.NewUploadService(objectRepo, fsStorage),
+		syncRootService: service.NewSyncRootService(syncRootRepo, deviceRepo),
+		uploadService:   service.NewUploadService(objectRepo, deviceRepo, syncRootRepo, fsStorage),
 		changeService:   service.NewChangeService(db, cfg.DataDir),
 		downloadService: service.NewDownloadService(db, cfg.DataDir),
 	}, nil

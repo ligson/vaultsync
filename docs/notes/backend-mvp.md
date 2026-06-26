@@ -11,6 +11,11 @@
 - 变更拉取接口当前用 `file_versions` 的顺序行号生成游标，并把每个用户的最新游标持久化到 `sync_cursors`。
 - 测试装配已经提供 auth、device、sync root、upload、change、download 的完整集成链路。
 - 计划中的 `sync_root_flow_test.go` 已独立成文件，`full_flow_test.go` 用于聚合主流程。
+- 同步目录创建必须校验设备属于当前用户，不能信任客户端传入的 `device_id`。
+- 上传会话创建必须校验设备、同步目录都属于当前用户，并且同步目录绑定的设备与请求设备一致。
+- 分片追加必须在会话 `pending` 状态下进行，且累计接收大小不能超过声明的 `total_size`。
+- 上传完成前必须确认 `received_size == total_size`，完成后不允许继续追加分片。
+- 下载密文对象按当前用户和版本 ID 查询；其他用户不能通过猜测 `version_id` 下载文件。
 
 ## 约定
 

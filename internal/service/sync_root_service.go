@@ -11,14 +11,16 @@ import (
 )
 
 type SyncRootService struct {
-	repo *store.SyncRootRepo
-	now  func() time.Time
+	repo       *store.SyncRootRepo
+	deviceRepo *store.DeviceRepo
+	now        func() time.Time
 }
 
-func NewSyncRootService(repo *store.SyncRootRepo) *SyncRootService {
+func NewSyncRootService(repo *store.SyncRootRepo, deviceRepo *store.DeviceRepo) *SyncRootService {
 	return &SyncRootService{
-		repo: repo,
-		now:  func() time.Time { return time.Now().UTC() },
+		repo:       repo,
+		deviceRepo: deviceRepo,
+		now:        func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -34,6 +36,13 @@ func (s *SyncRootService) Create(ctx context.Context, userID, deviceID, encrypte
 	}
 	if cleanupPolicy == "" {
 		return domain.SyncRoot{}, errors.New("cleanup policy is required")
+	}
+	deviceExists, err := s.deviceRepo.ExistsForUser(ctx, userID, deviceID)
+	if err != nil {
+		return domain.SyncRoot{}, err
+	}
+	if !deviceExists {
+		return domain.SyncRoot{}, errors.New("device does not belong to user")
 	}
 
 	root := domain.SyncRoot{

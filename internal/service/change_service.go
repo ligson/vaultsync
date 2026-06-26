@@ -3,29 +3,27 @@ package service
 import (
 	"context"
 	"database/sql"
-	"io"
-	"os"
-	"path/filepath"
 
 	"github.com/ligson/vaultsync/internal/domain"
 )
 
 type ChangeService struct {
-	db      *sql.DB
-	dataDir string
+	db *sql.DB
 }
 
 func NewChangeService(db *sql.DB, dataDir string) *ChangeService {
-	return &ChangeService{db: db, dataDir: dataDir}
+	_ = dataDir
+	return &ChangeService{db: db}
 }
 
 func (s *ChangeService) List(ctx context.Context, userID string, cursorValue int64) ([]domain.CursorChange, int64, error) {
+	startCursor := cursorValue
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT rowid, id, object_id, sync_root_id, created_at
 		FROM file_versions
 		WHERE user_id = ? AND rowid > ?
 		ORDER BY rowid
-	`, userID, cursorValue)
+	`, userID, startCursor)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -44,31 +42,19 @@ func (s *ChangeService) List(ctx context.Context, userID string, cursorValue int
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
+
+	if len(items) > 0 && nextCursor > startCursor {
+		_, err := s.db.ExecContext(ctx, `
+			INSERT INTO sync_cursors (user_id, cursor_value, version_id, created_at)
+			VALUES (?, ?, ?, ?)
+			ON CONFLICT(user_id) DO UPDATE SET
+				cursor_value = excluded.cursor_value,
+				version_id = excluded.version_id,
+				created_at = excluded.created_at
+		`, userID, nextCursor, items[len(items)-1].VersionID, items[len(items)-1].CreatedAt)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
 	return items, nextCursor, nil
-}
-
-type DownloadService struct {
-	db      *sql.DB
-	dataDir string
-}
-
-func NewDownloadService(db *sql.DB, dataDir string) *DownloadService {
-	return &DownloadService{db: db, dataDir: dataDir}
-}
-
-func (s *DownloadService) OpenCiphertext(ctx context.Context, userID, versionID string) (io.ReadCloser, error) {
-	var contentPath string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT content_path
-		FROM file_versions
-		WHERE user_id = ? AND id = ?
-	`, userID, versionID).Scan(&contentPath)
-	if err != nil {
-		return nil, err
-	}
-
-	if !filepath.IsAbs(contentPath) {
-		contentPath = filepath.Join(s.dataDir, contentPath)
-	}
-	return os.Open(contentPath)
 }

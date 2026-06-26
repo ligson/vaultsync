@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS file_versions (
 );
 
 CREATE TABLE IF NOT EXISTS sync_cursors (
-    user_id TEXT NOT NULL,
+    user_id TEXT PRIMARY KEY,
     cursor_value INTEGER NOT NULL,
     version_id TEXT NOT NULL,
     created_at TEXT NOT NULL

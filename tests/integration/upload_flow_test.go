@@ -69,6 +69,7 @@ func TestUploadRejectsChunksBeyondTotalSize(t *testing.T) {
 
 	resp := testutil.BinaryRequest(t, app, http.MethodPut, "/api/v1/upload-sessions/"+sessionID+"/parts/0", []byte("hello"), token)
 	testutil.AssertStatus(t, resp, http.StatusBadRequest)
+	testutil.AssertJSONErrorCode(t, resp, "invalid_request")
 }
 
 func TestCompleteRejectsIncompleteUpload(t *testing.T) {
@@ -112,6 +113,7 @@ func TestDownloadRejectsForeignVersion(t *testing.T) {
 
 	resp := testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/objects/"+versionID, "", bobToken)
 	testutil.AssertStatus(t, resp, http.StatusBadRequest)
+	testutil.AssertJSONErrorCode(t, resp, "invalid_request")
 }
 
 func createUploadSession(t *testing.T, app *httptest.Server, token, deviceID, rootID, objectID, versionID string, totalSize int64) string {

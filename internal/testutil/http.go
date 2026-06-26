@@ -63,6 +63,21 @@ func AssertJSONContains(t *testing.T, resp *http.Response, want string) {
 	}
 }
 
+func AssertJSONErrorCode(t *testing.T, resp *http.Response, want string) {
+	t.Helper()
+	var payload struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode json error: %v", err)
+	}
+	if payload.Error.Code != want {
+		t.Fatalf("expected json error code %q, got %q", want, payload.Error.Code)
+	}
+}
+
 func MustReadJSONField(t *testing.T, resp *http.Response, field string) string {
 	t.Helper()
 	var payload map[string]any

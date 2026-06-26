@@ -25,13 +25,13 @@ func (h *SyncRootHandler) Create(w http.ResponseWriter, r *http.Request) {
 		ArchivePath   string `json:"archive_path"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "invalid json")
 		return
 	}
 
 	root, err := h.service.Create(r.Context(), userID, req.DeviceID, req.EncryptedPath, req.CleanupPolicy, req.ArchivePath)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, root)
@@ -41,7 +41,7 @@ func (h *SyncRootHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.MustUserID(r.Context())
 	roots, err := h.service.ListByUser(r.Context(), userID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, errorCodeInternal, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": roots})

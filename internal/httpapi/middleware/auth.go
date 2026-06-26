@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -33,16 +34,27 @@ func Auth(tokenVerifier TokenVerifier, next http.Handler) http.Handler {
 		header := r.Header.Get("Authorization")
 		tokenValue, ok := strings.CutPrefix(header, "Bearer ")
 		if !ok || tokenValue == "" {
-			http.Error(w, "missing bearer token", http.StatusUnauthorized)
+			writeAuthError(w, "missing bearer token")
 			return
 		}
 
 		claims, err := tokenVerifier.VerifyToken(tokenValue)
 		if err != nil {
-			http.Error(w, "invalid bearer token", http.StatusUnauthorized)
+			writeAuthError(w, "invalid bearer token")
 			return
 		}
 
 		next.ServeHTTP(w, r.WithContext(WithUserID(r.Context(), claims.UserID)))
+	})
+}
+
+func writeAuthError(w http.ResponseWriter, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error": map[string]string{
+			"code":    "unauthorized",
+			"message": message,
+		},
 	})
 }

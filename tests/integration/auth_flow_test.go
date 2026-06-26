@@ -19,3 +19,11 @@ func TestRegisterAndLogin(t *testing.T) {
 	testutil.AssertStatus(t, resp, http.StatusOK)
 	testutil.AssertJSONContains(t, resp, `"token":"`)
 }
+
+func TestProtectedRoutesReturnJSONUnauthorized(t *testing.T) {
+	app := testutil.NewTestServer(t)
+
+	resp := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/devices", `{"name":"Phone","platform":"ios"}`, "")
+	testutil.AssertStatus(t, resp, http.StatusUnauthorized)
+	testutil.AssertJSONErrorCode(t, resp, "unauthorized")
+}

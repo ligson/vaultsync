@@ -21,7 +21,7 @@ func (h *ChangeHandler) List(w http.ResponseWriter, r *http.Request) {
 	cursorValue, _ := strconv.ParseInt(r.URL.Query().Get("cursor"), 10, 64)
 	items, nextCursor, err := h.service.List(r.Context(), userID, cursorValue)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, errorCodeInternal, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

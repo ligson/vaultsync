@@ -13,6 +13,8 @@
 - 变更拉取的 MVP 版本使用 `file_versions` 顺序行号充当游标，并通过 `sync_cursors` 按用户持久化最新游标。
 - 上传完成后将 `encrypted_name` 写入版本元数据，便于下载与同步侧识别。
 - 下载服务已独立为 `internal/service/download_service.go`。
+- API 错误响应统一使用 JSON：`{"error":{"code":"...","message":"..."}}`；客户端应优先依赖稳定的 `error.code`。
+- MVP 阶段常见业务校验失败统一使用 `invalid_request`，认证失败使用 `unauthorized`，未知服务端错误使用 `internal_error`。
 
 ## 文档习惯
 

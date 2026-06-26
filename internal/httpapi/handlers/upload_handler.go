@@ -29,13 +29,13 @@ func (h *UploadHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		MetadataJSON  string `json:"metadata_json"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "invalid json")
 		return
 	}
 
 	session, err := h.service.CreateSession(r.Context(), userID, req.DeviceID, req.SyncRootID, req.ObjectID, req.VersionID, req.EncryptedName, req.MetadataJSON, req.TotalSize, req.ChunkSize)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, session)
@@ -45,7 +45,7 @@ func (h *UploadHandler) UploadPart(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.MustUserID(r.Context())
 	sessionID := r.PathValue("sessionID")
 	if err := h.service.AppendChunk(r.Context(), userID, sessionID, r.Body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -56,7 +56,7 @@ func (h *UploadHandler) Complete(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("sessionID")
 	version, err := h.service.Complete(r.Context(), userID, sessionID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, version)

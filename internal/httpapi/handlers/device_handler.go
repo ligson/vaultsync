@@ -23,13 +23,13 @@ func (h *DeviceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Platform string `json:"platform"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "invalid json")
 		return
 	}
 
 	device, err := h.service.Register(r.Context(), userID, req.Name, req.Platform)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, device)

@@ -41,6 +41,14 @@ func TestSyncRootRejectsForeignDevice(t *testing.T) {
 	testutil.AssertStatus(t, resp, http.StatusBadRequest)
 }
 
+func TestSyncRootInvalidJSONReturnsJSONError(t *testing.T) {
+	app, token := testutil.NewAuthenticatedServer(t)
+
+	resp := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/sync-roots", `{"device_id":`, token)
+	testutil.AssertStatus(t, resp, http.StatusBadRequest)
+	testutil.AssertJSONErrorCode(t, resp, "invalid_request")
+}
+
 func registerAndLogin(t *testing.T, app *httptest.Server, email string) string {
 	t.Helper()
 	registerBody := fmt.Sprintf(`{"email":"%s","password":"passw0rd!"}`, email)

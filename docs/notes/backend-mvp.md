@@ -16,6 +16,9 @@
 - 分片追加必须在会话 `pending` 状态下进行，且累计接收大小不能超过声明的 `total_size`。
 - 上传完成前必须确认 `received_size == total_size`，完成后不允许继续追加分片。
 - 下载密文对象按当前用户和版本 ID 查询；其他用户不能通过猜测 `version_id` 下载文件。
+- 后端只校验密文字节大小、用户归属和同步索引，不校验明文语义。
+- 后端不解析客户端加密格式，密文对象、`encrypted_name` 和 `metadata_json` 都按不透明数据处理。
+- 后端日志不得输出完整 `encrypted_name` 或 `metadata_json`，避免泄露加密元数据样本。
 
 ## 约定
 

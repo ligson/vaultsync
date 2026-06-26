@@ -15,6 +15,9 @@
 - 下载服务已独立为 `internal/service/download_service.go`。
 - API 错误响应统一使用 JSON：`{"error":{"code":"...","message":"..."}}`；客户端应优先依赖稳定的 `error.code`。
 - MVP 阶段常见业务校验失败统一使用 `invalid_request`，认证失败使用 `unauthorized`，未知服务端错误使用 `internal_error`。
+- 客户端加密格式 V1 推荐 `Argon2id + HKDF-SHA256 + XChaCha20-Poly1305`，内容和元数据分别加密。
+- 加密密钥层级采用用户主密钥、同步目录密钥、文件版本密钥、元数据密钥分层派生。
+- 服务器不解析密文对象格式，只保存不透明密文字节、加密元数据和同步所需索引。
 
 ## 文档习惯
 

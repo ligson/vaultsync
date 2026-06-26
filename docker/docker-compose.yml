@@ -1,0 +1,14 @@
+services:
+  vaultsync:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      VAULTSYNC_HTTP_ADDR: ":8080"
+      VAULTSYNC_DATA_DIR: /data
+      VAULTSYNC_DATABASE_PATH: /data/vaultsync.db
+      VAULTSYNC_TOKEN_SECRET: change-me
+    volumes:
+      - ./data:/data

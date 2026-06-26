@@ -2,6 +2,7 @@ package app
 
 import (
 	"database/sql"
+	"net/http"
 
 	"github.com/ligson/vaultsync/internal/config"
 	"github.com/ligson/vaultsync/internal/httpapi"
@@ -55,6 +56,10 @@ func (a *App) Dependencies() httpapi.Dependencies {
 		DownloadHandler: handlers.NewDownloadHandler(a.downloadService),
 		AuthService:     a.authService,
 	}
+}
+
+func (a *App) Handler() http.Handler {
+	return httpapi.NewRouter(a.Dependencies())
 }
 
 func (a *App) Close() error {

@@ -29,8 +29,8 @@ func (s *ChangeService) List(ctx context.Context, userID, deviceID string, curso
 	}
 	startCursor := cursorValue
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT rowid, id, object_id, sync_root_id, created_at
-		FROM file_versions
+		SELECT rowid, change_type, version_id, object_id, sync_root_id, created_at
+		FROM sync_events
 		WHERE user_id = ? AND rowid > ?
 		ORDER BY rowid
 	`, userID, startCursor)
@@ -43,7 +43,7 @@ func (s *ChangeService) List(ctx context.Context, userID, deviceID string, curso
 	var nextCursor int64 = cursorValue
 	for rows.Next() {
 		var change domain.CursorChange
-		if err := rows.Scan(&change.CursorValue, &change.VersionID, &change.ObjectID, &change.SyncRootID, &change.CreatedAt); err != nil {
+		if err := rows.Scan(&change.CursorValue, &change.ChangeType, &change.VersionID, &change.ObjectID, &change.SyncRootID, &change.CreatedAt); err != nil {
 			return nil, 0, err
 		}
 		nextCursor = change.CursorValue

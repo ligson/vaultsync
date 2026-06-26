@@ -1,9 +1,12 @@
 package integration
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ligson/vaultsync/internal/testutil"
@@ -149,6 +152,69 @@ func TestChangesCursorIsScopedByDevice(t *testing.T) {
 	}
 	if cursorRows != 2 {
 		t.Fatalf("expected two device scoped cursors, got %d", cursorRows)
+	}
+}
+
+func TestDeleteObjectCreatesTombstoneChange(t *testing.T) {
+	app, token, deviceID, rootID := testutil.NewUploadReadyServer(t)
+	sessionID := createUploadSession(t, app, token, deviceID, rootID, "obj-delete", "ver-delete", 4)
+	resp := testutil.BinaryRequest(t, app, http.MethodPut, "/api/v1/upload-sessions/"+sessionID+"/parts/0", []byte("data"), token)
+	testutil.AssertStatus(t, resp, http.StatusNoContent)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions/"+sessionID+"/complete", `{}`, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+
+	deletePath := fmt.Sprintf("/api/v1/objects/obj-delete?sync_root_id=%s&device_id=%s", rootID, deviceID)
+	resp = testutil.JSONRequest(t, app, http.MethodDelete, deletePath, "", token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+
+	changesPath := "/api/v1/changes?cursor=0&device_id=" + deviceID
+	resp = testutil.JSONRequest(t, app, http.MethodGet, changesPath, "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read changes body: %v", err)
+	}
+	if !strings.Contains(string(body), `"change_type":"delete"`) {
+		t.Fatalf("expected delete change, got %s", string(body))
+	}
+	if !strings.Contains(string(body), `"object_id":"obj-delete"`) {
+		t.Fatalf("expected deleted object id, got %s", string(body))
+	}
+}
+
+func TestDeleteChangeAppearsAfterPriorCursor(t *testing.T) {
+	app, token, deviceID, rootID := testutil.NewUploadReadyServer(t)
+	sessionID := createUploadSession(t, app, token, deviceID, rootID, "obj-delete-after-cursor", "ver-delete-after-cursor", 4)
+	resp := testutil.BinaryRequest(t, app, http.MethodPut, "/api/v1/upload-sessions/"+sessionID+"/parts/0", []byte("data"), token)
+	testutil.AssertStatus(t, resp, http.StatusNoContent)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions/"+sessionID+"/complete", `{}`, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+
+	changesPath := "/api/v1/changes?cursor=0&device_id=" + deviceID
+	resp = testutil.JSONRequest(t, app, http.MethodGet, changesPath, "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	var firstPull struct {
+		NextCursor int64 `json:"next_cursor"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&firstPull); err != nil {
+		t.Fatalf("decode first changes response: %v", err)
+	}
+	if firstPull.NextCursor == 0 {
+		t.Fatal("expected first pull to advance cursor")
+	}
+
+	deletePath := fmt.Sprintf("/api/v1/objects/obj-delete-after-cursor?sync_root_id=%s&device_id=%s", rootID, deviceID)
+	resp = testutil.JSONRequest(t, app, http.MethodDelete, deletePath, "", token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+
+	resp = testutil.JSONRequest(t, app, http.MethodGet, fmt.Sprintf("/api/v1/changes?cursor=%d&device_id=%s", firstPull.NextCursor, deviceID), "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read changes body: %v", err)
+	}
+	if !strings.Contains(string(body), `"change_type":"delete"`) {
+		t.Fatalf("expected delete change after cursor %d, got %s", firstPull.NextCursor, string(body))
 	}
 }
 

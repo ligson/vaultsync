@@ -24,6 +24,8 @@
 - V1 后端不表达远端删除；客户端本地清理策略不得被解释为删除远端对象。
 - 后端只保存 `cleanup_policy` 和 `archive_path`，实际删除或归档本地文件由客户端执行。
 - 后端不得根据 `cleanup_policy=delete` 删除远端密文对象。
+- 后端支持远端删除墓碑：`DELETE /api/v1/objects/{object_id}` 只追加 `file_tombstones` 和 `sync_events`，不删除历史密文对象。
+- `changes` 响应包含 `change_type`，当前取值为 `upsert` 和 `delete`。
 
 ## 约定
 

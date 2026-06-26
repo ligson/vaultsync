@@ -63,6 +63,7 @@ type FileVersion struct {
 
 type CursorChange struct {
 	CursorValue int64  `json:"cursor_value"`
+	ChangeType  string `json:"change_type"`
 	VersionID   string `json:"version_id"`
 	ObjectID    string `json:"object_id"`
 	SyncRootID  string `json:"sync_root_id"`

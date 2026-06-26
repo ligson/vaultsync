@@ -75,6 +75,17 @@ func (r *ObjectRepo) CompleteUpload(ctx context.Context, sessionID string, versi
 	}
 
 	_, err = tx.ExecContext(ctx, `
+		INSERT INTO sync_events (
+			id, user_id, change_type, version_id, tombstone_id,
+			sync_root_id, object_id, created_at
+		)
+		VALUES (?, ?, 'upsert', ?, '', ?, ?, ?)
+	`, newStoreID(), version.UserID, version.ID, version.SyncRootID, version.ObjectID, version.CreatedAt)
+	if err != nil {
+		return domain.FileVersion{}, err
+	}
+
+	_, err = tx.ExecContext(ctx, `
 		UPDATE upload_sessions
 		SET status = 'completed', received_size = ?
 		WHERE user_id = ? AND id = ?

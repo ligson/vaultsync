@@ -21,6 +21,7 @@ type App struct {
 	uploadService   *service.UploadService
 	changeService   *service.ChangeService
 	downloadService *service.DownloadService
+	deleteService   *service.DeleteService
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -43,6 +44,7 @@ func New(cfg config.Config) (*App, error) {
 		uploadService:   service.NewUploadService(objectRepo, deviceRepo, syncRootRepo, fsStorage),
 		changeService:   service.NewChangeService(db, deviceRepo, cfg.DataDir),
 		downloadService: service.NewDownloadService(db, cfg.DataDir),
+		deleteService:   service.NewDeleteService(db, deviceRepo, syncRootRepo),
 	}, nil
 }
 
@@ -54,6 +56,7 @@ func (a *App) Dependencies() httpapi.Dependencies {
 		UploadHandler:   handlers.NewUploadHandler(a.uploadService),
 		ChangeHandler:   handlers.NewChangeHandler(a.changeService),
 		DownloadHandler: handlers.NewDownloadHandler(a.downloadService),
+		DeleteHandler:   handlers.NewDeleteHandler(a.deleteService),
 		AuthService:     a.authService,
 	}
 }

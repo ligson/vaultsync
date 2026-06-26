@@ -73,6 +73,31 @@ CREATE TABLE IF NOT EXISTS file_versions (
     FOREIGN KEY (sync_root_id) REFERENCES sync_roots(id)
 );
 
+CREATE TABLE IF NOT EXISTS file_tombstones (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    sync_root_id TEXT NOT NULL,
+    object_id TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (device_id) REFERENCES devices(id),
+    FOREIGN KEY (sync_root_id) REFERENCES sync_roots(id)
+);
+
+CREATE TABLE IF NOT EXISTS sync_events (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    change_type TEXT NOT NULL,
+    version_id TEXT NOT NULL DEFAULT '',
+    tombstone_id TEXT NOT NULL DEFAULT '',
+    sync_root_id TEXT NOT NULL,
+    object_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS sync_cursors (
     user_id TEXT NOT NULL,
     device_id TEXT NOT NULL DEFAULT '__legacy__',

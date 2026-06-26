@@ -4,6 +4,8 @@
 
 ## 2026-06-26
 
+- 完成删除墓碑与变更类型：新增 `file_tombstones`、`sync_events`、`DELETE /api/v1/objects/{object_id}`，变更列表返回 `upsert/delete` 并使用统一事件游标。
+- 新增删除墓碑与变更类型实现计划，准备让变更列表同时表达 `upsert` 和 `delete`。
 - 完成设备维度变更游标：`GET /api/v1/changes` 支持可选 `device_id`，`sync_cursors` 升级为 `(user_id, device_id)` 复合主键，并保留 `__legacy__` 兼容键。
 - 新增设备维度变更游标实现计划，准备将 `sync_cursors` 从用户维度升级为用户+设备维度并保持旧调用兼容。
 - 新增 VaultSync 客户端本地清理策略 V1，明确 `keep`、`delete`、`archive` 行为、安全触发条件、移动端相册权限、失败重试和后端边界。

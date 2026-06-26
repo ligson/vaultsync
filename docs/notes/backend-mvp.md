@@ -8,7 +8,7 @@
 - 服务器端只保存密文对象与元数据索引。
 - 上传流程包含会话创建、分片追加、完成落盘和文件版本记录。
 - 下载接口按版本 ID 读取密文对象。
-- 变更拉取接口当前用 `file_versions` 的顺序行号生成游标，并把每个用户的最新游标持久化到 `sync_cursors`。
+- 变更拉取接口当前用 `file_versions` 的顺序行号生成游标，并按用户+设备维度把最新游标持久化到 `sync_cursors`。
 - 测试装配已经提供 auth、device、sync root、upload、change、download 的完整集成链路。
 - 计划中的 `sync_root_flow_test.go` 已独立成文件，`full_flow_test.go` 用于聚合主流程。
 - 同步目录创建必须校验设备属于当前用户，不能信任客户端传入的 `device_id`。
@@ -20,7 +20,7 @@
 - 后端不解析客户端加密格式，密文对象、`encrypted_name` 和 `metadata_json` 都按不透明数据处理。
 - 后端日志不得输出完整 `encrypted_name` 或 `metadata_json`，避免泄露加密元数据样本。
 - 当前后端已支持同步协议 V1 的服务端最小能力：上传密文版本、拉取变更列表、下载密文对象。
-- 当前 `sync_cursors` 按用户维度保存最新游标，后续多设备并发同步应改为按设备或客户端实例保存。
+- 当前 `sync_cursors` 按 `(user_id, device_id)` 保存最新游标，未传 `device_id` 的旧调用使用 `__legacy__` 兼容键。
 - V1 后端不表达远端删除；客户端本地清理策略不得被解释为删除远端对象。
 - 后端只保存 `cleanup_policy` 和 `archive_path`，实际删除或归档本地文件由客户端执行。
 - 后端不得根据 `cleanup_policy=delete` 删除远端密文对象。

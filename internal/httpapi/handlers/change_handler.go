@@ -19,7 +19,8 @@ func NewChangeHandler(service *service.ChangeService) *ChangeHandler {
 func (h *ChangeHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.MustUserID(r.Context())
 	cursorValue, _ := strconv.ParseInt(r.URL.Query().Get("cursor"), 10, 64)
-	items, nextCursor, err := h.service.List(r.Context(), userID, cursorValue)
+	deviceID := r.URL.Query().Get("device_id")
+	items, nextCursor, err := h.service.List(r.Context(), userID, deviceID, cursorValue)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errorCodeInternal, err.Error())
 		return

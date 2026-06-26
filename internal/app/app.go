@@ -41,7 +41,7 @@ func New(cfg config.Config) (*App, error) {
 		deviceService:   service.NewDeviceService(deviceRepo),
 		syncRootService: service.NewSyncRootService(syncRootRepo, deviceRepo),
 		uploadService:   service.NewUploadService(objectRepo, deviceRepo, syncRootRepo, fsStorage),
-		changeService:   service.NewChangeService(db, cfg.DataDir),
+		changeService:   service.NewChangeService(db, deviceRepo, cfg.DataDir),
 		downloadService: service.NewDownloadService(db, cfg.DataDir),
 	}, nil
 }
@@ -60,6 +60,10 @@ func (a *App) Dependencies() httpapi.Dependencies {
 
 func (a *App) Handler() http.Handler {
 	return httpapi.NewRouter(a.Dependencies())
+}
+
+func (a *App) DB() *sql.DB {
+	return a.db
 }
 
 func (a *App) Close() error {

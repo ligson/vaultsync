@@ -13,6 +13,12 @@ import (
 
 func NewTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	_, server := NewTestAppAndServer(t)
+	return server
+}
+
+func NewTestAppAndServer(t *testing.T) (*app.App, *httptest.Server) {
+	t.Helper()
 	dataDir := t.TempDir()
 	instance, err := app.New(config.Config{
 		HTTPAddr:     "127.0.0.1:0",
@@ -30,7 +36,7 @@ func NewTestServer(t *testing.T) *httptest.Server {
 	})
 	server := httptest.NewServer(httpapi.NewRouter(instance.Dependencies()))
 	t.Cleanup(server.Close)
-	return server
+	return instance, server
 }
 
 func NewAuthenticatedServer(t *testing.T) (*httptest.Server, string) {

@@ -74,10 +74,12 @@ CREATE TABLE IF NOT EXISTS file_versions (
 );
 
 CREATE TABLE IF NOT EXISTS sync_cursors (
-    user_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    device_id TEXT NOT NULL DEFAULT '__legacy__',
     cursor_value INTEGER NOT NULL,
     version_id TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, device_id)
 );
 
 CREATE TABLE IF NOT EXISTS audit_logs (

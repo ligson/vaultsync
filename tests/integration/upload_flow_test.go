@@ -107,6 +107,51 @@ func TestListChangesAndDownloadCiphertext(t *testing.T) {
 	testutil.AssertHeader(t, resp, "Content-Type", "application/octet-stream")
 }
 
+func TestChangesCursorIsScopedByDevice(t *testing.T) {
+	instance, app := testutil.NewTestAppAndServer(t)
+	token := registerAndLogin(t, app, "alice@example.com")
+
+	resp := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/devices", `{"name":"Alice MacBook","platform":"macos"}`, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	deviceAID := testutil.MustReadJSONField(t, resp, "id")
+
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/devices", `{"name":"Alice iPhone","platform":"ios"}`, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	deviceBID := testutil.MustReadJSONField(t, resp, "id")
+
+	rootBody := fmt.Sprintf(`{"device_id":"%s","encrypted_path":"base64:path","cleanup_policy":"keep","archive_path":""}`, deviceAID)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/sync-roots", rootBody, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	rootID := testutil.MustReadJSONField(t, resp, "id")
+
+	sessionID := createUploadSession(t, app, token, deviceAID, rootID, "obj-device-cursor", "ver-device-cursor", 4)
+	resp = testutil.BinaryRequest(t, app, http.MethodPut, "/api/v1/upload-sessions/"+sessionID+"/parts/0", []byte("data"), token)
+	testutil.AssertStatus(t, resp, http.StatusNoContent)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions/"+sessionID+"/complete", `{}`, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+
+	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/changes?cursor=0&device_id="+deviceAID, "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	testutil.AssertJSONContains(t, resp, "ver-device-cursor")
+
+	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/changes?cursor=0&device_id="+deviceBID, "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	testutil.AssertJSONContains(t, resp, "ver-device-cursor")
+
+	var cursorRows int
+	err := instance.DB().QueryRow(`
+		SELECT COUNT(*)
+		FROM sync_cursors
+		WHERE device_id IN (?, ?)
+	`, deviceAID, deviceBID).Scan(&cursorRows)
+	if err != nil {
+		t.Fatalf("count sync cursors: %v", err)
+	}
+	if cursorRows != 2 {
+		t.Fatalf("expected two device scoped cursors, got %d", cursorRows)
+	}
+}
+
 func TestDownloadRejectsForeignVersion(t *testing.T) {
 	app, _, versionID := testutil.NewUploadedVersionServer(t)
 	bobToken := registerAndLogin(t, app, "bob@example.com")

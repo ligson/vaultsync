@@ -218,6 +218,45 @@ func TestDeleteChangeAppearsAfterPriorCursor(t *testing.T) {
 	}
 }
 
+func TestChangesPaginationReturnsHasMoreAndNextPage(t *testing.T) {
+	app, token, deviceID, rootID := testutil.NewUploadReadyServer(t)
+	for i := 1; i <= 3; i++ {
+		uploadVersion(t, app, token, deviceID, rootID, fmt.Sprintf("obj-page-%d", i), fmt.Sprintf("ver-page-%d", i), []byte("data"))
+	}
+
+	resp := testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/changes?cursor=0&device_id="+deviceID+"&limit=2", "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	firstPage := decodeChangesPage(t, resp)
+	if len(firstPage.Items) != 2 {
+		t.Fatalf("expected first page to contain 2 changes, got %d", len(firstPage.Items))
+	}
+	if !firstPage.HasMore {
+		t.Fatal("expected first page to report has_more=true")
+	}
+	if firstPage.NextCursor == 0 {
+		t.Fatal("expected first page to advance next_cursor")
+	}
+
+	nextPath := fmt.Sprintf("/api/v1/changes?cursor=%d&device_id=%s&limit=2", firstPage.NextCursor, deviceID)
+	resp = testutil.JSONRequest(t, app, http.MethodGet, nextPath, "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	secondPage := decodeChangesPage(t, resp)
+	if len(secondPage.Items) != 1 {
+		t.Fatalf("expected second page to contain 1 change, got %d", len(secondPage.Items))
+	}
+	if secondPage.HasMore {
+		t.Fatal("expected second page to report has_more=false")
+	}
+}
+
+func TestChangesRejectsInvalidLimit(t *testing.T) {
+	app, token := testutil.NewAuthenticatedServer(t)
+
+	resp := testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/changes?cursor=0&limit=0", "", token)
+	testutil.AssertStatus(t, resp, http.StatusBadRequest)
+	testutil.AssertJSONErrorCode(t, resp, "invalid_request")
+}
+
 func TestDownloadRejectsForeignVersion(t *testing.T) {
 	app, _, versionID := testutil.NewUploadedVersionServer(t)
 	bobToken := registerAndLogin(t, app, "bob@example.com")
@@ -242,4 +281,32 @@ func createUploadSession(t *testing.T, app *httptest.Server, token, deviceID, ro
 	resp := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions", createBody, token)
 	testutil.AssertStatus(t, resp, http.StatusCreated)
 	return testutil.MustReadJSONField(t, resp, "id")
+}
+
+type changesPageResponse struct {
+	Items []struct {
+		ID          string `json:"id"`
+		ChangeType  string `json:"change_type"`
+		CursorValue int64  `json:"cursor_value"`
+	} `json:"items"`
+	NextCursor int64 `json:"next_cursor"`
+	HasMore    bool  `json:"has_more"`
+}
+
+func decodeChangesPage(t *testing.T, resp *http.Response) changesPageResponse {
+	t.Helper()
+	var page changesPageResponse
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		t.Fatalf("decode changes page: %v", err)
+	}
+	return page
+}
+
+func uploadVersion(t *testing.T, app *httptest.Server, token, deviceID, rootID, objectID, versionID string, body []byte) {
+	t.Helper()
+	sessionID := createUploadSession(t, app, token, deviceID, rootID, objectID, versionID, int64(len(body)))
+	resp := testutil.BinaryRequest(t, app, http.MethodPut, "/api/v1/upload-sessions/"+sessionID+"/parts/0", body, token)
+	testutil.AssertStatus(t, resp, http.StatusNoContent)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions/"+sessionID+"/complete", `{}`, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
 }

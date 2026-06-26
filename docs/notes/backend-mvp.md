@@ -21,7 +21,8 @@
 - 后端日志不得输出完整 `encrypted_name` 或 `metadata_json`，避免泄露加密元数据样本。
 - 当前后端已支持同步协议 V1 的服务端最小能力：上传密文版本、拉取变更列表、下载密文对象。
 - 当前 `sync_cursors` 按 `(user_id, device_id)` 保存最新游标，未传 `device_id` 的旧调用使用 `__legacy__` 兼容键。
-- V1 后端不表达远端删除；客户端本地清理策略不得被解释为删除远端对象。
+- 变更列表支持分页：`limit` 默认 `100`，最大 `500`，响应通过 `has_more` 告诉客户端是否需要继续用 `next_cursor` 拉取下一页。
+- 客户端本地清理策略不得被解释为删除远端对象。
 - 后端只保存 `cleanup_policy` 和 `archive_path`，实际删除或归档本地文件由客户端执行。
 - 后端不得根据 `cleanup_policy=delete` 删除远端密文对象。
 - 后端支持远端删除墓碑：`DELETE /api/v1/objects/{object_id}` 只追加 `file_tombstones` 和 `sync_events`，不删除历史密文对象。

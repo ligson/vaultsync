@@ -69,3 +69,9 @@ type CursorChange struct {
 	SyncRootID  string `json:"sync_root_id"`
 	CreatedAt   string `json:"created_at"`
 }
+
+type ChangePage struct {
+	Items      []CursorChange `json:"items"`
+	NextCursor int64          `json:"next_cursor"`
+	HasMore    bool           `json:"has_more"`
+}

@@ -11,6 +11,7 @@
 - 密钥管理：由客户端负责，服务器不保存明文密钥。
 - 范围：优先做私有同步，如后续确有需要再考虑共享文件夹。
 - 变更拉取通过 `sync_events` 统一事件表生成游标，并通过 `sync_cursors` 按用户+设备维度持久化最新游标。
+- 变更列表分页使用 `LIMIT limit+1` 探测 `has_more`，默认 `limit=100`，最大 `limit=500`，不额外执行总数统计。
 - 上传完成后将 `encrypted_name` 写入版本元数据，便于下载与同步侧识别。
 - 下载服务已独立为 `internal/service/download_service.go`。
 - API 错误响应统一使用 JSON：`{"error":{"code":"...","message":"..."}}`；客户端应优先依赖稳定的 `error.code`。

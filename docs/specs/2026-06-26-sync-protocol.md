@@ -121,7 +121,7 @@ POST /api/v1/upload-sessions/{session_id}/complete
 客户端按本地游标拉取远端变更：
 
 ```text
-GET /api/v1/changes?cursor={cursor}&device_id={device_id}
+GET /api/v1/changes?cursor={cursor}&device_id={device_id}&limit={limit}
 ```
 
 响应包含：
@@ -141,7 +141,8 @@ GET /api/v1/changes?cursor={cursor}&device_id={device_id}
       "created_at": "2026-06-26T00:00:00Z"
     }
   ],
-  "next_cursor": 42
+  "next_cursor": 42,
+  "has_more": false
 }
 ```
 
@@ -151,7 +152,11 @@ V1 游标语义：
 - 服务端按 `(user_id, device_id)` 持久化每台设备的最新游标。
 - 未传 `device_id` 的旧调用使用 `__legacy__` 兼容键。
 - `cursor=0` 表示从头拉取。
+- `limit` 可选；默认值为 `100`，最大值为 `500`。
+- `limit <= 0` 或无法解析为整数时，服务端返回 `invalid_request`。
+- 服务端使用 `LIMIT limit+1` 探测是否还有更多数据，不额外统计总数。
 - 客户端成功处理本批所有变更后，保存 `next_cursor`。
+- 如果 `has_more=true`，客户端应继续使用本次返回的 `next_cursor` 拉取下一页。
 - 如果客户端处理中断，继续使用旧游标重拉；处理逻辑必须幂等。
 - `change_type=upsert` 表示新增或更新文件版本，客户端按 `version_id` 下载密文对象。
 - `change_type=delete` 表示远端删除墓碑，客户端按 `object_id` 标记本地文件为远端已删除。
@@ -245,6 +250,7 @@ DELETE /api/v1/objects/{object_id}?sync_root_id={sync_root_id}&device_id={device
 - 用户隔离与上传大小校验。
 - 变更列表、变更类型与密文下载。
 - 用户+设备维度变更游标。
+- 变更列表分页，支持 `limit` 和 `has_more`。
 - 远端删除墓碑。
 - JSON 错误响应。
 
@@ -258,6 +264,5 @@ DELETE /api/v1/objects/{object_id}?sync_root_id={sync_root_id}&device_id={device
 
 ## 14. 后续升级方向
 
-- 支持服务端返回分页限制和 `has_more`。
 - 支持后台轮询策略和移动端省电策略。
 - 支持远端删除恢复、版本保留策略和 tombstone 清理策略。

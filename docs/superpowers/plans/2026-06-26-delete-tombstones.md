@@ -4,7 +4,7 @@
 
 **Goal:** 为后端增加远端删除墓碑能力，并让变更列表明确返回 `change_type`。
 
-**Architecture:** 新增 `file_tombstones` 表记录删除事件，不删除历史密文对象。`GET /api/v1/changes` 将 `file_versions` 映射为 `upsert`，将 `file_tombstones` 映射为 `delete`，按单调游标合并返回。新增 `DELETE /api/v1/objects/{objectID}` 追加删除墓碑。
+**Architecture:** 新增 `file_tombstones` 表记录删除事件，不删除历史密文对象。新增 `sync_events` 统一记录 `upsert` 和 `delete` 事件，`GET /api/v1/changes` 基于统一事件游标返回变更。新增 `DELETE /api/v1/objects/{objectID}` 追加删除墓碑。
 
 **Tech Stack:** Go, net/http, database/sql, SQLite
 
@@ -12,10 +12,10 @@
 
 ## 文件结构
 
-- Modify: `internal/store/migrate.go`：新增 `file_tombstones` 表。
+- Modify: `internal/store/migrate.go`：新增 `file_tombstones` 和 `sync_events` 表。
 - Modify: `internal/store/db_test.go`：更新 schema 测试。
 - Modify: `internal/domain/types.go`：`CursorChange` 增加 `change_type` 和可空版本字段语义。
-- Modify: `internal/service/change_service.go`：合并版本变更和删除墓碑。
+- Modify: `internal/service/change_service.go`：基于 `sync_events` 查询统一变更流。
 - Create: `internal/service/delete_service.go`：创建删除墓碑并校验归属。
 - Create: `internal/httpapi/handlers/delete_handler.go`：删除对象 API。
 - Modify: `internal/httpapi/router.go`：注册 DELETE 路由。
@@ -50,9 +50,11 @@ Expected: FAIL，当前 DELETE 路由不存在。
 - Modify: `internal/store/db_test.go`
 - Create: `internal/service/delete_service.go`
 
-- [x] **Step 1: 新增 file_tombstones 表**
+- [x] **Step 1: 新增 file_tombstones 与 sync_events 表**
 
 字段：`id, user_id, device_id, sync_root_id, object_id, metadata_json, created_at`。
+
+`sync_events` 记录统一事件游标，避免 `file_versions.rowid` 和 `file_tombstones.rowid` 分属不同序列导致游标遗漏。
 
 - [x] **Step 2: 实现 DeleteService**
 

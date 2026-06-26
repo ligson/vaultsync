@@ -4,6 +4,7 @@
 
 ## 2026-06-26
 
+- 对齐同步协议、决策记录和后端 MVP 记忆，修正设备维度游标与远端删除墓碑的当前支持状态。
 - 完成删除墓碑与变更类型：新增 `file_tombstones`、`sync_events`、`DELETE /api/v1/objects/{object_id}`，变更列表返回 `upsert/delete` 并使用统一事件游标。
 - 新增删除墓碑与变更类型实现计划，准备让变更列表同时表达 `upsert` 和 `delete`。
 - 完成设备维度变更游标：`GET /api/v1/changes` 支持可选 `device_id`，`sync_cursors` 升级为 `(user_id, device_id)` 复合主键，并保留 `__legacy__` 兼容键。

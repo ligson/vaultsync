@@ -8,7 +8,7 @@
 - 服务器端只保存密文对象与元数据索引。
 - 上传流程包含会话创建、分片追加、完成落盘和文件版本记录。
 - 下载接口按版本 ID 读取密文对象。
-- 变更拉取接口当前用 `file_versions` 的顺序行号生成游标，并按用户+设备维度把最新游标持久化到 `sync_cursors`。
+- 变更拉取接口当前用 `sync_events` 统一事件表生成游标，并按用户+设备维度把最新游标持久化到 `sync_cursors`。
 - 测试装配已经提供 auth、device、sync root、upload、change、download 的完整集成链路。
 - 计划中的 `sync_root_flow_test.go` 已独立成文件，`full_flow_test.go` 用于聚合主流程。
 - 同步目录创建必须校验设备属于当前用户，不能信任客户端传入的 `device_id`。

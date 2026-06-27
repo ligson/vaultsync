@@ -1,25 +1,26 @@
 # VaultSync
 
-私有文件同步系统文档仓库。
+VaultSync 是一个私有文件同步系统的多子项目仓库。
 
-## 后端 MVP
+## 目录
 
-- 后端：Go + SQLite
-- 部署：单机 NAS
-- 存储：服务器只保存密文对象与索引
-- 启动示例：
-  ```bash
-  VAULTSYNC_DATA_DIR=./data \
-  VAULTSYNC_DATABASE_PATH=./data/vaultsync.db \
-  VAULTSYNC_TOKEN_SECRET=change-me \
-  go run ./cmd/server
-  ```
-- 构建：`make build`
-- 测试：`go test ./...`
-- 部署示例：`docker/docker-compose.yml`
+- `vaultsync-be/`：Go + SQLite 后端服务
+- `vaultsync-app/`：Flutter 客户端
+- `vaultsync-fe/`：未来网页管理端
+- `docs/`：需求、架构、决策和实现计划
 
-## 目录说明
+## 后端
 
-- `docs/specs/`：正式需求和架构
-- `docs/notes/`：长期记忆、决策和实现约定
-- `docs/superpowers/plans/`：实现计划
+后端入口和构建都在 `vaultsync-be/`：
+
+```bash
+cd vaultsync-be
+VAULTSYNC_DATA_DIR=./data \
+VAULTSYNC_DATABASE_PATH=./data/vaultsync.db \
+VAULTSYNC_TOKEN_SECRET=change-me \
+go run ./cmd/server
+```
+
+- 构建：`cd vaultsync-be && make build`
+- 测试：`cd vaultsync-be && go test ./...`
+- 部署示例：`vaultsync-be/docker/docker-compose.yml`

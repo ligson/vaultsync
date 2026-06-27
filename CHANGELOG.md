@@ -4,6 +4,7 @@
 
 ## 2026-06-26
 
+- 重构仓库目录：后端代码迁移到 `vaultsync-be/`，预留 `vaultsync-app/` 和 `vaultsync-fe/`，并同步更新根 README、规则和后端入口文件。
 - 完成变更列表分页：`GET /api/v1/changes` 支持 `limit`，响应新增 `has_more`，服务端使用 `LIMIT limit+1` 探测是否还有下一页。
 - 对齐同步协议、决策记录和后端 MVP 记忆，修正设备维度游标与远端删除墓碑的当前支持状态。
 - 完成删除墓碑与变更类型：新增 `file_tombstones`、`sync_events`、`DELETE /api/v1/objects/{object_id}`，变更列表返回 `upsert/delete` 并使用统一事件游标。

@@ -1,7 +1,7 @@
 FROM golang:1.24 AS build
 WORKDIR /src
 COPY . .
-RUN go build -o /out/vaultsync ./cmd/server
+RUN cd vaultsync-be && go build -o /out/vaultsync ./cmd/server
 
 FROM debian:bookworm-slim
 WORKDIR /app

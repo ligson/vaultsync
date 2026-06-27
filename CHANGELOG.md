@@ -24,6 +24,16 @@
 - 收口后端 MVP 的计划文件结构：补充独立的同步目录测试、下载服务拆分、聚合测试、更完整的 README / notes，并让 `sync_cursors` 实际参与变更游标持久化。
 - 补齐后端 MVP 收尾：HTTP 服务实际监听启动、Docker 单机部署文件、README 与后端 MVP 记忆文档。
 
+## 2026-06-27
+
+- 统一后端对外 JSON 响应为 `success/message/httpCode/data` envelope，新增共享响应包 `internal/httpapi/response`，并让认证中间件复用同一结构返回 401。
+- 新增轻量领域错误类型，服务层可返回稳定错误码，handler 统一映射为 JSON envelope；跨用户下载或版本不存在返回 `404 not_found`，不再暴露底层 SQL 错误。
+- 将后端集成测试迁移到 `vaultsync-be/tests/integration/`，确保 `cd vaultsync-be && go test ./...` 覆盖 API 主流程。
+- 新增客户端 API 对接约定文档，说明 Flutter 客户端如何处理 envelope、错误码和二进制下载例外。
+- 更新所有主要 API handler 的成功响应为统一 envelope，下载接口继续保持二进制输出。
+- 改造测试辅助函数以解析统一 envelope，补齐认证、注册、同步目录、上传和变更列表相关测试适配。
+- 将 API 响应规范文档改为统一 JSON envelope 约定，并把这条规则写入仓库规则文件。
+
 ## 2026-06-25
 
 - 新增变更拉取与密文下载接口，当前用 `file_versions` 的顺序行号充当最小游标。

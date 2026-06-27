@@ -2,10 +2,10 @@ package middleware
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 
+	"github.com/ligson/vaultsync/internal/httpapi/response"
 	"github.com/ligson/vaultsync/internal/token"
 )
 
@@ -49,12 +49,7 @@ func Auth(tokenVerifier TokenVerifier, next http.Handler) http.Handler {
 }
 
 func writeAuthError(w http.ResponseWriter, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error": map[string]string{
-			"code":    "unauthorized",
-			"message": message,
-		},
+	response.Write(w, http.StatusUnauthorized, message, map[string]any{
+		"code": "unauthorized",
 	})
 }

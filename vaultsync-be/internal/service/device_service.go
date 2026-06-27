@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"time"
 
@@ -26,10 +25,10 @@ func (s *DeviceService) Register(ctx context.Context, userID, name, platform str
 	name = strings.TrimSpace(name)
 	platform = strings.TrimSpace(platform)
 	if name == "" {
-		return domain.Device{}, errors.New("device name is required")
+		return domain.Device{}, InvalidRequest("device name is required")
 	}
 	if platform == "" {
-		return domain.Device{}, errors.New("device platform is required")
+		return domain.Device{}, InvalidRequest("device platform is required")
 	}
 
 	device := domain.Device{

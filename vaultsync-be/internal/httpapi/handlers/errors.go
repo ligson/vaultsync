@@ -1,23 +1,23 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
+
+	"github.com/ligson/vaultsync/internal/httpapi/response"
+	"github.com/ligson/vaultsync/internal/service"
 )
 
 const (
-	errorCodeInternal       = "internal_error"
-	errorCodeInvalidRequest = "invalid_request"
-	errorCodeUnauthorized   = "unauthorized"
+	errorCodeInvalidRequest = service.CodeInvalidRequest
 )
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error": map[string]string{
-			"code":    code,
-			"message": message,
-		},
+	response.Write(w, status, message, map[string]any{
+		"code": code,
 	})
+}
+
+func writeServiceError(w http.ResponseWriter, err error) {
+	appErr := service.ToAppError(err)
+	writeError(w, appErr.Status, appErr.Code, appErr.Message)
 }

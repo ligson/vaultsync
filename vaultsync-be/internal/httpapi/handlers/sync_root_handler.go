@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/ligson/vaultsync/internal/httpapi/middleware"
+	"github.com/ligson/vaultsync/internal/httpapi/response"
 	"github.com/ligson/vaultsync/internal/service"
 )
 
@@ -31,18 +32,18 @@ func (h *SyncRootHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	root, err := h.service.Create(r.Context(), userID, req.DeviceID, req.EncryptedPath, req.CleanupPolicy, req.ArchivePath)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, err.Error())
+		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, root)
+	response.Write(w, http.StatusCreated, "", root)
 }
 
 func (h *SyncRootHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.MustUserID(r.Context())
 	roots, err := h.service.ListByUser(r.Context(), userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errorCodeInternal, err.Error())
+		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": roots})
+	response.Write(w, http.StatusOK, "", map[string]any{"items": roots})
 }

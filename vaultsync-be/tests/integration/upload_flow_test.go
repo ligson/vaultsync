@@ -3,7 +3,6 @@ package integration
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -170,15 +169,12 @@ func TestDeleteObjectCreatesTombstoneChange(t *testing.T) {
 	changesPath := "/api/v1/changes?cursor=0&device_id=" + deviceID
 	resp = testutil.JSONRequest(t, app, http.MethodGet, changesPath, "", token)
 	testutil.AssertStatus(t, resp, http.StatusOK)
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read changes body: %v", err)
+	env := testutil.DecodeJSONEnvelope(t, resp)
+	if !strings.Contains(string(env.Data), `"change_type":"delete"`) {
+		t.Fatalf("expected delete change, got %s", string(env.Data))
 	}
-	if !strings.Contains(string(body), `"change_type":"delete"`) {
-		t.Fatalf("expected delete change, got %s", string(body))
-	}
-	if !strings.Contains(string(body), `"object_id":"obj-delete"`) {
-		t.Fatalf("expected deleted object id, got %s", string(body))
+	if !strings.Contains(string(env.Data), `"object_id":"obj-delete"`) {
+		t.Fatalf("expected deleted object id, got %s", string(env.Data))
 	}
 }
 
@@ -193,10 +189,11 @@ func TestDeleteChangeAppearsAfterPriorCursor(t *testing.T) {
 	changesPath := "/api/v1/changes?cursor=0&device_id=" + deviceID
 	resp = testutil.JSONRequest(t, app, http.MethodGet, changesPath, "", token)
 	testutil.AssertStatus(t, resp, http.StatusOK)
+	env := testutil.DecodeJSONEnvelope(t, resp)
 	var firstPull struct {
 		NextCursor int64 `json:"next_cursor"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&firstPull); err != nil {
+	if err := json.Unmarshal(env.Data, &firstPull); err != nil {
 		t.Fatalf("decode first changes response: %v", err)
 	}
 	if firstPull.NextCursor == 0 {
@@ -209,12 +206,9 @@ func TestDeleteChangeAppearsAfterPriorCursor(t *testing.T) {
 
 	resp = testutil.JSONRequest(t, app, http.MethodGet, fmt.Sprintf("/api/v1/changes?cursor=%d&device_id=%s", firstPull.NextCursor, deviceID), "", token)
 	testutil.AssertStatus(t, resp, http.StatusOK)
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read changes body: %v", err)
-	}
-	if !strings.Contains(string(body), `"change_type":"delete"`) {
-		t.Fatalf("expected delete change after cursor %d, got %s", firstPull.NextCursor, string(body))
+	env = testutil.DecodeJSONEnvelope(t, resp)
+	if !strings.Contains(string(env.Data), `"change_type":"delete"`) {
+		t.Fatalf("expected delete change after cursor %d, got %s", firstPull.NextCursor, string(env.Data))
 	}
 }
 
@@ -262,8 +256,8 @@ func TestDownloadRejectsForeignVersion(t *testing.T) {
 	bobToken := registerAndLogin(t, app, "bob@example.com")
 
 	resp := testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/objects/"+versionID, "", bobToken)
-	testutil.AssertStatus(t, resp, http.StatusBadRequest)
-	testutil.AssertJSONErrorCode(t, resp, "invalid_request")
+	testutil.AssertStatus(t, resp, http.StatusNotFound)
+	testutil.AssertJSONErrorCode(t, resp, "not_found")
 }
 
 func createUploadSession(t *testing.T, app *httptest.Server, token, deviceID, rootID, objectID, versionID string, totalSize int64) string {
@@ -295,8 +289,9 @@ type changesPageResponse struct {
 
 func decodeChangesPage(t *testing.T, resp *http.Response) changesPageResponse {
 	t.Helper()
+	env := testutil.DecodeJSONEnvelope(t, resp)
 	var page changesPageResponse
-	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+	if err := json.Unmarshal(env.Data, &page); err != nil {
 		t.Fatalf("decode changes page: %v", err)
 	}
 	return page

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"strings"
 	"time"
@@ -34,36 +33,36 @@ func NewUploadService(repo *store.ObjectRepo, deviceRepo *store.DeviceRepo, sync
 
 func (s *UploadService) CreateSession(ctx context.Context, userID, deviceID, syncRootID, objectID, versionID, encryptedName, metadataJSON string, totalSize, chunkSize int64) (domain.UploadSession, error) {
 	if strings.TrimSpace(deviceID) == "" {
-		return domain.UploadSession{}, errors.New("device id is required")
+		return domain.UploadSession{}, InvalidRequest("device id is required")
 	}
 	if strings.TrimSpace(syncRootID) == "" {
-		return domain.UploadSession{}, errors.New("sync root id is required")
+		return domain.UploadSession{}, InvalidRequest("sync root id is required")
 	}
 	if strings.TrimSpace(objectID) == "" {
-		return domain.UploadSession{}, errors.New("object id is required")
+		return domain.UploadSession{}, InvalidRequest("object id is required")
 	}
 	if strings.TrimSpace(versionID) == "" {
-		return domain.UploadSession{}, errors.New("version id is required")
+		return domain.UploadSession{}, InvalidRequest("version id is required")
 	}
 	if strings.TrimSpace(encryptedName) == "" {
-		return domain.UploadSession{}, errors.New("encrypted name is required")
+		return domain.UploadSession{}, InvalidRequest("encrypted name is required")
 	}
 	if totalSize < 0 || chunkSize <= 0 {
-		return domain.UploadSession{}, errors.New("invalid upload size")
+		return domain.UploadSession{}, InvalidRequest("invalid upload size")
 	}
 	deviceExists, err := s.deviceRepo.ExistsForUser(ctx, userID, strings.TrimSpace(deviceID))
 	if err != nil {
 		return domain.UploadSession{}, err
 	}
 	if !deviceExists {
-		return domain.UploadSession{}, errors.New("device does not belong to user")
+		return domain.UploadSession{}, InvalidRequest("device does not belong to user")
 	}
 	root, err := s.syncRootRepo.GetForUser(ctx, userID, strings.TrimSpace(syncRootID))
 	if err != nil {
-		return domain.UploadSession{}, errors.New("sync root does not belong to user")
+		return domain.UploadSession{}, InvalidRequest("sync root does not belong to user")
 	}
 	if root.DeviceID != strings.TrimSpace(deviceID) {
-		return domain.UploadSession{}, errors.New("sync root does not belong to device")
+		return domain.UploadSession{}, InvalidRequest("sync root does not belong to device")
 	}
 
 	mergedMetadata, err := mergeUploadMetadata(metadataJSON, encryptedName)
@@ -95,14 +94,14 @@ func (s *UploadService) AppendChunk(ctx context.Context, userID, sessionID strin
 		return err
 	}
 	if session.Status != "pending" {
-		return errors.New("upload session is not pending")
+		return InvalidRequest("upload session is not pending")
 	}
 	payload, err := io.ReadAll(chunk)
 	if err != nil {
 		return err
 	}
 	if session.ReceivedSize+int64(len(payload)) > session.TotalSize {
-		return errors.New("upload exceeds total size")
+		return InvalidRequest("upload exceeds total size")
 	}
 	written, err := s.storage.AppendChunk(userID, sessionID, bytes.NewReader(payload))
 	if err != nil {
@@ -117,10 +116,10 @@ func (s *UploadService) Complete(ctx context.Context, userID, sessionID string) 
 		return domain.FileVersion{}, err
 	}
 	if session.Status != "pending" {
-		return domain.FileVersion{}, errors.New("upload session is not pending")
+		return domain.FileVersion{}, InvalidRequest("upload session is not pending")
 	}
 	if session.ReceivedSize != session.TotalSize {
-		return domain.FileVersion{}, errors.New("upload is incomplete")
+		return domain.FileVersion{}, InvalidRequest("upload is incomplete")
 	}
 	contentPath, hashValue, size, err := s.storage.FinalizeUpload(userID, sessionID, session.VersionID)
 	if err != nil {
@@ -149,7 +148,7 @@ func mergeUploadMetadata(metadataJSON, encryptedName string) (string, error) {
 	payload := map[string]any{}
 	if strings.TrimSpace(metadataJSON) != "" {
 		if err := json.Unmarshal([]byte(metadataJSON), &payload); err != nil {
-			return "", err
+			return "", InvalidRequest("metadata json is invalid")
 		}
 	}
 	payload["encrypted_name"] = encryptedName
@@ -163,11 +162,11 @@ func mergeUploadMetadata(metadataJSON, encryptedName string) (string, error) {
 func extractEncryptedName(metadataJSON string) (string, error) {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(metadataJSON), &payload); err != nil {
-		return "", err
+		return "", InvalidRequest("metadata json is invalid")
 	}
 	value, _ := payload["encrypted_name"].(string)
 	if strings.TrimSpace(value) == "" {
-		return "", errors.New("encrypted name is required")
+		return "", InvalidRequest("encrypted name is required")
 	}
 	return value, nil
 }

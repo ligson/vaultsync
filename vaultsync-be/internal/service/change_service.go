@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"strings"
 
 	"github.com/ligson/vaultsync/internal/domain"
@@ -84,7 +83,7 @@ func (s *ChangeService) List(ctx context.Context, userID, deviceID string, curso
 
 func normalizeChangeLimit(limit int) (int, error) {
 	if limit < 0 {
-		return 0, errors.New("limit must be positive")
+		return 0, InvalidRequest("limit must be positive")
 	}
 	if limit == 0 {
 		return DefaultChangeLimit, nil
@@ -105,7 +104,7 @@ func (s *ChangeService) cursorDeviceID(ctx context.Context, userID, deviceID str
 		return "", err
 	}
 	if !exists {
-		return "", errors.New("device does not belong to user")
+		return "", InvalidRequest("device does not belong to user")
 	}
 	return deviceID, nil
 }

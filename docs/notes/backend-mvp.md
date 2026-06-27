@@ -27,6 +27,10 @@
 - 后端不得根据 `cleanup_policy=delete` 删除远端密文对象。
 - 后端支持远端删除墓碑：`DELETE /api/v1/objects/{object_id}` 只追加 `file_tombstones` 和 `sync_events`，不删除历史密文对象。
 - `changes` 响应包含 `change_type`，当前取值为 `upsert` 和 `delete`。
+- 对外 JSON 接口统一使用 `success/message/httpCode/data` envelope。
+- 业务层使用轻量领域错误表达稳定错误码，handler 统一映射为 envelope。
+- 资源不存在或跨用户无权访问下载版本时返回 `404 not_found`，避免暴露底层 SQL 错误。
+- 后端集成测试放在 `vaultsync-be/tests/integration/`，确保 `cd vaultsync-be && go test ./...` 能覆盖 API 主流程。
 
 ## 约定
 

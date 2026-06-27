@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/ligson/vaultsync/internal/httpapi/response"
 	"github.com/ligson/vaultsync/internal/service"
 )
 
@@ -27,10 +28,10 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.service.Register(r.Context(), req.Email, req.Password)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, err.Error())
+		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"id": user.ID, "email": user.Email})
+	response.Write(w, http.StatusCreated, "", map[string]string{"id": user.ID, "email": user.Email})
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
@@ -45,16 +46,8 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	session, err := h.service.Login(r.Context(), req.Email, req.Password)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, errorCodeUnauthorized, err.Error())
+		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, session)
-}
-
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(value); err != nil {
-		writeError(w, http.StatusInternalServerError, errorCodeInternal, err.Error())
-	}
+	response.Write(w, http.StatusOK, "", session)
 }

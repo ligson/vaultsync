@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"strings"
 	"time"
 
@@ -31,27 +30,27 @@ func (s *DeleteService) DeleteObject(ctx context.Context, userID, deviceID, sync
 	syncRootID = strings.TrimSpace(syncRootID)
 	objectID = strings.TrimSpace(objectID)
 	if deviceID == "" {
-		return nil, errors.New("device id is required")
+		return nil, InvalidRequest("device id is required")
 	}
 	if syncRootID == "" {
-		return nil, errors.New("sync root id is required")
+		return nil, InvalidRequest("sync root id is required")
 	}
 	if objectID == "" {
-		return nil, errors.New("object id is required")
+		return nil, InvalidRequest("object id is required")
 	}
 	deviceExists, err := s.deviceRepo.ExistsForUser(ctx, userID, deviceID)
 	if err != nil {
 		return nil, err
 	}
 	if !deviceExists {
-		return nil, errors.New("device does not belong to user")
+		return nil, InvalidRequest("device does not belong to user")
 	}
 	root, err := s.syncRootRepo.GetForUser(ctx, userID, syncRootID)
 	if err != nil {
-		return nil, errors.New("sync root does not belong to user")
+		return nil, InvalidRequest("sync root does not belong to user")
 	}
 	if root.DeviceID != deviceID {
-		return nil, errors.New("sync root does not belong to device")
+		return nil, InvalidRequest("sync root does not belong to device")
 	}
 
 	tombstoneID := newID()

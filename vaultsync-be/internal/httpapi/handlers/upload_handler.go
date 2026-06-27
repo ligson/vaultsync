@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/ligson/vaultsync/internal/httpapi/middleware"
+	"github.com/ligson/vaultsync/internal/httpapi/response"
 	"github.com/ligson/vaultsync/internal/service"
 )
 
@@ -35,17 +36,17 @@ func (h *UploadHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 
 	session, err := h.service.CreateSession(r.Context(), userID, req.DeviceID, req.SyncRootID, req.ObjectID, req.VersionID, req.EncryptedName, req.MetadataJSON, req.TotalSize, req.ChunkSize)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, err.Error())
+		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, session)
+	response.Write(w, http.StatusCreated, "", session)
 }
 
 func (h *UploadHandler) UploadPart(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.MustUserID(r.Context())
 	sessionID := r.PathValue("sessionID")
 	if err := h.service.AppendChunk(r.Context(), userID, sessionID, r.Body); err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, err.Error())
+		writeServiceError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -56,8 +57,8 @@ func (h *UploadHandler) Complete(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("sessionID")
 	version, err := h.service.Complete(r.Context(), userID, sessionID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, err.Error())
+		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, version)
+	response.Write(w, http.StatusCreated, "", version)
 }

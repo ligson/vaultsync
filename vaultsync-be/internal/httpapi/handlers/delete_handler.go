@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/ligson/vaultsync/internal/httpapi/middleware"
+	"github.com/ligson/vaultsync/internal/httpapi/response"
 	"github.com/ligson/vaultsync/internal/service"
 )
 
@@ -22,8 +23,8 @@ func (h *DeleteHandler) DeleteObject(w http.ResponseWriter, r *http.Request) {
 	syncRootID := r.URL.Query().Get("sync_root_id")
 	result, err := h.service.DeleteObject(r.Context(), userID, deviceID, syncRootID, objectID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, err.Error())
+		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, result)
+	response.Write(w, http.StatusCreated, "", result)
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ligson/vaultsync/internal/httpapi/middleware"
+	"github.com/ligson/vaultsync/internal/httpapi/response"
 	"github.com/ligson/vaultsync/internal/service"
 )
 
@@ -31,10 +32,10 @@ func (h *ChangeHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	page, err := h.service.List(r.Context(), userID, deviceID, cursorValue, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errorCodeInternal, err.Error())
+		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, page)
+	response.Write(w, http.StatusOK, "", page)
 }
 
 func parseChangeLimit(value string) (int, error) {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/ligson/vaultsync/internal/httpapi/middleware"
+	"github.com/ligson/vaultsync/internal/httpapi/response"
 	"github.com/ligson/vaultsync/internal/service"
 )
 
@@ -29,8 +30,8 @@ func (h *DeviceHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	device, err := h.service.Register(r.Context(), userID, req.Name, req.Platform)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, err.Error())
+		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, device)
+	response.Write(w, http.StatusCreated, "", device)
 }

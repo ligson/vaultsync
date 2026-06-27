@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"time"
 
@@ -29,20 +28,20 @@ func (s *SyncRootService) Create(ctx context.Context, userID, deviceID, encrypte
 	encryptedPath = strings.TrimSpace(encryptedPath)
 	cleanupPolicy = strings.TrimSpace(cleanupPolicy)
 	if deviceID == "" {
-		return domain.SyncRoot{}, errors.New("device id is required")
+		return domain.SyncRoot{}, InvalidRequest("device id is required")
 	}
 	if encryptedPath == "" {
-		return domain.SyncRoot{}, errors.New("encrypted path is required")
+		return domain.SyncRoot{}, InvalidRequest("encrypted path is required")
 	}
 	if cleanupPolicy == "" {
-		return domain.SyncRoot{}, errors.New("cleanup policy is required")
+		return domain.SyncRoot{}, InvalidRequest("cleanup policy is required")
 	}
 	deviceExists, err := s.deviceRepo.ExistsForUser(ctx, userID, deviceID)
 	if err != nil {
 		return domain.SyncRoot{}, err
 	}
 	if !deviceExists {
-		return domain.SyncRoot{}, errors.New("device does not belong to user")
+		return domain.SyncRoot{}, InvalidRequest("device does not belong to user")
 	}
 
 	root := domain.SyncRoot{

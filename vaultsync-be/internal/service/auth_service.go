@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"strings"
 	"time"
 
@@ -34,10 +33,10 @@ func NewAuthService(repo *store.AuthRepo, tokenSecret string) *AuthService {
 func (s *AuthService) Register(ctx context.Context, email, password string) (domain.User, error) {
 	email = strings.TrimSpace(strings.ToLower(email))
 	if email == "" {
-		return domain.User{}, errors.New("email is required")
+		return domain.User{}, InvalidRequest("email is required")
 	}
 	if password == "" {
-		return domain.User{}, errors.New("password is required")
+		return domain.User{}, InvalidRequest("password is required")
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -57,10 +56,10 @@ func (s *AuthService) Register(ctx context.Context, email, password string) (dom
 func (s *AuthService) Login(ctx context.Context, email, password string) (domain.SessionToken, error) {
 	user, err := s.repo.FindUserByEmail(ctx, strings.TrimSpace(strings.ToLower(email)))
 	if err != nil {
-		return domain.SessionToken{}, errors.New("invalid email or password")
+		return domain.SessionToken{}, Unauthorized("invalid email or password")
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
-		return domain.SessionToken{}, errors.New("invalid email or password")
+		return domain.SessionToken{}, Unauthorized("invalid email or password")
 	}
 
 	now := s.now()

@@ -15,6 +15,22 @@
 - 后端代码、构建、部署文件统一放在 `vaultsync-be/`。
 - Flutter 客户端统一放在 `vaultsync-app/`。
 - 未来网页管理端统一预留在 `vaultsync-fe/`。
+- 对外 JSON 接口必须统一使用以下 envelope：
+
+```json
+{
+  "success": true,
+  "message": "",
+  "httpCode": 200,
+  "data": {}
+}
+```
+
+- `success` 表示接口处理是否成功。
+- `message` 表示给前端显示的说明信息。
+- `httpCode` 必须与 HTTP 状态码保持一致。
+- `data` 表示业务数据主体，没有数据时返回空对象。
+- 新增接口时优先复用统一响应封装，避免每个 handler 手写不同格式。
 
 ## 当前项目方向
 

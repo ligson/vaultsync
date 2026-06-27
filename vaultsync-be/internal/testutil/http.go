@@ -44,6 +44,22 @@ func BinaryRequest(t *testing.T, server *httptest.Server, method, path string, b
 	return resp
 }
 
+type JSONEnvelope struct {
+	Success  bool            `json:"success"`
+	Message  string          `json:"message"`
+	HTTPCode int             `json:"httpCode"`
+	Data     json.RawMessage `json:"data"`
+}
+
+func DecodeJSONEnvelope(t *testing.T, resp *http.Response) JSONEnvelope {
+	t.Helper()
+	var payload JSONEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode json envelope: %v", err)
+	}
+	return payload
+}
+
 func AssertStatus(t *testing.T, resp *http.Response, want int) {
 	t.Helper()
 	if resp.StatusCode != want {
@@ -66,25 +82,27 @@ func AssertJSONContains(t *testing.T, resp *http.Response, want string) {
 func AssertJSONErrorCode(t *testing.T, resp *http.Response, want string) {
 	t.Helper()
 	var payload struct {
-		Error struct {
+		Data struct {
 			Code string `json:"code"`
-		} `json:"error"`
+		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode json error: %v", err)
 	}
-	if payload.Error.Code != want {
-		t.Fatalf("expected json error code %q, got %q", want, payload.Error.Code)
+	if payload.Data.Code != want {
+		t.Fatalf("expected json error code %q, got %q", want, payload.Data.Code)
 	}
 }
 
 func MustReadJSONField(t *testing.T, resp *http.Response, field string) string {
 	t.Helper()
-	var payload map[string]any
+	var payload struct {
+		Data map[string]any `json:"data"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode json: %v", err)
 	}
-	value, ok := payload[field].(string)
+	value, ok := payload.Data[field].(string)
 	if !ok || value == "" {
 		t.Fatalf("expected json field %q to be a non-empty string", field)
 	}

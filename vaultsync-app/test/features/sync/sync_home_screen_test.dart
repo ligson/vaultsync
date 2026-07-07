@@ -8,6 +8,7 @@ import 'package:vaultsync_app/features/auth/auth_models.dart';
 import 'package:vaultsync_app/features/device/device_models.dart';
 import 'package:vaultsync_app/features/media_backup/media_backup_gateway.dart';
 import 'package:vaultsync_app/features/media_backup/media_backup_models.dart';
+import 'package:vaultsync_app/features/sync/file_access_permission.dart';
 import 'package:vaultsync_app/features/sync/folder_picker.dart';
 import 'package:vaultsync_app/features/sync/local_path_protector.dart';
 import 'package:vaultsync_app/features/sync/local_sync_scanner.dart';
@@ -955,6 +956,7 @@ void main() {
     (tester) async {
       final syncRoots = FakeSyncRootGateway(const []);
       final mappings = FakeSyncRootMappingStore();
+      final fileAccessPermission = FakeFileAccessPermissionGateway();
 
       await tester.pumpWidget(
         MaterialApp(
@@ -967,7 +969,9 @@ void main() {
             uploadTasks: FakeUploadTaskStore(),
             syncRoots: syncRoots,
             folderPicker: FakeFolderPicker('/Users/alice/Photos'),
+            fileAccessPermission: fileAccessPermission,
             pathProtector: const FakePathProtector(),
+            devicePlatform: 'android',
           ),
         ),
       );
@@ -975,6 +979,15 @@ void main() {
 
       await tester.tap(find.byKey(const ValueKey('add_sync_root_button')));
       await tester.pumpAndSettle();
+      expect(find.textContaining('Download/VaultSync'), findsOneWidget);
+
+      await tester.tap(
+        find.byKey(const ValueKey('open_file_access_settings_button')),
+      );
+      await tester.pumpAndSettle();
+      expect(fileAccessPermission.openCount, 1);
+      expect(find.textContaining('授权完成后请返回 VaultSync'), findsOneWidget);
+
       await tester.tap(find.byKey(const ValueKey('choose_sync_folder_button')));
       await tester.pumpAndSettle();
       expect(find.text('/Users/alice/Photos'), findsOneWidget);
@@ -2733,6 +2746,15 @@ class FakeFolderPicker implements FolderPicker {
 
   @override
   Future<String?> chooseSyncFolder() async => path;
+}
+
+class FakeFileAccessPermissionGateway implements FileAccessPermissionGateway {
+  var openCount = 0;
+
+  @override
+  Future<void> openFileAccessSettings() async {
+    openCount += 1;
+  }
 }
 
 class FakePathProtector implements LocalPathProtector {

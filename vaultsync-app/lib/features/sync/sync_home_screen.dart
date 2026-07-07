@@ -10,6 +10,7 @@ import '../media_backup/media_backup_models.dart';
 import '../media_backup/media_backup_screen.dart';
 import '../media_backup/media_backup_gateway.dart';
 import '../media_backup/media_backup_scanner.dart';
+import 'file_access_permission.dart';
 import 'folder_picker.dart';
 import 'local_cleanup_executor.dart';
 import 'local_path_protector.dart';
@@ -31,6 +32,7 @@ class SyncHomeScreen extends StatefulWidget {
   final SyncHistoryStore? syncHistory;
   final SyncRootGateway syncRoots;
   final FolderPicker folderPicker;
+  final FileAccessPermissionGateway fileAccessPermission;
   final LocalPathProtector pathProtector;
   final LocalSyncScanGateway? localScanner;
   final LocalUploadExecutionGateway? uploadExecutor;
@@ -56,6 +58,7 @@ class SyncHomeScreen extends StatefulWidget {
     this.syncHistory,
     required this.syncRoots,
     this.folderPicker = const FileSelectorFolderPicker(),
+    this.fileAccessPermission = const PermissionHandlerFileAccessGateway(),
     this.pathProtector = const Sha256LocalPathProtector(),
     this.localScanner,
     this.uploadExecutor,
@@ -238,7 +241,11 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       context: context,
       builder: (context) => _CreateSyncRootDialog(
         folderPicker: widget.folderPicker,
+        fileAccessPermission: widget.fileAccessPermission,
         pathProtector: widget.pathProtector,
+        showAndroidFileAccessGuide:
+            (widget.devicePlatform ?? DeviceProfile.current().platform) ==
+            'android',
       ),
     );
     if (draft == null || !mounted) {
@@ -3896,11 +3903,15 @@ String _autoSyncSummary(AutoSyncStatus status, {required bool enabled}) {
 
 class _CreateSyncRootDialog extends StatefulWidget {
   final FolderPicker folderPicker;
+  final FileAccessPermissionGateway fileAccessPermission;
   final LocalPathProtector pathProtector;
+  final bool showAndroidFileAccessGuide;
 
   const _CreateSyncRootDialog({
     required this.folderPicker,
+    required this.fileAccessPermission,
     required this.pathProtector,
+    required this.showAndroidFileAccessGuide,
   });
 
   @override
@@ -3913,6 +3924,7 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
   final _encryptedPathController = TextEditingController();
   String _cleanupPolicy = 'keep';
   String? _folderErrorMessage;
+  String? _permissionStatusMessage;
 
   @override
   void dispose() {
@@ -3942,11 +3954,33 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
     final selectedPath = localPath;
     setState(() {
       _folderErrorMessage = null;
+      _permissionStatusMessage = null;
       _localPathController.text = selectedPath;
       _encryptedPathController.text = widget.pathProtector.protectLocalPath(
         selectedPath,
       );
     });
+  }
+
+  Future<void> _openFileAccessSettings() async {
+    try {
+      await widget.fileAccessPermission.openFileAccessSettings();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _folderErrorMessage = null;
+        _permissionStatusMessage = '已打开系统授权页。授权完成后请返回 VaultSync，并再次选择本地目录。';
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _permissionStatusMessage = null;
+        _folderErrorMessage = userReadableErrorMessage(error);
+      });
+    }
   }
 
   @override
@@ -3987,6 +4021,38 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
                 child: Text(
                   _folderErrorMessage!,
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+            ],
+            if (widget.showAndroidFileAccessGuide) ...[
+              const SizedBox(height: 8),
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Android 可能不允许直接选择“下载”根目录、存储根目录或 Android/data。请先新建一个子文件夹，例如 Download/VaultSync，再选择该文件夹。',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  key: const ValueKey('open_file_access_settings_button'),
+                  onPressed: _openFileAccessSettings,
+                  icon: const Icon(Icons.folder_special_outlined),
+                  label: const Text('去授权文件访问权限'),
+                ),
+              ),
+            ],
+            if (_permissionStatusMessage != null) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _permissionStatusMessage!,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
                 ),
               ),
             ],

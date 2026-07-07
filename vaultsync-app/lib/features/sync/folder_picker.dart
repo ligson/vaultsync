@@ -9,6 +9,6 @@ class FileSelectorFolderPicker implements FolderPicker {
 
   @override
   Future<String?> chooseSyncFolder() {
-    return getDirectoryPath(confirmButtonText: '选择');
+    return getDirectoryPath(confirmButtonText: '选择此目录');
   }
 }

@@ -4,11 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	"github.com/ligson/vaultsync/internal/domain"
 )
 
-var ErrNotFound = errors.New("not found")
+var (
+	ErrNotFound       = errors.New("not found")
+	ErrDuplicateEmail = errors.New("duplicate email")
+)
 
 type AuthRepo struct {
 	db *sql.DB
@@ -24,9 +28,18 @@ func (r *AuthRepo) CreateUser(ctx context.Context, user domain.User) (domain.Use
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`, user.ID, user.Email, user.PasswordHash, user.Role, user.Status, user.QuotaBytes, user.UsedBytes, user.CreatedAt)
 	if err != nil {
+		if isDuplicateEmailError(err) {
+			return domain.User{}, ErrDuplicateEmail
+		}
 		return domain.User{}, err
 	}
 	return user, nil
+}
+
+func isDuplicateEmailError(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, "UNIQUE constraint failed") &&
+		strings.Contains(message, "users.email")
 }
 
 func (r *AuthRepo) FindUserByEmail(ctx context.Context, email string) (domain.User, error) {

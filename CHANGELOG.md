@@ -4,6 +4,8 @@
 
 ## 2026-07-07
 
+- 修复普通用户重复注册时后端返回 `500 internal server error` 的问题，改为统一 JSON envelope 返回中文提示“该邮箱已注册，请直接登录或更换邮箱”。
+- 发布并部署后端镜像 `ligson/vaultsync-be:20260707100101-2e5a606-dupemail` 到 nas-proxy，线上注册接口已验证重复邮箱返回可读中文错误。
 - 将完整 Flutter 客户端从功能工作区合并回主目录，恢复同步中心、目录绑定、本地清理策略、相册备份、退出登录、服务端备份浏览与删除等客户端能力。
 - 重新生成 Android release 签名 APK，release 默认后端地址保持为 `https://files.ligson.xyz`，并上传到 nas-proxy 的最新 Android 下载位置。
 - 修正前端 workspace 忽略规则，避免 `node_modules`、`tsconfig.tsbuildinfo` 和类型检查生成物污染提交。

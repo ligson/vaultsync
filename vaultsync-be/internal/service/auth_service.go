@@ -99,7 +99,14 @@ func (s *AuthService) registerWithRoleAndQuota(ctx context.Context, email, passw
 		UsedBytes:    0,
 		CreatedAt:    s.now().Format(time.RFC3339),
 	}
-	return s.repo.CreateUser(ctx, user)
+	created, err := s.repo.CreateUser(ctx, user)
+	if err != nil {
+		if err == store.ErrDuplicateEmail {
+			return domain.User{}, InvalidRequest("该邮箱已注册，请直接登录或更换邮箱")
+		}
+		return domain.User{}, err
+	}
+	return created, nil
 }
 
 func (s *AuthService) ResetPassword(ctx context.Context, userID, password string) error {

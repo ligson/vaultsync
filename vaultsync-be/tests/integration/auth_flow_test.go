@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -22,6 +23,30 @@ func TestRegisterAndLogin(t *testing.T) {
 	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/auth/login", loginBody, "")
 	testutil.AssertStatus(t, resp, http.StatusOK)
 	testutil.AssertJSONContains(t, resp, `"token":"`)
+}
+
+func TestRegisterDuplicateEmailReturnsReadableError(t *testing.T) {
+	app := testutil.NewTestServer(t)
+
+	registerBody := `{"email":"alice@example.com","password":"passw0rd!"}`
+	resp := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/auth/register", registerBody, "")
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/auth/register", registerBody, "")
+	testutil.AssertStatus(t, resp, http.StatusBadRequest)
+	payload := testutil.DecodeJSONEnvelope(t, resp)
+	if payload.Message != "该邮箱已注册，请直接登录或更换邮箱" {
+		t.Fatalf("expected readable duplicate email message, got %q", payload.Message)
+	}
+	var data struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(payload.Data, &data); err != nil {
+		t.Fatalf("decode error data: %v", err)
+	}
+	if data.Code != "invalid_request" {
+		t.Fatalf("expected invalid_request code, got %q", data.Code)
+	}
 }
 
 func TestProtectedRoutesReturnJSONUnauthorized(t *testing.T) {

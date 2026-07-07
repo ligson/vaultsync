@@ -3919,6 +3919,8 @@ class _CreateSyncRootDialog extends StatefulWidget {
 }
 
 class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
+  static const _androidDownloadsPath = '/storage/emulated/0/Download';
+
   final _formKey = GlobalKey<FormState>();
   final _localPathController = TextEditingController();
   final _encryptedPathController = TextEditingController();
@@ -3952,6 +3954,10 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
       return;
     }
     final selectedPath = localPath;
+    _setSelectedLocalPath(selectedPath);
+  }
+
+  void _setSelectedLocalPath(String selectedPath) {
     setState(() {
       _folderErrorMessage = null;
       _permissionStatusMessage = null;
@@ -3959,6 +3965,13 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
       _encryptedPathController.text = widget.pathProtector.protectLocalPath(
         selectedPath,
       );
+    });
+  }
+
+  void _useAndroidDownloadsPath() {
+    _setSelectedLocalPath(_androidDownloadsPath);
+    setState(() {
+      _permissionStatusMessage = '已使用系统下载目录路径。请确认已授予文件访问权限，否则扫描时可能无法读取该目录。';
     });
   }
 
@@ -4041,6 +4054,16 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
                   onPressed: _openFileAccessSettings,
                   icon: const Icon(Icons.folder_special_outlined),
                   label: const Text('去授权文件访问权限'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  key: const ValueKey('use_downloads_path_button'),
+                  onPressed: _useAndroidDownloadsPath,
+                  icon: const Icon(Icons.download_outlined),
+                  label: const Text('使用下载目录路径'),
                 ),
               ),
             ],

@@ -1006,6 +1006,49 @@ void main() {
     },
   );
 
+  testWidgets(
+    'android sync root dialog can use downloads path without tree picker',
+    (tester) async {
+      final syncRoots = FakeSyncRootGateway(const []);
+      final mappings = FakeSyncRootMappingStore();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SyncHomeScreen(
+            storage: FakeSessionStore(
+              token: 'server-token',
+              deviceId: 'device-1',
+            ),
+            syncRootMappings: mappings,
+            uploadTasks: FakeUploadTaskStore(),
+            syncRoots: syncRoots,
+            folderPicker: FakeFolderPicker(null),
+            pathProtector: const FakePathProtector(),
+            devicePlatform: 'android',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('add_sync_root_button')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('use_downloads_path_button')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('/storage/emulated/0/Download'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('save_sync_root_button')));
+      await tester.pumpAndSettle();
+
+      expect(
+        syncRoots.createdEncryptedPath,
+        'protected:/storage/emulated/0/Download',
+      );
+      expect(mappings.saved.single.localPath, '/storage/emulated/0/Download');
+    },
+  );
+
   testWidgets('sync home scans local mapped files', (tester) async {
     final scanner = FakeLocalSyncScanner([
       LocalSyncFile(

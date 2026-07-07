@@ -1,12 +1,19 @@
 package store
 
-import "database/sql"
+import (
+	"database/sql"
+	"fmt"
+)
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    status TEXT NOT NULL DEFAULT 'active',
+    quota_bytes INTEGER NOT NULL DEFAULT 107374182400,
+    used_bytes INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 
@@ -115,9 +122,70 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     created_at TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
+
+CREATE TABLE IF NOT EXISTS system_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS download_releases (
+    platform TEXT PRIMARY KEY,
+    file_name TEXT NOT NULL,
+    version TEXT NOT NULL,
+    download_url TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
 `
 
 func migrate(db *sql.DB) error {
-	_, err := db.Exec(schemaSQL)
+	if _, err := db.Exec(schemaSQL); err != nil {
+		return err
+	}
+	for _, column := range []struct {
+		name string
+		def  string
+	}{
+		{name: "role", def: "TEXT NOT NULL DEFAULT 'user'"},
+		{name: "status", def: "TEXT NOT NULL DEFAULT 'active'"},
+		{name: "quota_bytes", def: "INTEGER NOT NULL DEFAULT 107374182400"},
+		{name: "used_bytes", def: "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := ensureColumn(db, "users", column.name, column.def); err != nil {
+			return err
+		}
+	}
+	if err := ensureColumn(db, "download_releases", "size_bytes", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureColumn(db *sql.DB, table, name, definition string) error {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var columnName, columnType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if columnName == name {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	_, err = db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, name, definition))
 	return err
 }

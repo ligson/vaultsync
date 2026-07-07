@@ -1,0 +1,29 @@
+# VaultSync Docker 部署配置示例
+# 使用方式：
+# 1. 复制本文件为 config.yaml。
+# 2. 修改 app.security.token_secret。
+# 3. docker-compose.yml 会把当前目录的 config.yaml 挂载到容器内 /app/config.yaml。
+
+app:
+  server:
+    # 容器内监听地址，通常保持 ":8080"。
+    http_addr: ":8080"
+
+  storage:
+    # 容器内数据目录，对应 docker-compose.yml 中的 ./data:/data。
+    data_dir: "/data"
+
+    # SQLite 数据库文件路径。通常放在同一个数据卷里。
+    database_path: "/data/vaultsync.db"
+
+  security:
+    # 必须改成随机长字符串，不要使用示例值。
+    token_secret: "change-me-please"
+
+  admin:
+    # 是否允许通过管理后台注册管理员账号。
+    # 初次部署可设为 true，创建管理员后建议改为 false。
+    registration_enabled: true
+
+    # 新用户默认存储限额，单位字节。示例为 100GB。
+    default_user_quota_bytes: 107374182400

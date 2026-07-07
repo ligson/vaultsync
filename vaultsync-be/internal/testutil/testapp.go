@@ -20,12 +20,18 @@ func NewTestServer(t *testing.T) *httptest.Server {
 func NewTestAppAndServer(t *testing.T) (*app.App, *httptest.Server) {
 	t.Helper()
 	dataDir := t.TempDir()
-	instance, err := app.New(config.Config{
-		HTTPAddr:     "127.0.0.1:0",
-		DataDir:      dataDir,
-		DatabasePath: filepath.Join(dataDir, "vaultsync.db"),
-		TokenSecret:  "test-secret",
+	return NewTestAppAndServerWithConfig(t, config.Config{
+		HTTPAddr:                 "127.0.0.1:0",
+		DataDir:                  dataDir,
+		DatabasePath:             filepath.Join(dataDir, "vaultsync.db"),
+		TokenSecret:              "test-secret",
+		AdminRegistrationEnabled: true,
 	})
+}
+
+func NewTestAppAndServerWithConfig(t *testing.T, cfg config.Config) (*app.App, *httptest.Server) {
+	t.Helper()
+	instance, err := app.New(cfg)
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}

@@ -1,0 +1,36 @@
+# VaultSync 后端配置示例
+# 使用方式：
+# 1. 复制本文件为 config.yaml。
+# 2. 按你的 NAS 实际目录修改 app.storage.data_dir 和 app.storage.database_path。
+# 3. 不要提交 config.yaml，仓库只提交 config.example.yaml。
+
+app:
+  server:
+    # 后端 HTTP 监听地址。
+    # 单机本地开发可使用 ":8080"。
+    # 如果只允许本机访问，可改为 "127.0.0.1:8080"。
+    http_addr: ":8080"
+
+  storage:
+    # 服务器端文件存储根目录。
+    # 上传中的临时分片会保存到 uploads/{user_id}/。
+    # 上传完成的密文对象会保存到 objects/{user_id}/。
+    # NAS 部署时建议改成挂载卷目录，例如 "/data" 或 "/volume1/vaultsync/data"。
+    data_dir: "./data"
+
+    # SQLite 数据库文件路径。
+    # 如果不填写，程序默认使用 "{data_dir}/vaultsync.db"。
+    database_path: "./data/vaultsync.db"
+
+  security:
+    # Token 签名密钥。必须修改为足够长、随机、不可泄露的字符串。
+    # 生产或家庭 NAS 长期使用时，不要使用示例值。
+    token_secret: "change-me-please"
+
+  admin:
+    # 是否允许通过管理后台注册管理员账号。
+    # 初次部署可设为 true，创建管理员后建议改为 false。
+    registration_enabled: true
+
+    # 新用户默认存储限额，单位字节。示例为 100GB。
+    default_user_quota_bytes: 107374182400

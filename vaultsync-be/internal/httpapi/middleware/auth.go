@@ -29,6 +29,10 @@ type TokenVerifier interface {
 	VerifyToken(value string) (token.Claims, error)
 }
 
+type AdminAuthorizer interface {
+	EnsureAdmin(ctx context.Context, userID string) error
+}
+
 func Auth(tokenVerifier TokenVerifier, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := r.Header.Get("Authorization")
@@ -45,6 +49,19 @@ func Auth(tokenVerifier TokenVerifier, next http.Handler) http.Handler {
 		}
 
 		next.ServeHTTP(w, r.WithContext(WithUserID(r.Context(), claims.UserID)))
+	})
+}
+
+func AdminOnly(authorizer AdminAuthorizer, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userID := MustUserID(r.Context())
+		if err := authorizer.EnsureAdmin(r.Context(), userID); err != nil {
+			response.Write(w, http.StatusForbidden, "没有管理员权限", map[string]any{
+				"code": "forbidden",
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

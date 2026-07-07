@@ -1,2 +1,12 @@
 .worktrees/
 bin/
+.DS_Store
+docs/private/
+vaultsync-fe/node_modules/
+vaultsync-fe/apps/*/node_modules/
+vaultsync-fe/packages/*/node_modules/
+vaultsync-fe/dist/
+vaultsync-fe/apps/*/tsconfig.tsbuildinfo
+vaultsync-fe/packages/*/tsconfig.tsbuildinfo
+vaultsync-be/config.yaml
+vaultsync-be/docker/config.yaml

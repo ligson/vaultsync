@@ -1,0 +1,25 @@
+{
+  "name": "vaultsync-fe",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:portal": "npm --workspace @vaultsync/portal run dev",
+    "dev:admin": "npm --workspace @vaultsync/admin run dev",
+    "build": "npm run build:portal && npm run build:admin",
+    "build:portal": "npm --workspace @vaultsync/portal run build",
+    "build:admin": "npm --workspace @vaultsync/admin run build",
+    "preview:portal": "npm --workspace @vaultsync/portal run preview",
+    "preview:admin": "npm --workspace @vaultsync/admin run preview"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.0",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.0",
+    "vue-tsc": "^3.0.1"
+  }
+}

@@ -2,6 +2,46 @@
 
 所有有意义的项目变更都应记录在这里。
 
+## 2026-07-07
+
+- 将完整 Flutter 客户端从功能工作区合并回主目录，恢复同步中心、目录绑定、本地清理策略、相册备份、退出登录、服务端备份浏览与删除等客户端能力。
+- 重新生成 Android release 签名 APK，release 默认后端地址保持为 `https://files.ligson.xyz`，并上传到 nas-proxy 的最新 Android 下载位置。
+- 修正前端 workspace 忽略规则，避免 `node_modules`、`tsconfig.tsbuildinfo` 和类型检查生成物污染提交。
+
+## 2026-07-06
+
+- 同步 nas-proxy 真实后端配置，补齐 `app.admin` 配置段，并沉淀“配置结构变更必须同步远程 config.yaml”的私有部署规则。
+- 生成 Android release 签名 APK，并将后端与前端镜像发布部署到 nas-proxy；官网、管理后台、健康检查和 Android 下载链接已完成线上验证。
+- 下载管理补齐安装包文件大小、平台文件类型校验、上传进度、复制下载链接和删除旧包能力；后端同步新增大小字段与删除接口。
+- 修复管理后台注册/登录表单缺少字段绑定导致点击提交无反馈的问题，并补充中文校验提示。
+- 修复管理后台概览接口空审计事件返回 `null` 导致首页渲染失败的问题，统一空列表为 `[]` 并补充前端兜底。
+- 管理后台拆分“用户管理”和“配额管理”：用户管理支持新增用户、锁定/启用登录、重置密码；配额管理专注查看已用空间与调整限额。
+- 后端新增管理员创建普通用户与重置用户密码接口，并保持统一 JSON envelope。
+- 修复管理后台顶部栏压住页面标题的布局问题，调整为稳定的侧边栏、顶部栏和内容区结构。
+- 优化管理后台顶部栏标题排版，覆盖 Ant Design Header 默认行高导致的文字上下错位问题。
+- 管理后台右上角操作区改为统一工具栏样式，并复用客户端 VaultSync 应用图标作为官网与后台品牌标识。
+- 官网和管理后台新增统一的 `shortcut icon`、`favicon` 与 Apple touch icon，全部使用 VaultSync 应用图标。
+- 管理后台新增“系统状态”页面，展示后端状态、监听地址、数据目录、数据库、下载目录和容量占用。
+- 管理后台新增“审计日志”页面，展示管理员创建用户、重置密码、更新配置、上传安装包等关键操作记录。
+- 后端新增管理员审计日志列表和系统状态接口，并在关键管理员操作成功后写入审计日志。
+- 管理后台右上角显示真实管理员邮箱，支持修改当前管理员密码并在成功后重新登录。
+- 前端 API 错误新增 HTTP 状态信息，管理后台遇到 401/403 会清理 token、提示登录过期并跳转登录页。
+- 下载管理新增真实安装包上传能力，上传后保存到后端下载目录、更新 latest 元数据，并通过 `/downloads/` 公开下载。
+- 新增后端公开健康检查接口 `GET /api/v1/health`，返回统一 JSON envelope，便于部署后验证服务与反向代理链路。
+- Flutter 客户端 release 构建默认后端地址改为 `https://files.ligson.xyz`，调试构建仍默认使用 `http://127.0.0.1:8080`，显式配置继续最高优先级，并将统一配置接入应用入口与登录页。
+- 新增 `docs/private/` 忽略规则，用于保存本地私有部署记录；私有服务器信息和真实部署配置不得提交。
+- 完成一次单机 NAS 部署验证：后端使用 Docker Compose 单容器运行，nginx 通过域名转发到后端健康检查接口。
+- 后端部署方式切换为镜像仓库模式，镜像发布到 `ligson/vaultsync-be`，NAS Compose 直接使用远程镜像，不再在部署目录保留源码或 runtime 构建目录。
+- 新增后端镜像发布规范、`docker/release.Dockerfile` 与 Makefile 发布目标，固定 `linux/amd64` 镜像构建和推送流程。
+- 初始化 `vaultsync-fe` 前端源码工程，包含官网首页 `portal`、管理后台 `admin`、共享 API client、共享主题包和前端容器 nginx 配置。
+- 新增管理后台真实 API：管理员注册/登录、管理员鉴权、概览、用户、系统配置和下载列表接口；后台页面接入真实接口并增加登录/注册页。
+- 补齐管理后台写接口：支持修改用户状态和限额、保存系统配置、更新各平台最新下载信息；前端按钮已接入对应 API。
+- 后端配置改为 `config.yaml` 文件方式，支持 `-config` 指定配置路径，不再要求用户通过环境变量配置服务端口和存储路径。
+- 后端配置文件新增 `app` 根节点，配置按 `app.server`、`app.storage`、`app.security` 分类，避免顶层配置项持续膨胀。
+- 新增 `vaultsync-be/config.example.yaml` 与 `vaultsync-be/docker/config.example.yaml`，示例配置包含中文注释；真实 `config.yaml` 已加入忽略规则。
+- 明确后端默认存储规则：`app.storage.data_dir` 默认 `./data`，`app.storage.database_path` 默认 `{app.storage.data_dir}/vaultsync.db`，`app.security.token_secret` 必须显式填写。
+- 更新 README、Docker Compose、Makefile 和后端配置规范文档，统一说明配置文件启动方式。
+
 ## 2026-06-26
 
 - 重构仓库目录：后端代码迁移到 `vaultsync-be/`，预留 `vaultsync-app/` 和 `vaultsync-fe/`，并同步更新根 README、规则和后端入口文件。

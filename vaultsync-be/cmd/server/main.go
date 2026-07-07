@@ -3,13 +3,14 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/ligson/vaultsync/internal/app"
 	"github.com/ligson/vaultsync/internal/config"
 )
 
 func main() {
-	cfg, err := config.Load()
+	cfg, err := config.LoadFromArgs(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)
 	}

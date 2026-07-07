@@ -8,6 +8,7 @@ import (
 const (
 	CodeInvalidRequest = "invalid_request"
 	CodeUnauthorized   = "unauthorized"
+	CodeForbidden      = "forbidden"
 	CodeNotFound       = "not_found"
 	CodeInternal       = "internal_error"
 )
@@ -28,6 +29,10 @@ func InvalidRequest(message string) error {
 
 func Unauthorized(message string) error {
 	return AppError{Code: CodeUnauthorized, Message: message, Status: http.StatusUnauthorized}
+}
+
+func Forbidden(message string) error {
+	return AppError{Code: CodeForbidden, Message: message, Status: http.StatusForbidden}
 }
 
 func NotFound(message string) error {

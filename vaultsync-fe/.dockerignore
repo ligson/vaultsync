@@ -1,0 +1,8 @@
+node_modules
+dist
+apps/*/node_modules
+apps/*/dist
+packages/*/node_modules
+packages/*/dist
+apps/*/tsconfig.tsbuildinfo
+npm-debug.log*

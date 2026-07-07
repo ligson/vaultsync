@@ -4,6 +4,10 @@ CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    status TEXT NOT NULL DEFAULT 'active',
+    quota_bytes INTEGER NOT NULL DEFAULT 107374182400,
+    used_bytes INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 
@@ -84,4 +88,19 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     details_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS system_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS download_releases (
+    platform TEXT PRIMARY KEY,
+    file_name TEXT NOT NULL,
+    version TEXT NOT NULL,
+    download_url TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
 );

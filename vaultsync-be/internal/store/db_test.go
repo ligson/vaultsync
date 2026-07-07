@@ -25,16 +25,18 @@ func TestOpenRunsMigrationsAndEnablesWAL(t *testing.T) {
 	}
 
 	wantColumns := map[string][]string{
-		"users":           {"id", "email", "password_hash", "created_at"},
-		"sessions":        {"token_id", "user_id", "device_id", "created_at", "expires_at"},
-		"devices":         {"id", "user_id", "name", "platform", "created_at"},
-		"sync_roots":      {"id", "user_id", "device_id", "encrypted_path", "cleanup_policy", "archive_path", "created_at"},
-		"upload_sessions": {"id", "user_id", "device_id", "sync_root_id", "object_id", "version_id", "total_size", "chunk_size", "received_size", "status", "metadata_json", "created_at"},
-		"file_versions":   {"id", "user_id", "sync_root_id", "object_id", "encrypted_name", "content_path", "content_hash", "size_bytes", "metadata_json", "created_at"},
-		"file_tombstones": {"id", "user_id", "device_id", "sync_root_id", "object_id", "metadata_json", "created_at"},
-		"sync_events":     {"id", "user_id", "change_type", "version_id", "tombstone_id", "sync_root_id", "object_id", "created_at"},
-		"sync_cursors":    {"user_id", "device_id", "cursor_value", "version_id", "created_at"},
-		"audit_logs":      {"id", "user_id", "action", "details_json", "created_at"},
+		"users":             {"id", "email", "password_hash", "role", "status", "quota_bytes", "used_bytes", "created_at"},
+		"sessions":          {"token_id", "user_id", "device_id", "created_at", "expires_at"},
+		"devices":           {"id", "user_id", "name", "platform", "created_at"},
+		"sync_roots":        {"id", "user_id", "device_id", "encrypted_path", "cleanup_policy", "archive_path", "created_at"},
+		"upload_sessions":   {"id", "user_id", "device_id", "sync_root_id", "object_id", "version_id", "total_size", "chunk_size", "received_size", "status", "metadata_json", "created_at"},
+		"file_versions":     {"id", "user_id", "sync_root_id", "object_id", "encrypted_name", "content_path", "content_hash", "size_bytes", "metadata_json", "created_at"},
+		"file_tombstones":   {"id", "user_id", "device_id", "sync_root_id", "object_id", "metadata_json", "created_at"},
+		"sync_events":       {"id", "user_id", "change_type", "version_id", "tombstone_id", "sync_root_id", "object_id", "created_at"},
+		"sync_cursors":      {"user_id", "device_id", "cursor_value", "version_id", "created_at"},
+		"audit_logs":        {"id", "user_id", "action", "details_json", "created_at"},
+		"system_settings":   {"key", "value", "updated_at"},
+		"download_releases": {"platform", "file_name", "version", "download_url", "size_bytes", "updated_at"},
 	}
 
 	for table, columns := range wantColumns {

@@ -1,14 +1,11 @@
 services:
-  vaultsync:
-    build:
-      context: ../..
-      dockerfile: vaultsync-be/docker/Dockerfile
+  vaultsync-be:
+    image: ligson/vaultsync-be:latest
+    container_name: vaultsync-be
+    restart: always
     ports:
-      - "8080:8080"
-    environment:
-      VAULTSYNC_HTTP_ADDR: ":8080"
-      VAULTSYNC_DATA_DIR: /data
-      VAULTSYNC_DATABASE_PATH: /data/vaultsync.db
-      VAULTSYNC_TOKEN_SECRET: change-me
+      - "127.0.0.1:18080:8080"
+    command: ["-config", "/app/config.yaml"]
     volumes:
+      - ./config.yaml:/app/config.yaml:ro
       - ./data:/data

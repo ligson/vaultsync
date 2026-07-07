@@ -3,6 +3,7 @@ package app
 import (
 	"database/sql"
 	"net/http"
+	"path/filepath"
 
 	"github.com/ligson/vaultsync/internal/config"
 	"github.com/ligson/vaultsync/internal/httpapi"
@@ -22,6 +23,7 @@ type App struct {
 	changeService   *service.ChangeService
 	downloadService *service.DownloadService
 	deleteService   *service.DeleteService
+	adminService    *service.AdminService
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -31,20 +33,27 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	authRepo := store.NewAuthRepo(db)
+	adminRepo := store.NewAdminRepo(db)
 	deviceRepo := store.NewDeviceRepo(db)
 	syncRootRepo := store.NewSyncRootRepo(db)
 	objectRepo := store.NewObjectRepo(db)
 	fsStorage := storage.NewFSStorage(cfg.DataDir)
+	adminService := service.NewAdminService(adminRepo, cfg.AdminRegistrationEnabled, cfg.DefaultUserQuotaBytes, cfg.DataDir)
+	adminService.SetRuntimePaths(cfg.HTTPAddr, cfg.DatabasePath)
 	return &App{
-		Config:          cfg,
-		db:              db,
-		authService:     service.NewAuthService(authRepo, cfg.TokenSecret),
+		Config: cfg,
+		db:     db,
+		authService: service.NewAuthService(authRepo, cfg.TokenSecret, service.AuthOptions{
+			AdminRegistrationEnabled: cfg.AdminRegistrationEnabled,
+			DefaultUserQuotaBytes:    cfg.DefaultUserQuotaBytes,
+		}),
 		deviceService:   service.NewDeviceService(deviceRepo),
 		syncRootService: service.NewSyncRootService(syncRootRepo, deviceRepo),
 		uploadService:   service.NewUploadService(objectRepo, deviceRepo, syncRootRepo, fsStorage),
 		changeService:   service.NewChangeService(db, deviceRepo, cfg.DataDir),
 		downloadService: service.NewDownloadService(db, cfg.DataDir),
 		deleteService:   service.NewDeleteService(db, deviceRepo, syncRootRepo),
+		adminService:    adminService,
 	}, nil
 }
 
@@ -57,7 +66,10 @@ func (a *App) Dependencies() httpapi.Dependencies {
 		ChangeHandler:   handlers.NewChangeHandler(a.changeService),
 		DownloadHandler: handlers.NewDownloadHandler(a.downloadService),
 		DeleteHandler:   handlers.NewDeleteHandler(a.deleteService),
+		AdminHandler:    handlers.NewAdminHandler(a.authService, a.adminService),
 		AuthService:     a.authService,
+		AdminService:    a.adminService,
+		DownloadDir:     filepath.Join(a.Config.DataDir, "downloads"),
 	}
 }
 

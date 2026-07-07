@@ -120,6 +120,59 @@ void main() {
     expect(syncRoots.token, isNull);
   });
 
+  testWidgets('login screen shows device registration failure step', (
+    tester,
+  ) async {
+    final auth = FakeAuthGateway(
+      result: const AuthSession(
+        token: 'server-token',
+        tokenId: 'token-1',
+        userId: 'user-1',
+        expiresAt: '2026-06-28T00:00:00Z',
+      ),
+    );
+    final devices = FakeDeviceGateway(errorMessage: 'network failed');
+    final storage = FakeSessionStore();
+    final uploadKeys = FakeUploadKeyStore();
+    final syncRootMappings = FakeSyncRootMappingStore();
+    final uploadTasks = FakeUploadTaskStore();
+    final syncRoots = FakeSyncRootGateway(const []);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LoginScreen(
+          auth: auth,
+          devices: devices,
+          storage: storage,
+          syncRootMappings: syncRootMappings,
+          uploadTasks: uploadTasks,
+          uploadKeys: uploadKeys,
+          deviceProfile: const DeviceProfile(
+            name: 'Alice iPhone',
+            platform: 'ios',
+          ),
+          syncRoots: syncRoots,
+        ),
+      ),
+    );
+
+    await tester.enterText(
+      find.byKey(const ValueKey('login_email_field')),
+      'alice@example.com',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('login_password_field')),
+      'passw0rd!',
+    );
+    await tester.tap(find.byKey(const ValueKey('login_submit_button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('登录已成功，但注册当前设备失败：操作失败，请稍后重试'), findsOneWidget);
+    expect(storage.savedSession, isNull);
+    expect(uploadKeys.email, isNull);
+    expect(find.text('同步主页'), findsNothing);
+  });
+
   testWidgets('login screen keeps server settings in dialog', (tester) async {
     final auth = FakeAuthGateway();
     final devices = FakeDeviceGateway();
@@ -345,9 +398,12 @@ class FakeAuthGateway implements AuthGateway {
 }
 
 class FakeDeviceGateway implements DeviceGateway {
+  final String? errorMessage;
   String? token;
   String? name;
   String? platform;
+
+  FakeDeviceGateway({this.errorMessage});
 
   @override
   Future<RegisteredDevice> registerDevice({
@@ -358,6 +414,14 @@ class FakeDeviceGateway implements DeviceGateway {
     this.token = token;
     this.name = name;
     this.platform = platform;
+    final message = errorMessage;
+    if (message != null) {
+      throw ApiException(
+        statusCode: 0,
+        code: 'connection_failed',
+        message: message,
+      );
+    }
     return const RegisteredDevice(
       id: 'device-1',
       userId: 'user-1',

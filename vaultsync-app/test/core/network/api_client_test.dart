@@ -219,6 +219,29 @@ void main() {
     );
   });
 
+  test('post throws readable connection failure', () async {
+    final client = ApiClient(
+      baseUrl: Uri.parse('http://127.0.0.1:8080'),
+      httpClient: MockClient((request) async {
+        throw http.ClientException('connection refused');
+      }),
+    );
+
+    expect(
+      () => client.post('/api/v1/auth/login', body: const {}),
+      throwsA(
+        isA<ApiException>()
+            .having((e) => e.statusCode, 'statusCode', 0)
+            .having((e) => e.code, 'code', 'connection_failed')
+            .having(
+              (e) => e.message,
+              'message',
+              '无法连接后端服务，请确认 VaultSync 后端已启动，或检查后端地址是否正确',
+            ),
+      ),
+    );
+  });
+
   test('get throws readable ApiException for non-json response body', () async {
     final client = ApiClient(
       baseUrl: Uri.parse('http://127.0.0.1:8080'),

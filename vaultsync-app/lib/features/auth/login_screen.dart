@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../../core/device/device_profile.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/storage/app_storage.dart';
+import '../device/device_models.dart';
 import 'auth_service.dart';
+import 'auth_models.dart';
 import '../device/device_service.dart';
 import '../media_backup/media_backup_gateway.dart';
 import '../sync/local_upload_executor.dart';
@@ -216,18 +218,36 @@ class _LoginScreenState extends State<LoginScreen> {
     required String email,
     required String password,
   }) async {
-    final session = await widget.auth.login(email, password);
-    final device = await widget.devices.registerDevice(
-      token: session.token,
-      name: widget.deviceProfile.name,
-      platform: widget.deviceProfile.platform,
-    );
-    await widget.uploadKeys.deriveAndSaveUploadKeys(
-      email: email,
-      password: password,
-    );
-    await widget.storage.saveAuthSession(session);
-    await widget.storage.saveDevice(device);
+    final AuthSession session;
+    try {
+      session = await widget.auth.login(email, password);
+    } catch (_) {
+      rethrow;
+    }
+    final RegisteredDevice device;
+    try {
+      device = await widget.devices.registerDevice(
+        token: session.token,
+        name: widget.deviceProfile.name,
+        platform: widget.deviceProfile.platform,
+      );
+    } catch (error) {
+      throw Exception('登录已成功，但注册当前设备失败：${userReadableErrorMessage(error)}');
+    }
+    try {
+      await widget.uploadKeys.deriveAndSaveUploadKeys(
+        email: email,
+        password: password,
+      );
+    } catch (error) {
+      throw Exception('登录已成功，但生成本地加密密钥失败：${userReadableErrorMessage(error)}');
+    }
+    try {
+      await widget.storage.saveAuthSession(session);
+      await widget.storage.saveDevice(device);
+    } catch (error) {
+      throw Exception('登录已成功，但保存本地登录状态失败：${userReadableErrorMessage(error)}');
+    }
     if (!mounted) {
       return;
     }

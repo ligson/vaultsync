@@ -44,9 +44,11 @@ class ApiClient {
     return _withTokenRefresh(
       token: token,
       send: (requestToken) async {
-        final response = await httpClient.get(
-          _resolve(path),
-          headers: _headers(token: requestToken),
+        final response = await _send(
+          () => httpClient.get(
+            _resolve(path),
+            headers: _headers(token: requestToken),
+          ),
         );
         return _decodeEnvelope(response);
       },
@@ -61,10 +63,12 @@ class ApiClient {
     return _withTokenRefresh(
       token: token,
       send: (requestToken) async {
-        final response = await httpClient.post(
-          _resolve(path),
-          headers: _headers(token: requestToken),
-          body: jsonEncode(body),
+        final response = await _send(
+          () => httpClient.post(
+            _resolve(path),
+            headers: _headers(token: requestToken),
+            body: jsonEncode(body),
+          ),
         );
         return _decodeEnvelope(response);
       },
@@ -79,10 +83,12 @@ class ApiClient {
     return _withTokenRefresh(
       token: token,
       send: (requestToken) async {
-        final response = await httpClient.patch(
-          _resolve(path),
-          headers: _headers(token: requestToken),
-          body: jsonEncode(body),
+        final response = await _send(
+          () => httpClient.patch(
+            _resolve(path),
+            headers: _headers(token: requestToken),
+            body: jsonEncode(body),
+          ),
         );
         return _decodeEnvelope(response);
       },
@@ -93,9 +99,11 @@ class ApiClient {
     return _withTokenRefresh(
       token: token,
       send: (requestToken) async {
-        final response = await httpClient.delete(
-          _resolve(path),
-          headers: _headers(token: requestToken),
+        final response = await _send(
+          () => httpClient.delete(
+            _resolve(path),
+            headers: _headers(token: requestToken),
+          ),
         );
         return _decodeEnvelope(response);
       },
@@ -110,10 +118,12 @@ class ApiClient {
     return _withTokenRefresh<void>(
       token: token,
       send: (requestToken) async {
-        final response = await httpClient.put(
-          _resolve(path),
-          headers: _binaryHeaders(token: requestToken),
-          body: bytes,
+        final response = await _send(
+          () => httpClient.put(
+            _resolve(path),
+            headers: _binaryHeaders(token: requestToken),
+            body: bytes,
+          ),
         );
         if (response.statusCode >= 200 && response.statusCode < 300) {
           return;
@@ -127,9 +137,11 @@ class ApiClient {
     return _withTokenRefresh(
       token: token,
       send: (requestToken) async {
-        final response = await httpClient.get(
-          _resolve(path),
-          headers: _downloadHeaders(token: requestToken),
+        final response = await _send(
+          () => httpClient.get(
+            _resolve(path),
+            headers: _downloadHeaders(token: requestToken),
+          ),
         );
         if (response.statusCode >= 200 && response.statusCode < 300) {
           return response.bodyBytes;
@@ -170,6 +182,20 @@ class ApiClient {
       headers['authorization'] = 'Bearer $token';
     }
     return headers;
+  }
+
+  Future<http.Response> _send(Future<http.Response> Function() request) async {
+    try {
+      return await request();
+    } on ApiException {
+      rethrow;
+    } catch (_) {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'connection_failed',
+        message: '无法连接后端服务，请确认 VaultSync 后端已启动，或检查后端地址是否正确',
+      );
+    }
   }
 
   Future<T> _withTokenRefresh<T>({

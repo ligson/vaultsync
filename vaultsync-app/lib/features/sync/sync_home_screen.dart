@@ -3928,6 +3928,12 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
   String? _folderErrorMessage;
   String? _permissionStatusMessage;
 
+  bool get _isDownloadsPathSelected =>
+      _localPathController.text.trim() == _androidDownloadsPath;
+
+  bool get _isCustomPathSelected =>
+      _localPathController.text.trim().isNotEmpty && !_isDownloadsPathSelected;
+
   @override
   void dispose() {
     _localPathController.dispose();
@@ -4000,116 +4006,72 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('新增同步目录'),
-      content: Form(
-        key: _formKey,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    key: const ValueKey('sync_root_local_path_field'),
-                    controller: _localPathController,
-                    readOnly: true,
-                    decoration: const InputDecoration(labelText: '本地目录'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: OutlinedButton(
-                    key: const ValueKey('choose_sync_folder_button'),
-                    onPressed: _chooseFolder,
-                    child: const Text('选择'),
+      content: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.showAndroidFileAccessGuide)
+                _buildAndroidLocalPathOptions(context)
+              else
+                _buildDesktopLocalPathPicker(),
+              if (_folderErrorMessage != null) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _folderErrorMessage!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
                   ),
                 ),
               ],
-            ),
-            if (_folderErrorMessage != null) ...[
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  _folderErrorMessage!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ),
-            ],
-            if (widget.showAndroidFileAccessGuide) ...[
-              const SizedBox(height: 8),
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Android 可能不允许直接选择“下载”根目录、存储根目录或 Android/data。请先新建一个子文件夹，例如 Download/VaultSync，再选择该文件夹。',
-                  style: TextStyle(fontSize: 12),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: OutlinedButton.icon(
-                  key: const ValueKey('open_file_access_settings_button'),
-                  onPressed: _openFileAccessSettings,
-                  icon: const Icon(Icons.folder_special_outlined),
-                  label: const Text('去授权文件访问权限'),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: OutlinedButton.icon(
-                  key: const ValueKey('use_downloads_path_button'),
-                  onPressed: _useAndroidDownloadsPath,
-                  icon: const Icon(Icons.download_outlined),
-                  label: const Text('使用下载目录路径'),
-                ),
-              ),
-            ],
-            if (_permissionStatusMessage != null) ...[
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  _permissionStatusMessage!,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.primary,
+              if (_permissionStatusMessage != null) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _permissionStatusMessage!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
                   ),
                 ),
+              ],
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const ValueKey('sync_root_encrypted_path_field'),
+                controller: _encryptedPathController,
+                decoration: const InputDecoration(labelText: '加密路径'),
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return '请输入加密路径';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                key: const ValueKey('sync_root_cleanup_policy_field'),
+                initialValue: _cleanupPolicy,
+                decoration: const InputDecoration(labelText: '清理策略'),
+                items: const [
+                  DropdownMenuItem(value: 'keep', child: Text('保留本地文件')),
+                  DropdownMenuItem(value: 'delete', child: Text('上传后删除本地文件')),
+                ],
+                onChanged: (value) {
+                  if (value == null) {
+                    return;
+                  }
+                  setState(() {
+                    _cleanupPolicy = value;
+                  });
+                },
               ),
             ],
-            const SizedBox(height: 12),
-            TextFormField(
-              key: const ValueKey('sync_root_encrypted_path_field'),
-              controller: _encryptedPathController,
-              decoration: const InputDecoration(labelText: '加密路径'),
-              validator: (value) {
-                if (value == null || value.trim().isEmpty) {
-                  return '请输入加密路径';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              key: const ValueKey('sync_root_cleanup_policy_field'),
-              initialValue: _cleanupPolicy,
-              decoration: const InputDecoration(labelText: '清理策略'),
-              items: const [
-                DropdownMenuItem(value: 'keep', child: Text('保留本地文件')),
-                DropdownMenuItem(value: 'delete', child: Text('上传后删除本地文件')),
-              ],
-              onChanged: (value) {
-                if (value == null) {
-                  return;
-                }
-                setState(() {
-                  _cleanupPolicy = value;
-                });
-              },
-            ),
-          ],
+          ),
         ),
       ),
       actions: [
@@ -4121,6 +4083,91 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
           key: const ValueKey('save_sync_root_button'),
           onPressed: _submit,
           child: const Text('保存'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDesktopLocalPathPicker() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: TextFormField(
+            key: const ValueKey('sync_root_local_path_field'),
+            controller: _localPathController,
+            readOnly: true,
+            decoration: const InputDecoration(labelText: '本地目录'),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: OutlinedButton(
+            key: const ValueKey('choose_sync_folder_button'),
+            onPressed: _chooseFolder,
+            child: const Text('选择'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAndroidLocalPathOptions(BuildContext context) {
+    final groupValue = _isDownloadsPathSelected
+        ? _androidDownloadsPath
+        : _isCustomPathSelected
+        ? 'custom'
+        : '';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Text('本地路径', style: Theme.of(context).textTheme.titleSmall),
+        ),
+        const SizedBox(height: 8),
+        RadioListTile<String>(
+          key: const ValueKey('use_downloads_path_button'),
+          value: _androidDownloadsPath,
+          groupValue: groupValue,
+          onChanged: (_) => _useAndroidDownloadsPath(),
+          contentPadding: EdgeInsets.zero,
+          title: const Text('同步“下载”文件夹'),
+          subtitle: const Text('路径：内部存储/Download'),
+        ),
+        RadioListTile<String>(
+          value: 'custom',
+          groupValue: groupValue,
+          onChanged: (_) => _chooseFolder(),
+          contentPadding: EdgeInsets.zero,
+          title: const Text('同步指定文件夹'),
+          subtitle: const Text('选择手机上的普通文件夹，“下载”根目录和特定系统文件夹除外'),
+        ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            key: const ValueKey('choose_sync_folder_button'),
+            onPressed: _chooseFolder,
+            icon: const Icon(Icons.folder_open_outlined),
+            label: const Text('选择指定文件夹'),
+          ),
+        ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            key: const ValueKey('open_file_access_settings_button'),
+            onPressed: _openFileAccessSettings,
+            icon: const Icon(Icons.folder_special_outlined),
+            label: const Text('授权文件访问权限'),
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextFormField(
+          key: const ValueKey('sync_root_local_path_field'),
+          controller: _localPathController,
+          readOnly: true,
+          decoration: const InputDecoration(labelText: '已选择路径'),
         ),
       ],
     );

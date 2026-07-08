@@ -939,6 +939,9 @@ void main() {
       );
       expect(find.text('归档路径'), findsNothing);
 
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('sync_root_cleanup_policy_field')),
+      );
       await tester.tap(
         find.byKey(const ValueKey('sync_root_cleanup_policy_field')),
       );
@@ -979,7 +982,10 @@ void main() {
 
       await tester.tap(find.byKey(const ValueKey('add_sync_root_button')));
       await tester.pumpAndSettle();
-      expect(find.textContaining('Download/VaultSync'), findsOneWidget);
+      expect(find.text('本地路径'), findsOneWidget);
+      expect(find.text('同步“下载”文件夹'), findsOneWidget);
+      expect(find.text('路径：内部存储/Download'), findsOneWidget);
+      expect(find.text('同步指定文件夹'), findsOneWidget);
 
       await tester.tap(
         find.byKey(const ValueKey('open_file_access_settings_button')),
@@ -1032,6 +1038,9 @@ void main() {
 
       await tester.tap(find.byKey(const ValueKey('add_sync_root_button')));
       await tester.pumpAndSettle();
+
+      expect(find.text('同步“下载”文件夹'), findsOneWidget);
+      expect(find.text('路径：内部存储/Download'), findsOneWidget);
 
       await tester.tap(find.byKey(const ValueKey('use_downloads_path_button')));
       await tester.pumpAndSettle();

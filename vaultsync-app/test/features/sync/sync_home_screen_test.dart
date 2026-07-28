@@ -217,6 +217,7 @@ void main() {
               albumScope: 'all',
               albumIds: const [],
               cleanupPolicy: 'keep',
+              encryptionEnabled: true,
               wifiOnly: true,
               autoBackupEnabled: true,
               createdAt: DateTime.utc(2026, 7, 3),

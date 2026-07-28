@@ -6,6 +6,7 @@ class LocalMediaBackupSource {
   final String albumScope;
   final List<String> albumIds;
   final String cleanupPolicy;
+  final bool encryptionEnabled;
   final bool wifiOnly;
   final bool autoBackupEnabled;
   final DateTime createdAt;
@@ -19,6 +20,7 @@ class LocalMediaBackupSource {
     required this.albumScope,
     required this.albumIds,
     required this.cleanupPolicy,
+    required this.encryptionEnabled,
     required this.wifiOnly,
     required this.autoBackupEnabled,
     required this.createdAt,
@@ -35,6 +37,7 @@ class LocalMediaBackupSource {
       albumIds: (json['album_ids'] as List<Object?>? ?? const [])
           .cast<String>(),
       cleanupPolicy: json['cleanup_policy'] as String,
+      encryptionEnabled: json['encryption_enabled'] as bool? ?? true,
       wifiOnly: json['wifi_only'] as bool? ?? true,
       autoBackupEnabled: json['auto_backup_enabled'] as bool? ?? true,
       createdAt: DateTime.parse(json['created_at'] as String),
@@ -51,6 +54,7 @@ class LocalMediaBackupSource {
       'album_scope': albumScope,
       'album_ids': albumIds,
       'cleanup_policy': cleanupPolicy,
+      'encryption_enabled': encryptionEnabled,
       'wifi_only': wifiOnly,
       'auto_backup_enabled': autoBackupEnabled,
       'created_at': createdAt.toIso8601String(),

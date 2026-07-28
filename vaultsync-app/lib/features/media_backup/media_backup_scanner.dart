@@ -51,6 +51,7 @@ class MediaBackupScanner {
           sourceType: 'media_asset',
           assetId: asset.id,
           assetMediaType: asset.mediaType,
+          encryptionEnabled: source.encryptionEnabled,
         ),
       );
     }

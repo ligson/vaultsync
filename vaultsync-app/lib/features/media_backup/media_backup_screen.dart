@@ -3,12 +3,14 @@ import 'package:flutter/material.dart';
 class MediaBackupDraft {
   final String mediaTypes;
   final String cleanupPolicy;
+  final bool encryptionEnabled;
   final bool wifiOnly;
   final bool autoBackupEnabled;
 
   const MediaBackupDraft({
     required this.mediaTypes,
     required this.cleanupPolicy,
+    required this.encryptionEnabled,
     required this.wifiOnly,
     required this.autoBackupEnabled,
   });
@@ -27,6 +29,7 @@ class _MediaBackupScreenState extends State<MediaBackupScreen> {
   String _mediaTypes = 'image_video';
   String _cleanupPolicy = 'keep';
   bool _deletePolicyConfirmed = false;
+  bool _encryptionEnabled = true;
   bool _wifiOnly = true;
   bool _autoBackupEnabled = true;
   bool _isSaving = false;
@@ -79,6 +82,13 @@ class _MediaBackupScreenState extends State<MediaBackupScreen> {
           ),
           const Divider(),
           SwitchListTile(
+            title: const Text('服务器端加密存储'),
+            subtitle: const Text('关闭后，服务器会按相册目录和文件名保存明文备份'),
+            value: _encryptionEnabled,
+            onChanged: (value) => setState(() => _encryptionEnabled = value),
+          ),
+          const Divider(),
+          SwitchListTile(
             title: const Text('仅 Wi-Fi 上传'),
             value: _wifiOnly,
             onChanged: (value) => setState(() => _wifiOnly = value),
@@ -120,7 +130,7 @@ class _MediaBackupScreenState extends State<MediaBackupScreen> {
       builder: (context) => AlertDialog(
         title: const Text('确认删除本地相册资源'),
         content: const Text(
-          '文件会先加密上传到服务器。服务器确认保存后，VaultSync 才会请求系统删除本地照片和视频。本地删除不等于删除服务器备份。',
+          '文件上传到服务器并校验保存后，VaultSync 才会请求系统删除本地照片和视频。本地删除不等于删除服务器备份。',
         ),
         actions: [
           TextButton(
@@ -150,6 +160,7 @@ class _MediaBackupScreenState extends State<MediaBackupScreen> {
       MediaBackupDraft(
         mediaTypes: _mediaTypes,
         cleanupPolicy: _cleanupPolicy,
+        encryptionEnabled: _encryptionEnabled,
         wifiOnly: _wifiOnly,
         autoBackupEnabled: _autoBackupEnabled,
       ),

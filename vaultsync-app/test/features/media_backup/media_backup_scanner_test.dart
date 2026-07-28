@@ -34,6 +34,7 @@ void main() {
         albumScope: 'all',
         albumIds: const [],
         cleanupPolicy: 'keep',
+        encryptionEnabled: false,
         wifiOnly: true,
         autoBackupEnabled: true,
         createdAt: DateTime.utc(2026, 7, 3, 8),
@@ -46,6 +47,7 @@ void main() {
     expect(store.tasks.single.sourceType, 'media_asset');
     expect(store.tasks.single.assetId, 'asset-1');
     expect(store.tasks.single.relativePath, '相机胶卷/2026/07/IMG_0001.JPG');
+    expect(store.tasks.single.encryptionEnabled, isFalse);
   });
 }
 

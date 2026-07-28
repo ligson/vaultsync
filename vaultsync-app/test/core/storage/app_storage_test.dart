@@ -191,6 +191,7 @@ void main() {
         albumScope: 'all',
         albumIds: const [],
         cleanupPolicy: 'delete',
+        encryptionEnabled: false,
         wifiOnly: true,
         autoBackupEnabled: true,
         createdAt: DateTime.utc(2026, 7, 3, 8),
@@ -204,6 +205,7 @@ void main() {
     expect(sources.single.syncRootId, 'root-1');
     expect(sources.single.mediaTypes, 'image_video');
     expect(sources.single.cleanupPolicy, 'delete');
+    expect(sources.single.encryptionEnabled, isFalse);
     expect(sources.single.wifiOnly, isTrue);
   });
 

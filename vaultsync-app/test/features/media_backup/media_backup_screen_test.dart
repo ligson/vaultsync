@@ -3,6 +3,28 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vaultsync_app/features/media_backup/media_backup_screen.dart';
 
 void main() {
+  testWidgets('media backup screen can save plain storage option', (
+    tester,
+  ) async {
+    bool? encryptionEnabled;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaBackupScreen(
+          onSave: (draft) async {
+            encryptionEnabled = draft.encryptionEnabled;
+          },
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('服务器端加密存储'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('save_media_backup_button')));
+    await tester.pumpAndSettle();
+
+    expect(encryptionEnabled, isFalse);
+  });
+
   testWidgets('media backup screen saves delete cleanup policy after confirm', (
     tester,
   ) async {

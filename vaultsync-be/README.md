@@ -17,7 +17,19 @@ go run ./cmd/server -config config.yaml
 - `app.storage.data_dir` 未填写时默认 `./data`。
 - `app.storage.database_path` 未填写时默认 `{app.storage.data_dir}/vaultsync.db`。
 - 上传临时分片保存到 `{app.storage.data_dir}/uploads/{user_id}/`。
-- 上传完成后的密文对象保存到 `{app.storage.data_dir}/objects/{user_id}/`。
+- 上传完成后的对象保存到 `{app.storage.data_dir}/objects/{user_id}/`，其中普通文件按 `plain/{device_id}/{sync_root_id}/{原始相对路径}` 生成可读镜像，加密文件按 `encrypted/{device_id}/{sync_root_id}/{version_id}.bin` 保存密文。
+
+## 存储维护
+
+旧版本对象可能仍是 `{data_dir}/objects/{user_id}/{version_id}.bin` 或 `{data_dir}/objects/{user_id}/plain/{version_id}.bin`。整理旧对象时使用维护命令，不要手动删除：
+
+```bash
+go run ./cmd/storage-layout-migrate -mode dry-run -data-dir ./data -stored-data-dir ./data
+go run ./cmd/storage-layout-migrate -mode apply -data-dir ./data -stored-data-dir ./data
+go run ./cmd/storage-layout-migrate -mode cleanup -data-dir ./data -stored-data-dir ./data -report ./data/backups/storage-layout-*/migration-report.jsonl
+```
+
+NAS 宿主机执行时，`-data-dir` 填真实挂载目录，`-stored-data-dir` 填容器内数据库路径前缀 `/data`。`apply` 会先生成 SQLite 备份和迁移报告；`cleanup` 只删除已确认不再被数据库引用的旧 `.bin` 副本。
 
 ## 常用命令
 

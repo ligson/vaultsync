@@ -46,7 +46,7 @@ data/objects/{user_id}/plain/{device_id}/{sync_root_id}/.vaultsync_versions/{obj
 - `plain/`：客户端不加密，服务器保存原文件内容；根目录下直接可按原相对路径查看最新文件。
 - `plain/.../.vaultsync_versions/`：普通文件历史版本，数据库 `file_versions.content_path` 指向这里，禁止手动删除。
 
-## 兼容旧数据
+## 兼容与迁移旧数据
 
 旧版本上传的文件可能直接位于：
 
@@ -56,9 +56,30 @@ data/objects/{user_id}/encrypted/{version_id}.bin
 data/objects/{user_id}/plain/{version_id}.bin
 ```
 
-这些文件仍通过 SQLite 的 `file_versions.content_path` 精确定位，不需要移动。升级时不得批量迁移、删除或重写旧对象文件。
+这些文件通过 SQLite 的 `file_versions.content_path` 精确定位。后端读取文件时继续兼容旧路径，因此升级后不会强制迁移、删除或重写既有对象文件。
 
-如果需要把旧普通 `.bin` 对象整理成新的可读目录结构，必须走非破坏流程：先备份 SQLite 和对象目录，再按数据库元数据复制到新路径并校验哈希，确认无误后更新 `content_path`。未经用户确认不得删除旧对象。
+如果需要把旧对象整理成新目录结构，必须使用维护工具：
+
+```bash
+go run ./cmd/storage-layout-migrate \
+  -mode dry-run \
+  -data-dir /var/services/homes/ligson/wk/docker-services/vaultsync/data \
+  -stored-data-dir /data \
+  -db /var/services/homes/ligson/wk/docker-services/vaultsync/data/vaultsync.db
+```
+
+推荐执行顺序：
+
+1. `dry-run`：只读取数据库和对象文件，输出计划，不修改数据。
+2. `apply`：自动用 SQLite `VACUUM INTO` 生成数据库备份，然后复制对象到新路径、校验 `SHA-256` 和大小、更新 `file_versions.content_path`，并生成 JSONL 迁移报告。
+3. `cleanup`：读取 `apply` 阶段的迁移报告，只删除已经不再被数据库引用、且新文件校验通过的旧 `.bin` 文件。
+
+迁移规则：
+
+- 仍存在同步目录记录的普通文件：迁移到 `plain/{device_id}/{sync_root_id}/.vaultsync_versions/...`，并为最新版本生成 `plain/{device_id}/{sync_root_id}/{原始相对路径}` 镜像。
+- 仍存在同步目录记录的加密文件：迁移到 `encrypted/{device_id}/{sync_root_id}/{version_id}.bin`。
+- 缺失同步目录记录、无法判断设备的旧加密历史：迁移到 `encrypted/__legacy_device__/{sync_root_id}/{version_id}.bin`，继续保持数据库可追溯，不尝试还原明文目录。
+- 旧文件只有在数据库不再引用旧 `content_path`，且新文件完整校验通过后才允许删除。
 
 ## 查看建议
 

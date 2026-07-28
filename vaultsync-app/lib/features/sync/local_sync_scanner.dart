@@ -7,6 +7,12 @@ abstract interface class LocalSyncScanGateway {
   Future<List<LocalSyncFile>> scanMappedRoots({String? syncRootId});
 }
 
+bool isIgnoredLocalSyncRelativePath(String path) {
+  final normalized = path.replaceAll('\\', '/');
+  final segments = normalized.split('/');
+  return segments.any((segment) => segment == '.drive_sync');
+}
+
 class LocalSyncScanner implements LocalSyncScanGateway {
   final SyncRootMappingStore mappings;
 
@@ -36,12 +42,16 @@ class LocalSyncScanner implements LocalSyncScanGateway {
         if (entity is! File) {
           continue;
         }
+        final relativePath = _relativePath(mapping.localPath, entity.path);
+        if (isIgnoredLocalSyncRelativePath(relativePath)) {
+          continue;
+        }
         final stat = await entity.stat();
         files.add(
           LocalSyncFile(
             syncRootId: mapping.syncRootId,
             localPath: entity.path,
-            relativePath: _relativePath(mapping.localPath, entity.path),
+            relativePath: relativePath,
             sizeBytes: stat.size,
             modifiedAt: stat.modified,
             encryptionEnabled: mapping.encryptionEnabled,

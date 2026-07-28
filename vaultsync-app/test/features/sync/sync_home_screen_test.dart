@@ -498,6 +498,72 @@ void main() {
     expect(find.text('/Users/alice/Old'), findsNothing);
   });
 
+  testWidgets('sync home prunes ignored third-party sync control tasks', (
+    tester,
+  ) async {
+    final uploadTasks = FakeUploadTaskStore([
+      LocalUploadTask(
+        id: 'root-1:.drive_sync/.id_123',
+        syncRootId: 'root-1',
+        localPath: '/storage/emulated/0/Download/.drive_sync/.id_123',
+        relativePath: '.drive_sync/.id_123',
+        sizeBytes: 0,
+        modifiedAt: DateTime.utc(2026, 7),
+        status: 'failed',
+        attempts: 1,
+        createdAt: DateTime.utc(2026, 7),
+        lastError: '服务器处理失败，请稍后重试',
+      ),
+      LocalUploadTask(
+        id: 'root-1:file.pdf',
+        syncRootId: 'root-1',
+        localPath: '/storage/emulated/0/Download/file.pdf',
+        relativePath: 'file.pdf',
+        sizeBytes: 1024,
+        modifiedAt: DateTime.utc(2026, 7),
+        status: 'pending',
+        attempts: 0,
+        createdAt: DateTime.utc(2026, 7),
+      ),
+    ]);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore([
+            const LocalSyncRootMapping(
+              syncRootId: 'root-1',
+              localPath: '/storage/emulated/0/Download',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+            ),
+          ]),
+          uploadTasks: uploadTasks,
+          syncRoots: FakeSyncRootGateway([
+            const SyncRoot(
+              id: 'root-1',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-01T00:00:00Z',
+            ),
+          ]),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(uploadTasks.saved.map((task) => task.relativePath), ['file.pdf']);
+    expect(find.textContaining('.drive_sync'), findsNothing);
+  });
+
   testWidgets('sync error view can return to login on invalid token', (
     tester,
   ) async {

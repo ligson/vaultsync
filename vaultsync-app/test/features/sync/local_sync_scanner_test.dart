@@ -91,6 +91,36 @@ void main() {
     expect(files.single.syncRootId, 'root-2');
     expect(files.single.relativePath, 'b.txt');
   });
+
+  test('scanMappedRoots skips third-party sync control directories', () async {
+    final rootDir = await Directory.systemTemp.createTemp(
+      'vaultsync_scan_ignore_',
+    );
+    addTearDown(() => rootDir.delete(recursive: true));
+    await File('${rootDir.path}/visible.txt').writeAsString('visible');
+    await Directory('${rootDir.path}/.drive_sync').create();
+    await File('${rootDir.path}/.drive_sync/.id_123').writeAsString('');
+    await Directory(
+      '${rootDir.path}/nested/.drive_sync',
+    ).create(recursive: true);
+    await File('${rootDir.path}/nested/.drive_sync/.id_456').writeAsString('');
+
+    final scanner = LocalSyncScanner(
+      mappings: FakeSyncRootMappingStore([
+        LocalSyncRootMapping(
+          syncRootId: 'root-1',
+          localPath: rootDir.path,
+          encryptedPath: 'vaultsync-path:v1:abc',
+          cleanupPolicy: 'keep',
+          archivePath: '',
+        ),
+      ]),
+    );
+
+    final files = await scanner.scanMappedRoots();
+
+    expect(files.map((file) => file.relativePath), ['visible.txt']);
+  });
 }
 
 class FakeSyncRootMappingStore implements SyncRootMappingStore {

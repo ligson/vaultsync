@@ -3,6 +3,7 @@ package storage
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -31,7 +32,7 @@ func (s *FSStorage) AppendChunk(userID, sessionID string, chunk io.Reader) (int6
 	return io.Copy(file, chunk)
 }
 
-func (s *FSStorage) FinalizeUpload(userID, sessionID, versionID string, encrypted bool) (string, string, int64, error) {
+func (s *FSStorage) FinalizeUpload(userID, sessionID, versionID string, encrypted bool, expectedSize int64) (string, string, int64, error) {
 	sourcePath := filepath.Join(s.rootDir, "uploads", userID, sessionID+".part")
 	storageClass := "plain"
 	if encrypted {
@@ -42,7 +43,16 @@ func (s *FSStorage) FinalizeUpload(userID, sessionID, versionID string, encrypte
 		return "", "", 0, err
 	}
 	if err := os.Rename(sourcePath, targetPath); err != nil {
-		return "", "", 0, err
+		if expectedSize != 0 || !errors.Is(err, os.ErrNotExist) {
+			return "", "", 0, err
+		}
+		file, createErr := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		if createErr != nil {
+			return "", "", 0, createErr
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			return "", "", 0, closeErr
+		}
 	}
 
 	hashValue, size, err := hashFile(targetPath)

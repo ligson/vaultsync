@@ -75,6 +75,40 @@ func TestPlainSyncRootStoresPlainObject(t *testing.T) {
 	}
 }
 
+func TestUploadCanCompleteZeroByteFile(t *testing.T) {
+	instance, app := testutil.NewTestAppAndServer(t)
+	token := registerAndLogin(t, app, "empty@example.com")
+
+	deviceBody := `{"name":"Alice Android","platform":"android"}`
+	resp := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/devices", deviceBody, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	deviceID := testutil.MustReadJSONField(t, resp, "id")
+
+	rootBody := fmt.Sprintf(`{"device_id":"%s","encrypted_path":"base64:download","encryption_enabled":false,"cleanup_policy":"keep","archive_path":""}`, deviceID)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/sync-roots", rootBody, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	rootID := testutil.MustReadJSONField(t, resp, "id")
+
+	sessionID := createUploadSession(t, app, token, deviceID, rootID, "obj-empty", "ver-empty", 0)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions/"+sessionID+"/complete", `{}`, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+
+	matches, err := filepath.Glob(filepath.Join(instance.Config.DataDir, "objects", "*", "plain", "ver-empty.bin"))
+	if err != nil {
+		t.Fatalf("glob empty object: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected one empty object, got %v", matches)
+	}
+	stat, err := os.Stat(matches[0])
+	if err != nil {
+		t.Fatalf("stat empty object: %v", err)
+	}
+	if stat.Size() != 0 {
+		t.Fatalf("expected zero-byte object, got %d", stat.Size())
+	}
+}
+
 func TestGetUploadSessionReturnsProgress(t *testing.T) {
 	app, token, deviceID, rootID := testutil.NewUploadReadyServer(t)
 	sessionID := createUploadSession(t, app, token, deviceID, rootID, "obj-progress", "ver-progress", 8)

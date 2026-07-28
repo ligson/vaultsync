@@ -146,7 +146,7 @@ func (s *UploadService) Complete(ctx context.Context, userID, sessionID string) 
 	if err != nil {
 		return domain.FileVersion{}, InvalidRequest("同步目录不存在或无权访问")
 	}
-	contentPath, hashValue, size, err := s.storage.FinalizeUpload(userID, sessionID, session.VersionID, root.EncryptionEnabled)
+	contentPath, hashValue, size, err := s.storage.FinalizeUpload(userID, sessionID, session.VersionID, root.EncryptionEnabled, session.TotalSize)
 	if err != nil {
 		return domain.FileVersion{}, err
 	}

@@ -168,7 +168,9 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     ];
     final prunedTasks = [
       for (final task in uploadTasks)
-        if (rootIds.contains(task.syncRootId)) task,
+        if (rootIds.contains(task.syncRootId) &&
+            !isIgnoredLocalSyncRelativePath(task.relativePath))
+          task,
     ];
     if (prunedMappings.length != mappings.length) {
       await widget.syncRootMappings.saveSyncRootMappings(prunedMappings);

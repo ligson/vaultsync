@@ -44,5 +44,5 @@ func ToAppError(err error) AppError {
 	if errors.As(err, &appErr) {
 		return appErr
 	}
-	return AppError{Code: CodeInternal, Message: "internal server error", Status: http.StatusInternalServerError}
+	return AppError{Code: CodeInternal, Message: "服务器处理失败，请稍后重试", Status: http.StatusInternalServerError}
 }

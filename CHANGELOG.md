@@ -4,6 +4,10 @@
 
 ## 2026-07-28
 
+- 对齐 Flutter 客户端已调用但后端缺失的接口：新增 `POST /api/v1/auth/refresh`、`GET /api/v1/upload-sessions/{sessionID}`、`PATCH /api/v1/sync-roots/{syncRootID}`、`DELETE /api/v1/sync-roots/{syncRootID}`，修复上传、断点续传、同步目录管理可能返回纯文本 404 的问题。
+- 新增 `/api/v1/*` JSON 兜底：未知 API 或请求方法不支持时统一返回中文 JSON envelope，避免客户端再提示“服务器返回了无法解析的响应”。
+- 将上传、同步目录、设备、下载、删除和通用内部错误等高频后端错误提示改为中文。
+- 删除同步目录时默认只删除目录绑定，不物理删除密文文件；仅当请求明确 `delete_remote=true` 时写入远端删除墓碑。本次不新增数据库字段，不清空服务端数据目录或 SQLite 数据库。
 - 修复手机端同步主页加载服务器备份列表时，后端缺少 `GET /api/v1/sync-roots/{syncRootID}/remote-objects` 导致返回纯文本 `404 page not found`，客户端提示“服务器返回了无法解析的响应”的问题。
 - 新增服务器备份对象分页查询接口，返回统一 JSON envelope，并只列出当前用户、当前同步目录下未被删除墓碑覆盖的最新文件版本。
 - 将认证失败时的缺少 token、token 无效提示改为中文，避免客户端直接展示英文后端消息。

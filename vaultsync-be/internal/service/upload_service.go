@@ -33,36 +33,36 @@ func NewUploadService(repo *store.ObjectRepo, deviceRepo *store.DeviceRepo, sync
 
 func (s *UploadService) CreateSession(ctx context.Context, userID, deviceID, syncRootID, objectID, versionID, encryptedName, metadataJSON string, totalSize, chunkSize int64) (domain.UploadSession, error) {
 	if strings.TrimSpace(deviceID) == "" {
-		return domain.UploadSession{}, InvalidRequest("device id is required")
+		return domain.UploadSession{}, InvalidRequest("设备 ID 不能为空")
 	}
 	if strings.TrimSpace(syncRootID) == "" {
-		return domain.UploadSession{}, InvalidRequest("sync root id is required")
+		return domain.UploadSession{}, InvalidRequest("同步目录 ID 不能为空")
 	}
 	if strings.TrimSpace(objectID) == "" {
-		return domain.UploadSession{}, InvalidRequest("object id is required")
+		return domain.UploadSession{}, InvalidRequest("文件对象 ID 不能为空")
 	}
 	if strings.TrimSpace(versionID) == "" {
-		return domain.UploadSession{}, InvalidRequest("version id is required")
+		return domain.UploadSession{}, InvalidRequest("文件版本 ID 不能为空")
 	}
 	if strings.TrimSpace(encryptedName) == "" {
-		return domain.UploadSession{}, InvalidRequest("encrypted name is required")
+		return domain.UploadSession{}, InvalidRequest("加密文件名不能为空")
 	}
 	if totalSize < 0 || chunkSize <= 0 {
-		return domain.UploadSession{}, InvalidRequest("invalid upload size")
+		return domain.UploadSession{}, InvalidRequest("上传文件大小参数不正确")
 	}
 	deviceExists, err := s.deviceRepo.ExistsForUser(ctx, userID, strings.TrimSpace(deviceID))
 	if err != nil {
 		return domain.UploadSession{}, err
 	}
 	if !deviceExists {
-		return domain.UploadSession{}, InvalidRequest("device does not belong to user")
+		return domain.UploadSession{}, InvalidRequest("设备不属于当前用户")
 	}
 	root, err := s.syncRootRepo.GetForUser(ctx, userID, strings.TrimSpace(syncRootID))
 	if err != nil {
-		return domain.UploadSession{}, InvalidRequest("sync root does not belong to user")
+		return domain.UploadSession{}, InvalidRequest("同步目录不存在或无权访问")
 	}
 	if root.DeviceID != strings.TrimSpace(deviceID) {
-		return domain.UploadSession{}, InvalidRequest("sync root does not belong to device")
+		return domain.UploadSession{}, InvalidRequest("同步目录不属于当前设备")
 	}
 
 	mergedMetadata, err := mergeUploadMetadata(metadataJSON, encryptedName)
@@ -88,20 +88,38 @@ func (s *UploadService) CreateSession(ctx context.Context, userID, deviceID, syn
 	return s.repo.CreateUploadSession(ctx, session)
 }
 
+func (s *UploadService) GetSession(ctx context.Context, userID, sessionID string) (domain.UploadSession, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return domain.UploadSession{}, InvalidRequest("上传会话 ID 不能为空")
+	}
+	session, err := s.repo.GetUploadSession(ctx, userID, sessionID)
+	if err != nil {
+		if err == store.ErrNotFound {
+			return domain.UploadSession{}, NotFound("上传任务不存在或无权访问")
+		}
+		return domain.UploadSession{}, err
+	}
+	return session, nil
+}
+
 func (s *UploadService) AppendChunk(ctx context.Context, userID, sessionID string, chunk io.Reader) error {
 	session, err := s.repo.GetUploadSession(ctx, userID, sessionID)
 	if err != nil {
+		if err == store.ErrNotFound {
+			return NotFound("上传任务不存在或无权访问")
+		}
 		return err
 	}
 	if session.Status != "pending" {
-		return InvalidRequest("upload session is not pending")
+		return InvalidRequest("上传任务状态不允许继续上传")
 	}
 	payload, err := io.ReadAll(chunk)
 	if err != nil {
 		return err
 	}
 	if session.ReceivedSize+int64(len(payload)) > session.TotalSize {
-		return InvalidRequest("upload exceeds total size")
+		return InvalidRequest("上传内容超过声明的文件大小")
 	}
 	written, err := s.storage.AppendChunk(userID, sessionID, bytes.NewReader(payload))
 	if err != nil {
@@ -113,13 +131,16 @@ func (s *UploadService) AppendChunk(ctx context.Context, userID, sessionID strin
 func (s *UploadService) Complete(ctx context.Context, userID, sessionID string) (domain.FileVersion, error) {
 	session, err := s.repo.GetUploadSession(ctx, userID, sessionID)
 	if err != nil {
+		if err == store.ErrNotFound {
+			return domain.FileVersion{}, NotFound("上传任务不存在或无权访问")
+		}
 		return domain.FileVersion{}, err
 	}
 	if session.Status != "pending" {
-		return domain.FileVersion{}, InvalidRequest("upload session is not pending")
+		return domain.FileVersion{}, InvalidRequest("上传任务状态不允许完成")
 	}
 	if session.ReceivedSize != session.TotalSize {
-		return domain.FileVersion{}, InvalidRequest("upload is incomplete")
+		return domain.FileVersion{}, InvalidRequest("文件还没有上传完整")
 	}
 	contentPath, hashValue, size, err := s.storage.FinalizeUpload(userID, sessionID, session.VersionID)
 	if err != nil {
@@ -148,7 +169,7 @@ func mergeUploadMetadata(metadataJSON, encryptedName string) (string, error) {
 	payload := map[string]any{}
 	if strings.TrimSpace(metadataJSON) != "" {
 		if err := json.Unmarshal([]byte(metadataJSON), &payload); err != nil {
-			return "", InvalidRequest("metadata json is invalid")
+			return "", InvalidRequest("文件元数据格式不正确")
 		}
 	}
 	payload["encrypted_name"] = encryptedName
@@ -162,11 +183,11 @@ func mergeUploadMetadata(metadataJSON, encryptedName string) (string, error) {
 func extractEncryptedName(metadataJSON string) (string, error) {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(metadataJSON), &payload); err != nil {
-		return "", InvalidRequest("metadata json is invalid")
+		return "", InvalidRequest("文件元数据格式不正确")
 	}
 	value, _ := payload["encrypted_name"].(string)
 	if strings.TrimSpace(value) == "" {
-		return "", InvalidRequest("encrypted name is required")
+		return "", InvalidRequest("加密文件名不能为空")
 	}
 	return value, nil
 }

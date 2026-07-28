@@ -30,7 +30,7 @@ func (h *UploadHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		MetadataJSON  string `json:"metadata_json"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "invalid json")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
 		return
 	}
 
@@ -40,6 +40,17 @@ func (h *UploadHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.Write(w, http.StatusCreated, "", session)
+}
+
+func (h *UploadHandler) GetSession(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.MustUserID(r.Context())
+	sessionID := r.PathValue("sessionID")
+	session, err := h.service.GetSession(r.Context(), userID, sessionID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	response.Write(w, http.StatusOK, "", session)
 }
 
 func (h *UploadHandler) UploadPart(w http.ResponseWriter, r *http.Request) {

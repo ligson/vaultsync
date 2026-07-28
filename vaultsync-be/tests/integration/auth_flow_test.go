@@ -64,3 +64,11 @@ func TestLoginFailureReturnsStableUnauthorizedCode(t *testing.T) {
 	testutil.AssertStatus(t, resp, http.StatusUnauthorized)
 	testutil.AssertJSONErrorCode(t, resp, "unauthorized")
 }
+
+func TestAuthRefreshReturnsNewSession(t *testing.T) {
+	app, token := testutil.NewAuthenticatedServer(t)
+
+	resp := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/auth/refresh", `{}`, token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	testutil.AssertJSONContains(t, resp, `"token":"`)
+}

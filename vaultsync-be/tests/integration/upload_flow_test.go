@@ -36,6 +36,18 @@ func TestUploadCiphertextAndCompleteVersion(t *testing.T) {
 	testutil.AssertStatus(t, resp, http.StatusCreated)
 }
 
+func TestGetUploadSessionReturnsProgress(t *testing.T) {
+	app, token, deviceID, rootID := testutil.NewUploadReadyServer(t)
+	sessionID := createUploadSession(t, app, token, deviceID, rootID, "obj-progress", "ver-progress", 8)
+
+	resp := testutil.BinaryRequest(t, app, http.MethodPut, "/api/v1/upload-sessions/"+sessionID+"/parts/0", []byte("part"), token)
+	testutil.AssertStatus(t, resp, http.StatusNoContent)
+
+	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/upload-sessions/"+sessionID, "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	testutil.AssertJSONContains(t, resp, `"received_size":4`)
+}
+
 func TestUploadSessionRejectsForeignSyncRoot(t *testing.T) {
 	app := testutil.NewTestServer(t)
 	aliceToken := registerAndLogin(t, app, "alice@example.com")

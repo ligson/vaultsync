@@ -26,7 +26,7 @@ func (h *AdminHandler) Register(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "invalid json")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
 		return
 	}
 	user, err := h.authService.RegisterAdmin(r.Context(), req.Email, req.Password)
@@ -47,7 +47,7 @@ func (h *AdminHandler) Login(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "invalid json")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
 		return
 	}
 	session, err := h.authService.LoginAdmin(r.Context(), req.Email, req.Password)
@@ -92,7 +92,7 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		QuotaBytes int64  `json:"quota_bytes"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "invalid json")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
 		return
 	}
 	user, err := h.authService.RegisterUserWithQuota(r.Context(), req.Email, req.Password, req.QuotaBytes)
@@ -114,7 +114,7 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		QuotaBytes int64  `json:"quota_bytes"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "invalid json")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
 		return
 	}
 	user, err := h.adminService.UpdateUser(r.Context(), r.PathValue("userID"), req.Status, req.QuotaBytes)
@@ -135,7 +135,7 @@ func (h *AdminHandler) ResetUserPassword(w http.ResponseWriter, r *http.Request)
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "invalid json")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
 		return
 	}
 	if err := h.authService.ResetPassword(r.Context(), r.PathValue("userID"), req.Password); err != nil {
@@ -160,7 +160,7 @@ func (h *AdminHandler) Settings(w http.ResponseWriter, r *http.Request) {
 func (h *AdminHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var req map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "invalid json")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
 		return
 	}
 	settings, err := h.adminService.UpdateSettings(r.Context(), req)
@@ -190,7 +190,7 @@ func (h *AdminHandler) UpdateDownload(w http.ResponseWriter, r *http.Request) {
 		DownloadURL string `json:"download_url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "invalid json")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
 		return
 	}
 	release, err := h.adminService.UpdateDownload(r.Context(), r.PathValue("platform"), domain.DownloadRelease{

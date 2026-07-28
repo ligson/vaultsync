@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/ligson/vaultsync/internal/httpapi/middleware"
 	"github.com/ligson/vaultsync/internal/httpapi/response"
 	"github.com/ligson/vaultsync/internal/service"
 )
@@ -22,7 +23,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "invalid json")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
 		return
 	}
 
@@ -40,11 +41,21 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "invalid json")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
 		return
 	}
 
 	session, err := h.service.Login(r.Context(), req.Email, req.Password)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	response.Write(w, http.StatusOK, "", session)
+}
+
+func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.MustUserID(r.Context())
+	session, err := h.service.Refresh(r.Context(), userID)
 	if err != nil {
 		writeServiceError(w, err)
 		return

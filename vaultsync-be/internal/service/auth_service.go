@@ -137,7 +137,7 @@ func (s *AuthService) LoginAdmin(ctx context.Context, email, password string) (d
 func (s *AuthService) login(ctx context.Context, email, password, requiredRole string) (domain.SessionToken, error) {
 	user, err := s.repo.FindUserByEmail(ctx, strings.TrimSpace(strings.ToLower(email)))
 	if err != nil {
-		return domain.SessionToken{}, Unauthorized("invalid email or password")
+		return domain.SessionToken{}, Unauthorized("邮箱或密码不正确")
 	}
 	if user.Status != "active" {
 		return domain.SessionToken{}, Forbidden("账号已被禁用")
@@ -146,9 +146,24 @@ func (s *AuthService) login(ctx context.Context, email, password, requiredRole s
 		return domain.SessionToken{}, Forbidden("没有管理员权限")
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
-		return domain.SessionToken{}, Unauthorized("invalid email or password")
+		return domain.SessionToken{}, Unauthorized("邮箱或密码不正确")
 	}
 
+	return s.createSession(ctx, user)
+}
+
+func (s *AuthService) Refresh(ctx context.Context, userID string) (domain.SessionToken, error) {
+	user, err := s.repo.FindUserByID(ctx, userID)
+	if err != nil {
+		return domain.SessionToken{}, Unauthorized("登录用户不存在，请重新登录")
+	}
+	if user.Status != "active" {
+		return domain.SessionToken{}, Forbidden("账号已被禁用")
+	}
+	return s.createSession(ctx, user)
+}
+
+func (s *AuthService) createSession(ctx context.Context, user domain.User) (domain.SessionToken, error) {
 	now := s.now()
 	expiresAt := now.Add(sessionTTL)
 	tokenID := newID()
@@ -172,7 +187,7 @@ func (s *AuthService) login(ctx context.Context, email, password, requiredRole s
 func (s *AuthService) UserByID(ctx context.Context, id string) (domain.User, error) {
 	user, err := s.repo.FindUserByID(ctx, id)
 	if err != nil {
-		return domain.User{}, Unauthorized("invalid user")
+		return domain.User{}, Unauthorized("登录用户不存在，请重新登录")
 	}
 	return user, nil
 }

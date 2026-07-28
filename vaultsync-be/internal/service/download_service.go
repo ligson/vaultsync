@@ -26,7 +26,7 @@ func (s *DownloadService) OpenCiphertext(ctx context.Context, userID, versionID 
 	`, userID, versionID).Scan(&contentPath)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, NotFound("object version not found")
+			return nil, NotFound("文件版本不存在或无权访问")
 		}
 		return nil, err
 	}

@@ -25,10 +25,10 @@ func (s *DeviceService) Register(ctx context.Context, userID, name, platform str
 	name = strings.TrimSpace(name)
 	platform = strings.TrimSpace(platform)
 	if name == "" {
-		return domain.Device{}, InvalidRequest("device name is required")
+		return domain.Device{}, InvalidRequest("设备名称不能为空")
 	}
 	if platform == "" {
-		return domain.Device{}, InvalidRequest("device platform is required")
+		return domain.Device{}, InvalidRequest("设备平台不能为空")
 	}
 
 	device := domain.Device{

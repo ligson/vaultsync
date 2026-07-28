@@ -27,7 +27,7 @@ func (h *SyncRootHandler) Create(w http.ResponseWriter, r *http.Request) {
 		ArchivePath   string `json:"archive_path"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "invalid json")
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
 		return
 	}
 
@@ -47,6 +47,37 @@ func (h *SyncRootHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.Write(w, http.StatusOK, "", map[string]any{"items": roots})
+}
+
+func (h *SyncRootHandler) UpdateCleanupPolicy(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.MustUserID(r.Context())
+	syncRootID := r.PathValue("syncRootID")
+	var req struct {
+		CleanupPolicy string `json:"cleanup_policy"`
+		ArchivePath   string `json:"archive_path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
+		return
+	}
+	root, err := h.service.UpdateCleanupPolicy(r.Context(), userID, syncRootID, req.CleanupPolicy, req.ArchivePath)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	response.Write(w, http.StatusOK, "", root)
+}
+
+func (h *SyncRootHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.MustUserID(r.Context())
+	syncRootID := r.PathValue("syncRootID")
+	deleteRemote := r.URL.Query().Get("delete_remote") == "true"
+	result, err := h.service.Delete(r.Context(), userID, syncRootID, deleteRemote)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	response.Write(w, http.StatusOK, "", result)
 }
 
 func (h *SyncRootHandler) ListRemoteBackupObjects(w http.ResponseWriter, r *http.Request) {

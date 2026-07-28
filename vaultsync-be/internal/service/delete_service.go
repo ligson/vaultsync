@@ -30,27 +30,27 @@ func (s *DeleteService) DeleteObject(ctx context.Context, userID, deviceID, sync
 	syncRootID = strings.TrimSpace(syncRootID)
 	objectID = strings.TrimSpace(objectID)
 	if deviceID == "" {
-		return nil, InvalidRequest("device id is required")
+		return nil, InvalidRequest("设备 ID 不能为空")
 	}
 	if syncRootID == "" {
-		return nil, InvalidRequest("sync root id is required")
+		return nil, InvalidRequest("同步目录 ID 不能为空")
 	}
 	if objectID == "" {
-		return nil, InvalidRequest("object id is required")
+		return nil, InvalidRequest("文件对象 ID 不能为空")
 	}
 	deviceExists, err := s.deviceRepo.ExistsForUser(ctx, userID, deviceID)
 	if err != nil {
 		return nil, err
 	}
 	if !deviceExists {
-		return nil, InvalidRequest("device does not belong to user")
+		return nil, InvalidRequest("设备不属于当前用户")
 	}
 	root, err := s.syncRootRepo.GetForUser(ctx, userID, syncRootID)
 	if err != nil {
-		return nil, InvalidRequest("sync root does not belong to user")
+		return nil, InvalidRequest("同步目录不存在或无权访问")
 	}
 	if root.DeviceID != deviceID {
-		return nil, InvalidRequest("sync root does not belong to device")
+		return nil, InvalidRequest("同步目录不属于当前设备")
 	}
 
 	tombstoneID := newID()

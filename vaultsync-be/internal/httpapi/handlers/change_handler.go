@@ -15,7 +15,7 @@ type ChangeHandler struct {
 	service *service.ChangeService
 }
 
-var errInvalidLimit = errors.New("limit must be a positive integer")
+var errInvalidLimit = errors.New("分页大小必须是正整数")
 
 func NewChangeHandler(service *service.ChangeService) *ChangeHandler {
 	return &ChangeHandler{service: service}

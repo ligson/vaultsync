@@ -57,6 +57,28 @@ func TestSyncRootRemoteObjectsSubrouteReturnsJSONEnvelope(t *testing.T) {
 	}
 }
 
+func TestUpdateAndDeleteSyncRootRoutes(t *testing.T) {
+	app, token := testutil.NewAuthenticatedServer(t)
+
+	deviceBody := `{"name":"Alice Phone","platform":"android"}`
+	resp := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/devices", deviceBody, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	deviceID := testutil.MustReadJSONField(t, resp, "id")
+
+	rootBody := fmt.Sprintf(`{"device_id":"%s","encrypted_path":"base64:path","cleanup_policy":"keep","archive_path":""}`, deviceID)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/sync-roots", rootBody, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	rootID := testutil.MustReadJSONField(t, resp, "id")
+
+	resp = testutil.JSONRequest(t, app, http.MethodPatch, "/api/v1/sync-roots/"+rootID, `{"cleanup_policy":"delete"}`, token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	testutil.AssertJSONContains(t, resp, `"cleanup_policy":"delete"`)
+
+	resp = testutil.JSONRequest(t, app, http.MethodDelete, "/api/v1/sync-roots/"+rootID+"?delete_remote=false", "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	testutil.AssertJSONContains(t, resp, `"delete_remote":false`)
+}
+
 func TestSyncRootRejectsForeignDevice(t *testing.T) {
 	app := testutil.NewTestServer(t)
 	aliceToken := registerAndLogin(t, app, "alice@example.com")

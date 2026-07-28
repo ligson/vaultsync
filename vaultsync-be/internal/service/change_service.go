@@ -83,7 +83,7 @@ func (s *ChangeService) List(ctx context.Context, userID, deviceID string, curso
 
 func normalizeChangeLimit(limit int) (int, error) {
 	if limit < 0 {
-		return 0, InvalidRequest("limit must be positive")
+		return 0, InvalidRequest("分页大小必须是正整数")
 	}
 	if limit == 0 {
 		return DefaultChangeLimit, nil
@@ -104,7 +104,7 @@ func (s *ChangeService) cursorDeviceID(ctx context.Context, userID, deviceID str
 		return "", err
 	}
 	if !exists {
-		return "", InvalidRequest("device does not belong to user")
+		return "", InvalidRequest("设备不属于当前用户")
 	}
 	return deviceID, nil
 }

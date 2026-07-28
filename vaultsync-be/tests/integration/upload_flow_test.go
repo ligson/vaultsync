@@ -52,26 +52,50 @@ func TestPlainSyncRootStoresPlainObject(t *testing.T) {
 	testutil.AssertStatus(t, resp, http.StatusCreated)
 	rootID := testutil.MustReadJSONField(t, resp, "id")
 
-	sessionID := createUploadSession(t, app, token, deviceID, rootID, "obj-plain", "ver-plain", 5)
+	sessionID := createUploadSessionWithRelativePath(t, app, token, deviceID, rootID, "obj-plain", "ver-plain", 5, "docs/greeting.txt")
 	resp = testutil.BinaryRequest(t, app, http.MethodPut, "/api/v1/upload-sessions/"+sessionID+"/parts/0", []byte("hello"), token)
 	testutil.AssertStatus(t, resp, http.StatusNoContent)
 	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions/"+sessionID+"/complete", `{}`, token)
 	testutil.AssertStatus(t, resp, http.StatusCreated)
 
 	path := filepath.Join(instance.Config.DataDir, "objects")
-	matches, err := filepath.Glob(filepath.Join(path, "*", "plain", "ver-plain.bin"))
+	currentMatches, err := filepath.Glob(filepath.Join(path, "*", "plain", deviceID, rootID, "docs", "greeting.txt"))
 	if err != nil {
 		t.Fatalf("glob plain object: %v", err)
 	}
-	if len(matches) != 1 {
-		t.Fatalf("expected one plain object under %s, got %v", path, matches)
+	if len(currentMatches) != 1 {
+		t.Fatalf("expected one current plain object under %s, got %v", path, currentMatches)
 	}
-	content, err := os.ReadFile(matches[0])
+	content, err := os.ReadFile(currentMatches[0])
 	if err != nil {
 		t.Fatalf("read plain object: %v", err)
 	}
 	if string(content) != "hello" {
 		t.Fatalf("unexpected plain object content: %q", string(content))
+	}
+
+	versionMatches, err := filepath.Glob(filepath.Join(path, "*", "plain", deviceID, rootID, ".vaultsync_versions", "obj-plain", "ver-plain", "greeting.txt"))
+	if err != nil {
+		t.Fatalf("glob plain version object: %v", err)
+	}
+	if len(versionMatches) != 1 {
+		t.Fatalf("expected one version plain object under %s, got %v", path, versionMatches)
+	}
+	content, err = os.ReadFile(versionMatches[0])
+	if err != nil {
+		t.Fatalf("read plain version object %s: %v", versionMatches[0], err)
+	}
+	if string(content) != "hello" {
+		t.Fatalf("unexpected plain version content: %q", string(content))
+	}
+
+	var contentPath string
+	err = instance.DB().QueryRow(`SELECT content_path FROM file_versions WHERE id = ?`, "ver-plain").Scan(&contentPath)
+	if err != nil {
+		t.Fatalf("read file version content_path: %v", err)
+	}
+	if !strings.Contains(contentPath, ".vaultsync_versions") || !strings.HasSuffix(contentPath, filepath.Join("obj-plain", "ver-plain", "greeting.txt")) {
+		t.Fatalf("expected content_path to point to hidden version file, got %s", contentPath)
 	}
 }
 
@@ -93,7 +117,7 @@ func TestUploadCanCompleteZeroByteFile(t *testing.T) {
 	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions/"+sessionID+"/complete", `{}`, token)
 	testutil.AssertStatus(t, resp, http.StatusCreated)
 
-	matches, err := filepath.Glob(filepath.Join(instance.Config.DataDir, "objects", "*", "plain", "ver-empty.bin"))
+	matches, err := filepath.Glob(filepath.Join(instance.Config.DataDir, "objects", "*", "plain", deviceID, rootID, "obj-empty.txt"))
 	if err != nil {
 		t.Fatalf("glob empty object: %v", err)
 	}
@@ -379,17 +403,29 @@ func TestDownloadRejectsForeignVersion(t *testing.T) {
 
 func createUploadSession(t *testing.T, app *httptest.Server, token, deviceID, rootID, objectID, versionID string, totalSize int64) string {
 	t.Helper()
-	createBody := fmt.Sprintf(`{
-		"device_id":"%s",
-		"sync_root_id":"%s",
-		"object_id":"%s",
-		"version_id":"%s",
-		"total_size":%d,
-		"chunk_size":4,
-		"encrypted_name":"enc:%s.txt",
-		"metadata_json":"{}"
-	}`, deviceID, rootID, objectID, versionID, totalSize, objectID)
-	resp := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions", createBody, token)
+	return createUploadSessionWithRelativePath(t, app, token, deviceID, rootID, objectID, versionID, totalSize, objectID+".txt")
+}
+
+func createUploadSessionWithRelativePath(t *testing.T, app *httptest.Server, token, deviceID, rootID, objectID, versionID string, totalSize int64, relativePath string) string {
+	t.Helper()
+	metadata, err := json.Marshal(map[string]string{"relative_path": relativePath})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"device_id":      deviceID,
+		"sync_root_id":   rootID,
+		"object_id":      objectID,
+		"version_id":     versionID,
+		"total_size":     totalSize,
+		"chunk_size":     4,
+		"encrypted_name": "enc:" + objectID + ".txt",
+		"metadata_json":  string(metadata),
+	})
+	if err != nil {
+		t.Fatalf("marshal upload session body: %v", err)
+	}
+	resp := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions", string(body), token)
 	testutil.AssertStatus(t, resp, http.StatusCreated)
 	return testutil.MustReadJSONField(t, resp, "id")
 }

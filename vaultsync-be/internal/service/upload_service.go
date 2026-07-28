@@ -181,7 +181,24 @@ func (s *UploadService) Complete(ctx context.Context, userID, sessionID string) 
 	if err != nil {
 		return domain.FileVersion{}, InvalidRequest("同步目录不存在或无权访问")
 	}
-	contentPath, hashValue, size, err := s.storage.FinalizeUpload(userID, sessionID, session.VersionID, root.EncryptionEnabled, session.TotalSize)
+	relativePath := ""
+	if !root.EncryptionEnabled {
+		relativePath, err = extractPlainRelativePath(session.MetadataJSON)
+		if err != nil {
+			return domain.FileVersion{}, err
+		}
+	}
+	contentPath, hashValue, size, err := s.storage.FinalizeUpload(storage.UploadObjectPlacement{
+		UserID:       userID,
+		DeviceID:     session.DeviceID,
+		SyncRootID:   session.SyncRootID,
+		SessionID:    sessionID,
+		ObjectID:     session.ObjectID,
+		VersionID:    session.VersionID,
+		RelativePath: relativePath,
+		Encrypted:    root.EncryptionEnabled,
+		ExpectedSize: session.TotalSize,
+	})
 	if err != nil {
 		return domain.FileVersion{}, err
 	}
@@ -227,6 +244,18 @@ func extractEncryptedName(metadataJSON string) (string, error) {
 	value, _ := payload["encrypted_name"].(string)
 	if strings.TrimSpace(value) == "" {
 		return "", InvalidRequest("加密文件名不能为空")
+	}
+	return value, nil
+}
+
+func extractPlainRelativePath(metadataJSON string) (string, error) {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(metadataJSON), &payload); err != nil {
+		return "", InvalidRequest("文件元数据格式不正确")
+	}
+	value, _ := payload["relative_path"].(string)
+	if strings.TrimSpace(value) == "" {
+		return "", InvalidRequest("普通存储文件缺少相对路径")
 	}
 	return value, nil
 }

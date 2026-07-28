@@ -99,3 +99,46 @@ func (r *ObjectRepo) CompleteUpload(ctx context.Context, sessionID string, versi
 	}
 	return version, nil
 }
+
+func (r *ObjectRepo) ListRemoteBackupObjects(ctx context.Context, userID, syncRootID string, cursorValue int64, limit int) ([]domain.RemoteBackupObject, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT fv.rowid, fv.sync_root_id, fv.object_id, fv.id,
+			fv.encrypted_name, fv.content_hash, fv.size_bytes, fv.metadata_json, fv.created_at
+		FROM file_versions fv
+		JOIN (
+			SELECT object_id, MAX(rowid) AS latest_rowid
+			FROM file_versions
+			WHERE user_id = ? AND sync_root_id = ?
+			GROUP BY object_id
+		) latest ON latest.latest_rowid = fv.rowid
+		WHERE fv.user_id = ?
+			AND fv.sync_root_id = ?
+			AND fv.rowid > ?
+			AND NOT EXISTS (
+				SELECT 1
+				FROM file_tombstones ft
+				WHERE ft.user_id = fv.user_id
+					AND ft.sync_root_id = fv.sync_root_id
+					AND ft.object_id = fv.object_id
+			)
+		ORDER BY fv.rowid
+		LIMIT ?
+	`, userID, syncRootID, userID, syncRootID, cursorValue, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]domain.RemoteBackupObject, 0)
+	for rows.Next() {
+		var item domain.RemoteBackupObject
+		if err := rows.Scan(&item.CursorValue, &item.SyncRootID, &item.ObjectID, &item.VersionID, &item.EncryptedName, &item.ContentHash, &item.SizeBytes, &item.MetadataJSON, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

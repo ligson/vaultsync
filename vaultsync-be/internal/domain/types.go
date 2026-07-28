@@ -80,6 +80,24 @@ type ChangePage struct {
 	HasMore    bool           `json:"has_more"`
 }
 
+type RemoteBackupObject struct {
+	CursorValue   int64  `json:"cursor_value"`
+	SyncRootID    string `json:"sync_root_id"`
+	ObjectID      string `json:"object_id"`
+	VersionID     string `json:"version_id"`
+	EncryptedName string `json:"encrypted_name"`
+	ContentHash   string `json:"content_hash"`
+	SizeBytes     int64  `json:"size_bytes"`
+	MetadataJSON  string `json:"metadata_json"`
+	UpdatedAt     string `json:"updated_at"`
+}
+
+type RemoteBackupObjectPage struct {
+	Items      []RemoteBackupObject `json:"items"`
+	NextCursor int64                `json:"next_cursor"`
+	HasMore    bool                 `json:"has_more"`
+}
+
 type AuditLog struct {
 	ID          string `json:"id"`
 	UserID      string `json:"actor_user_id"`

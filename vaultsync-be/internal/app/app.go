@@ -48,7 +48,7 @@ func New(cfg config.Config) (*App, error) {
 			DefaultUserQuotaBytes:    cfg.DefaultUserQuotaBytes,
 		}),
 		deviceService:   service.NewDeviceService(deviceRepo),
-		syncRootService: service.NewSyncRootService(syncRootRepo, deviceRepo),
+		syncRootService: service.NewSyncRootService(syncRootRepo, deviceRepo, objectRepo),
 		uploadService:   service.NewUploadService(objectRepo, deviceRepo, syncRootRepo, fsStorage),
 		changeService:   service.NewChangeService(db, deviceRepo, cfg.DataDir),
 		downloadService: service.NewDownloadService(db, cfg.DataDir),

@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,36 @@ func TestRegisterAndManageSyncRoots(t *testing.T) {
 	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/sync-roots", "", token)
 	testutil.AssertStatus(t, resp, http.StatusOK)
 	testutil.AssertJSONContains(t, resp, `"cleanup_policy":"delete"`)
+}
+
+func TestSyncRootRemoteObjectsSubrouteReturnsJSONEnvelope(t *testing.T) {
+	app, token := testutil.NewAuthenticatedServer(t)
+
+	deviceBody := `{"name":"Alice Phone","platform":"android"}`
+	resp := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/devices", deviceBody, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	deviceID := testutil.MustReadJSONField(t, resp, "id")
+
+	rootBody := fmt.Sprintf(`{"device_id":"%s","encrypted_path":"base64:path","cleanup_policy":"keep","archive_path":""}`, deviceID)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/sync-roots", rootBody, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	rootID := testutil.MustReadJSONField(t, resp, "id")
+
+	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/sync-roots/"+rootID+"/remote-objects", "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	var payload struct {
+		Success  bool `json:"success"`
+		HTTPCode int  `json:"httpCode"`
+		Data     struct {
+			Items []any `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode remote objects json envelope: %v", err)
+	}
+	if !payload.Success || payload.HTTPCode != http.StatusOK || payload.Data.Items == nil {
+		t.Fatalf("unexpected remote objects payload: %+v", payload)
+	}
 }
 
 func TestSyncRootRejectsForeignDevice(t *testing.T) {

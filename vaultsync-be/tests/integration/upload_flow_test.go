@@ -109,6 +109,38 @@ func TestUploadCanCompleteZeroByteFile(t *testing.T) {
 	}
 }
 
+func TestUploadSessionTreatsExistingVersionAsCompleted(t *testing.T) {
+	app, token, deviceID, rootID := testutil.NewUploadReadyServer(t)
+	sessionA := createUploadSession(t, app, token, deviceID, rootID, "obj-same", "ver-same", 4)
+	sessionB := createUploadSession(t, app, token, deviceID, rootID, "obj-same", "ver-same", 4)
+
+	resp := testutil.BinaryRequest(t, app, http.MethodPut, "/api/v1/upload-sessions/"+sessionA+"/parts/0", []byte("done"), token)
+	testutil.AssertStatus(t, resp, http.StatusNoContent)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions/"+sessionA+"/complete", `{}`, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+
+	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/upload-sessions/"+sessionB, "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	testutil.AssertJSONContains(t, resp, `"status":"completed"`)
+
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions/"+sessionB+"/complete", `{}`, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+
+	createBody := fmt.Sprintf(`{
+		"device_id":"%s",
+		"sync_root_id":"%s",
+		"object_id":"obj-same",
+		"version_id":"ver-same",
+		"total_size":4,
+		"chunk_size":4,
+		"encrypted_name":"enc:same.txt",
+		"metadata_json":"{}"
+	}`, deviceID, rootID)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions", createBody, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	testutil.AssertJSONContains(t, resp, `"status":"completed"`)
+}
+
 func TestGetUploadSessionReturnsProgress(t *testing.T) {
 	app, token, deviceID, rootID := testutil.NewUploadReadyServer(t)
 	sessionID := createUploadSession(t, app, token, deviceID, rootID, "obj-progress", "ver-progress", 8)

@@ -69,6 +69,20 @@ func (s *UploadService) CreateSession(ctx context.Context, userID, deviceID, syn
 	if err != nil {
 		return domain.UploadSession{}, err
 	}
+	if version, err := s.repo.GetFileVersion(ctx, userID, strings.TrimSpace(versionID)); err == nil {
+		return completedUploadSession(
+			userID,
+			strings.TrimSpace(deviceID),
+			strings.TrimSpace(syncRootID),
+			strings.TrimSpace(objectID),
+			strings.TrimSpace(versionID),
+			chunkSize,
+			version,
+			mergedMetadata,
+		), nil
+	} else if err != store.ErrNotFound {
+		return domain.UploadSession{}, err
+	}
 
 	session := domain.UploadSession{
 		ID:            newID(),
@@ -99,6 +113,22 @@ func (s *UploadService) GetSession(ctx context.Context, userID, sessionID string
 			return domain.UploadSession{}, NotFound("上传任务不存在或无权访问")
 		}
 		return domain.UploadSession{}, err
+	}
+	if session.Status == "pending" {
+		if version, err := s.repo.GetFileVersion(ctx, userID, session.VersionID); err == nil {
+			return completedUploadSession(
+				userID,
+				session.DeviceID,
+				session.SyncRootID,
+				session.ObjectID,
+				session.VersionID,
+				session.ChunkSize,
+				version,
+				session.MetadataJSON,
+			), nil
+		} else if err != store.ErrNotFound {
+			return domain.UploadSession{}, err
+		}
 	}
 	return session, nil
 }
@@ -138,6 +168,11 @@ func (s *UploadService) Complete(ctx context.Context, userID, sessionID string) 
 	}
 	if session.Status != "pending" {
 		return domain.FileVersion{}, InvalidRequest("上传任务状态不允许完成")
+	}
+	if version, err := s.repo.GetFileVersion(ctx, userID, session.VersionID); err == nil {
+		return version, nil
+	} else if err != store.ErrNotFound {
+		return domain.FileVersion{}, err
 	}
 	if session.ReceivedSize != session.TotalSize {
 		return domain.FileVersion{}, InvalidRequest("文件还没有上传完整")
@@ -194,4 +229,22 @@ func extractEncryptedName(metadataJSON string) (string, error) {
 		return "", InvalidRequest("加密文件名不能为空")
 	}
 	return value, nil
+}
+
+func completedUploadSession(userID, deviceID, syncRootID, objectID, versionID string, chunkSize int64, version domain.FileVersion, metadataJSON string) domain.UploadSession {
+	return domain.UploadSession{
+		ID:            "completed:" + versionID,
+		UserID:        userID,
+		DeviceID:      deviceID,
+		SyncRootID:    syncRootID,
+		ObjectID:      objectID,
+		VersionID:     versionID,
+		EncryptedName: version.EncryptedName,
+		TotalSize:     version.SizeBytes,
+		ChunkSize:     chunkSize,
+		ReceivedSize:  version.SizeBytes,
+		Status:        "completed",
+		MetadataJSON:  metadataJSON,
+		CreatedAt:     version.CreatedAt,
+	}
 }

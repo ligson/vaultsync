@@ -47,6 +47,23 @@ func (r *ObjectRepo) GetUploadSession(ctx context.Context, userID, sessionID str
 	return session, nil
 }
 
+func (r *ObjectRepo) GetFileVersion(ctx context.Context, userID, versionID string) (domain.FileVersion, error) {
+	var version domain.FileVersion
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, user_id, sync_root_id, object_id, encrypted_name,
+			content_path, content_hash, size_bytes, metadata_json, created_at
+		FROM file_versions
+		WHERE user_id = ? AND id = ?
+	`, userID, versionID).Scan(&version.ID, &version.UserID, &version.SyncRootID, &version.ObjectID, &version.EncryptedName, &version.ContentPath, &version.ContentHash, &version.SizeBytes, &version.MetadataJSON, &version.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.FileVersion{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.FileVersion{}, err
+	}
+	return version, nil
+}
+
 func (r *ObjectRepo) AddReceivedBytes(ctx context.Context, userID, sessionID string, bytes int64) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE upload_sessions

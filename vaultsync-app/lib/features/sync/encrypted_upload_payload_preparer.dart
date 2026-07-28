@@ -52,6 +52,11 @@ class StoredEncryptedUploadPayloadPreparer implements UploadPayloadPreparer {
     required String objectId,
     required String versionId,
   }) async {
+    if (!task.encryptionEnabled) {
+      return PlainUploadPayloadPreparer(
+        contentReader: contentReader,
+      ).prepare(task, objectId: objectId, versionId: versionId);
+    }
     final keys = await keyStore.loadUploadKeys();
     return EncryptedUploadPayloadPreparer(
       contentKeyBytes: keys.contentKeyBytes,
@@ -59,6 +64,46 @@ class StoredEncryptedUploadPayloadPreparer implements UploadPayloadPreparer {
       cipher: cipher,
       contentReader: contentReader,
     ).prepare(task, objectId: objectId, versionId: versionId);
+  }
+}
+
+class PlainUploadPayloadPreparer implements UploadPayloadPreparer {
+  final UploadContentReader contentReader;
+
+  const PlainUploadPayloadPreparer({
+    this.contentReader = const FileUploadContentReader(),
+  });
+
+  @override
+  Future<PreparedUploadPayload> prepare(
+    LocalUploadTask task, {
+    required String objectId,
+    required String versionId,
+  }) async {
+    final bytes = await contentReader.read(task);
+    final name = _fileName(task.relativePath);
+    return PreparedUploadPayload(
+      bytes: bytes,
+      encryptedName: 'vaultsync-name:plain-v1:${_base64(utf8.encode(name))}',
+      metadataJson: jsonEncode({
+        'format': 'vaultsync-metadata-plain-v1',
+        'name': name,
+        'relative_path': task.relativePath,
+        'kind': 'file',
+        'mtime_unix_ms': task.modifiedAt.millisecondsSinceEpoch,
+        'client_size': task.sizeBytes,
+        'object_id': objectId,
+        'version_id': versionId,
+      }),
+    );
+  }
+
+  String _fileName(String relativePath) {
+    return relativePath.replaceAll('\\', '/').split('/').last;
+  }
+
+  String _base64(List<int> bytes) {
+    return base64Url.encode(bytes).replaceAll('=', '');
   }
 }
 

@@ -8,6 +8,7 @@ abstract interface class SyncRootGateway {
     required String token,
     required String deviceId,
     required String encryptedPath,
+    required bool encryptionEnabled,
     required String cleanupPolicy,
     required String archivePath,
   });
@@ -78,6 +79,7 @@ class SyncService
     required String token,
     required String deviceId,
     required String encryptedPath,
+    required bool encryptionEnabled,
     required String cleanupPolicy,
     required String archivePath,
   }) async {
@@ -87,6 +89,7 @@ class SyncService
       body: {
         'device_id': deviceId,
         'encrypted_path': encryptedPath,
+        'encryption_enabled': encryptionEnabled,
         'cleanup_policy': cleanupPolicy,
         'archive_path': archivePath,
       },

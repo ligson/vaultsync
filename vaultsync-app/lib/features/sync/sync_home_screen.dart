@@ -46,6 +46,7 @@ class SyncHomeScreen extends StatefulWidget {
   final MediaBackupSourceStore? mediaBackupSources;
   final MediaBackupGateway? mediaGateway;
   final String? devicePlatform;
+  final String? currentDeviceDisplayName;
   final Future<void> Function()? onSignOut;
 
   const SyncHomeScreen({
@@ -72,6 +73,7 @@ class SyncHomeScreen extends StatefulWidget {
     this.mediaBackupSources,
     this.mediaGateway,
     this.devicePlatform,
+    this.currentDeviceDisplayName,
     this.onSignOut,
   });
 
@@ -125,6 +127,10 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     final currentDeviceName = widget.storage is CurrentDeviceInfoStore
         ? await (widget.storage as CurrentDeviceInfoStore).loadDeviceName()
         : null;
+    final currentDeviceDisplayName =
+        widget.currentDeviceDisplayName?.trim().isNotEmpty == true
+        ? widget.currentDeviceDisplayName!.trim()
+        : currentDeviceName;
     final roots = await widget.syncRoots.listSyncRoots(token: token);
     final remoteBackupEntries = await _loadRemoteBackupEntries(token, roots);
     final mappings = await widget.syncRootMappings.loadSyncRootMappings();
@@ -146,7 +152,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       remoteBackupEntries: remoteBackupEntries,
       autoSyncStatus: autoSyncStatus,
       currentDeviceId: currentDeviceId ?? '',
-      currentDeviceName: currentDeviceName ?? '',
+      currentDeviceName: currentDeviceDisplayName ?? '',
     );
   }
 
@@ -270,6 +276,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         token: token,
         deviceId: deviceId,
         encryptedPath: draft.encryptedPath,
+        encryptionEnabled: draft.encryptionEnabled,
         cleanupPolicy: draft.cleanupPolicy,
         archivePath: draft.archivePath,
       );
@@ -278,6 +285,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
           syncRootId: root.id,
           localPath: draft.localPath,
           encryptedPath: root.encryptedPath,
+          encryptionEnabled: root.encryptionEnabled,
           cleanupPolicy: root.cleanupPolicy,
           archivePath: root.archivePath,
         ),
@@ -1054,6 +1062,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       token: token,
       deviceId: deviceId,
       encryptedPath: 'media-backup:v1:$sourceId',
+      encryptionEnabled: true,
       cleanupPolicy: draft.cleanupPolicy,
       archivePath: '',
     );
@@ -1079,6 +1088,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         syncRootId: root.id,
         localPath: '',
         encryptedPath: root.encryptedPath,
+        encryptionEnabled: root.encryptionEnabled,
         cleanupPolicy: root.cleanupPolicy,
         archivePath: root.archivePath,
       ),
@@ -1639,6 +1649,7 @@ LocalUploadTask _copyUploadTask(
     sourceType: task.sourceType,
     assetId: task.assetId,
     assetMediaType: task.assetMediaType,
+    encryptionEnabled: task.encryptionEnabled,
   );
 }
 
@@ -3066,7 +3077,12 @@ class _SyncRootPanel extends StatelessWidget {
               ? colorScheme.primary
               : colorScheme.outline,
         ),
-        title: Text(rootView.displayName),
+        title: Text(
+          rootView.displayName,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -3086,17 +3102,21 @@ class _SyncRootPanel extends StatelessWidget {
                     : colorScheme.outline,
               ),
             ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                if (!rootView.isCurrentDeviceRoot)
+                  const _StatusBadge(label: '只读'),
+                _StatusBadge(label: rootView.statusLabel),
+              ],
+            ),
           ],
         ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (!rootView.isCurrentDeviceRoot)
-              const Padding(
-                padding: EdgeInsets.only(right: 6),
-                child: _StatusBadge(label: '只读'),
-              ),
-            _StatusBadge(label: rootView.statusLabel),
             PopupMenuButton<_SyncRootQuickAction>(
               key: ValueKey('sync_root_quick_actions_${rootView.root.id}'),
               tooltip: '目录操作',
@@ -3112,53 +3132,68 @@ class _SyncRootPanel extends StatelessWidget {
                     onRetryFailed?.call();
                 }
               },
-              itemBuilder: (context) => [
-                if (rootView.isUnbound && rootView.isCurrentDeviceRoot)
+              itemBuilder: (context) {
+                if (!rootView.isCurrentDeviceRoot) {
+                  return const [
+                    PopupMenuItem(
+                      enabled: false,
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(Icons.visibility_outlined),
+                        title: Text('其他设备目录仅可查看'),
+                      ),
+                    ),
+                  ];
+                }
+                return [
+                  if (rootView.isUnbound)
+                    PopupMenuItem(
+                      value: _SyncRootQuickAction.bind,
+                      enabled: onBind != null,
+                      child: const ListTile(
+                        dense: true,
+                        leading: Icon(Icons.folder_open_outlined),
+                        title: Text('绑定本地目录'),
+                      ),
+                    ),
                   PopupMenuItem(
-                    value: _SyncRootQuickAction.bind,
-                    enabled: onBind != null,
+                    value: _SyncRootQuickAction.scan,
+                    enabled: onScan != null,
                     child: const ListTile(
                       dense: true,
-                      leading: Icon(Icons.folder_open_outlined),
-                      title: Text('绑定本地目录'),
+                      leading: Icon(Icons.search),
+                      title: Text('扫描此目录'),
                     ),
                   ),
-                PopupMenuItem(
-                  value: _SyncRootQuickAction.scan,
-                  enabled: onScan != null,
-                  child: const ListTile(
-                    dense: true,
-                    leading: Icon(Icons.search),
-                    title: Text('扫描此目录'),
-                  ),
-                ),
-                PopupMenuItem(
-                  value: _SyncRootQuickAction.upload,
-                  enabled: onUpload != null,
-                  child: const ListTile(
-                    dense: true,
-                    leading: Icon(Icons.cloud_upload_outlined),
-                    title: Text('上传此目录'),
-                  ),
-                ),
-                if (rootView.failedTaskCount > 0)
                   PopupMenuItem(
-                    value: _SyncRootQuickAction.retryFailed,
-                    enabled: onRetryFailed != null,
+                    value: _SyncRootQuickAction.upload,
+                    enabled: onUpload != null,
                     child: const ListTile(
                       dense: true,
-                      leading: Icon(Icons.refresh),
-                      title: Text('重试失败任务'),
+                      leading: Icon(Icons.cloud_upload_outlined),
+                      title: Text('上传此目录'),
                     ),
                   ),
-              ],
+                  if (rootView.failedTaskCount > 0)
+                    PopupMenuItem(
+                      value: _SyncRootQuickAction.retryFailed,
+                      enabled: onRetryFailed != null,
+                      child: const ListTile(
+                        dense: true,
+                        leading: Icon(Icons.refresh),
+                        title: Text('重试失败任务'),
+                      ),
+                    ),
+                ];
+              },
             ),
-            IconButton(
-              key: ValueKey('manage_sync_root_${rootView.root.id}'),
-              tooltip: rootView.isCurrentDeviceRoot ? '管理同步目录' : '其他设备目录仅可查看',
-              onPressed: onManage,
-              icon: const Icon(Icons.settings_outlined),
-            ),
+            if (onManage != null)
+              IconButton(
+                key: ValueKey('manage_sync_root_${rootView.root.id}'),
+                tooltip: '管理同步目录',
+                onPressed: onManage,
+                icon: const Icon(Icons.settings_outlined),
+              ),
           ],
         ),
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -3207,6 +3242,12 @@ class _RootMetaRow extends StatelessWidget {
               ? Icons.phone_android_outlined
               : Icons.devices_other_outlined,
           label: rootView.deviceLine,
+        ),
+        _MetaChip(
+          icon: rootView.root.encryptionEnabled
+              ? Icons.lock_outline
+              : Icons.lock_open_outlined,
+          label: rootView.root.encryptionEnabled ? '存储：加密' : '存储：普通',
         ),
         _MetaChip(
           icon: Icons.cleaning_services_outlined,
@@ -3734,13 +3775,13 @@ class _SyncRootViewData {
   }
 
   String get deviceDisplayName {
-    final serverDeviceName = root.deviceName.trim();
-    if (serverDeviceName.isNotEmpty) {
-      return serverDeviceName;
-    }
     final localDeviceName = currentDeviceName.trim();
     if (isCurrentDeviceRoot && localDeviceName.isNotEmpty) {
       return localDeviceName;
+    }
+    final serverDeviceName = root.deviceName.trim();
+    if (serverDeviceName.isNotEmpty) {
+      return serverDeviceName;
     }
     return '设备 $shortDeviceId';
   }
@@ -4113,6 +4154,7 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
   final _localPathController = TextEditingController();
   final _encryptedPathController = TextEditingController();
   String _cleanupPolicy = 'keep';
+  bool _encryptionEnabled = true;
   String? _folderErrorMessage;
   String? _permissionStatusMessage;
 
@@ -4232,12 +4274,29 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
               TextFormField(
                 key: const ValueKey('sync_root_encrypted_path_field'),
                 controller: _encryptedPathController,
-                decoration: const InputDecoration(labelText: '加密路径'),
+                decoration: const InputDecoration(labelText: '服务器路径标识'),
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {
-                    return '请输入加密路径';
+                    return '请输入服务器路径标识';
                   }
                   return null;
+                },
+              ),
+              const SizedBox(height: 12),
+              SwitchListTile(
+                key: const ValueKey('sync_root_encryption_enabled_field'),
+                contentPadding: EdgeInsets.zero,
+                value: _encryptionEnabled,
+                title: const Text('服务器端加密存储'),
+                subtitle: Text(
+                  _encryptionEnabled
+                      ? '上传前在本机加密，服务器只保存密文'
+                      : '服务器保存原文件内容，便于在 NAS 上直接查看',
+                ),
+                onChanged: (value) {
+                  setState(() {
+                    _encryptionEnabled = value;
+                  });
                 },
               ),
               const SizedBox(height: 12),
@@ -4315,20 +4374,16 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
           child: Text('本地路径', style: Theme.of(context).textTheme.titleSmall),
         ),
         const SizedBox(height: 8),
-        RadioListTile<String>(
+        _PathChoiceTile(
           key: const ValueKey('use_downloads_path_button'),
-          value: _androidDownloadsPath,
-          groupValue: groupValue,
-          onChanged: (_) => _useAndroidDownloadsPath(),
-          contentPadding: EdgeInsets.zero,
+          selected: groupValue == _androidDownloadsPath,
+          onTap: _useAndroidDownloadsPath,
           title: const Text('同步“下载”文件夹'),
           subtitle: const Text('路径：内部存储/Download'),
         ),
-        RadioListTile<String>(
-          value: 'custom',
-          groupValue: groupValue,
-          onChanged: (_) => _chooseFolder(),
-          contentPadding: EdgeInsets.zero,
+        _PathChoiceTile(
+          selected: groupValue == 'custom',
+          onTap: _chooseFolder,
           title: const Text('同步指定文件夹'),
           subtitle: const Text('选择手机上的普通文件夹，“下载”根目录和特定系统文件夹除外'),
         ),
@@ -4369,9 +4424,40 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
       _SyncRootDraft(
         localPath: _localPathController.text.trim(),
         encryptedPath: _encryptedPathController.text.trim(),
+        encryptionEnabled: _encryptionEnabled,
         cleanupPolicy: _cleanupPolicy,
         archivePath: '',
       ),
+    );
+  }
+}
+
+class _PathChoiceTile extends StatelessWidget {
+  final bool selected;
+  final VoidCallback onTap;
+  final Widget title;
+  final Widget subtitle;
+
+  const _PathChoiceTile({
+    super.key,
+    required this.selected,
+    required this.onTap,
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      onTap: onTap,
+      leading: Icon(
+        selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+        color: selected ? colorScheme.primary : colorScheme.outline,
+      ),
+      title: title,
+      subtitle: subtitle,
     );
   }
 }
@@ -4421,6 +4507,17 @@ class _ManageSyncRootDialogState extends State<_ManageSyncRootDialog> {
               padding: const EdgeInsets.only(top: 4),
               child: Text(mapping.localPath),
             ),
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: _MetaChip(
+              icon: widget.rootView.root.encryptionEnabled
+                  ? Icons.lock_outline
+                  : Icons.lock_open_outlined,
+              label: widget.rootView.root.encryptionEnabled
+                  ? '服务器端加密存储'
+                  : '服务器端普通存储',
+            ),
+          ),
           const SizedBox(height: 12),
           DropdownButtonFormField<String>(
             key: const ValueKey('manage_sync_root_cleanup_policy_field'),
@@ -4528,12 +4625,14 @@ class _DeleteSyncRootDialogState extends State<_DeleteSyncRootDialog> {
 class _SyncRootDraft {
   final String localPath;
   final String encryptedPath;
+  final bool encryptionEnabled;
   final String cleanupPolicy;
   final String archivePath;
 
   const _SyncRootDraft({
     required this.localPath,
     required this.encryptedPath,
+    required this.encryptionEnabled,
     required this.cleanupPolicy,
     required this.archivePath,
   });

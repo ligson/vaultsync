@@ -50,6 +50,7 @@ class LocalUploadPlanner {
         uploadedBytes: _isSameFile(existingTask, file)
             ? existingTask?.uploadedBytes ?? 0
             : 0,
+        encryptionEnabled: file.encryptionEnabled,
       );
       tasksById[id] = task;
       enqueuedTasks.add(task);
@@ -81,7 +82,8 @@ class LocalUploadPlanner {
       return false;
     }
     return task.sizeBytes == file.sizeBytes &&
-        task.modifiedAt.toUtc().isAtSameMomentAs(file.modifiedAt.toUtc());
+        task.modifiedAt.toUtc().isAtSameMomentAs(file.modifiedAt.toUtc()) &&
+        task.encryptionEnabled == file.encryptionEnabled;
   }
 
   bool _isStableUploadedStatus(String status) {

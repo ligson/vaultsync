@@ -894,18 +894,19 @@ void main() {
 
     expect(find.text('其他设备：Alice MacBook'), findsWidgets);
     expect(find.text('只读'), findsOneWidget);
-    final manageButton = tester.widget<IconButton>(
+    expect(
       find.byKey(const ValueKey('manage_sync_root_root-remote')),
+      findsNothing,
     );
-    expect(manageButton.onPressed, isNull);
     expect(find.byTooltip('文件操作'), findsNothing);
 
     await tester.tap(
       find.byKey(const ValueKey('sync_root_quick_actions_root-remote')),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('扫描此目录'));
-    await tester.tap(find.text('上传此目录'));
+    expect(find.text('其他设备目录仅可查看'), findsOneWidget);
+    expect(find.text('扫描此目录'), findsNothing);
+    expect(find.text('上传此目录'), findsNothing);
     await tester.pumpAndSettle();
 
     expect(scanner.callCount, 0);
@@ -2647,6 +2648,7 @@ class FakeSyncRootGateway implements SyncRootGateway {
   String? createdToken;
   String? createdDeviceId;
   String? createdEncryptedPath;
+  bool? createdEncryptionEnabled;
   String? createdCleanupPolicy;
   String? createdArchivePath;
   String? updatedToken;
@@ -2675,12 +2677,14 @@ class FakeSyncRootGateway implements SyncRootGateway {
     required String token,
     required String deviceId,
     required String encryptedPath,
+    required bool encryptionEnabled,
     required String cleanupPolicy,
     required String archivePath,
   }) async {
     createdToken = token;
     createdDeviceId = deviceId;
     createdEncryptedPath = encryptedPath;
+    createdEncryptionEnabled = encryptionEnabled;
     createdCleanupPolicy = cleanupPolicy;
     createdArchivePath = archivePath;
     final root = SyncRoot(
@@ -2688,6 +2692,7 @@ class FakeSyncRootGateway implements SyncRootGateway {
       userId: 'user-1',
       deviceId: deviceId,
       encryptedPath: encryptedPath,
+      encryptionEnabled: encryptionEnabled,
       cleanupPolicy: cleanupPolicy,
       archivePath: archivePath,
       createdAt: '2026-06-27T01:00:00Z',
@@ -2712,6 +2717,7 @@ class FakeSyncRootGateway implements SyncRootGateway {
       userId: existing.userId,
       deviceId: existing.deviceId,
       encryptedPath: existing.encryptedPath,
+      encryptionEnabled: existing.encryptionEnabled,
       cleanupPolicy: cleanupPolicy,
       archivePath: '',
       createdAt: existing.createdAt,
@@ -2750,6 +2756,7 @@ class ThrowingSyncRootGateway implements SyncRootGateway {
     required String token,
     required String deviceId,
     required String encryptedPath,
+    required bool encryptionEnabled,
     required String cleanupPolicy,
     required String archivePath,
   }) async {

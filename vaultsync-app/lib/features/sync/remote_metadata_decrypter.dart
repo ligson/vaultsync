@@ -42,6 +42,19 @@ class XChaCha20RemoteMetadataDecrypter implements RemoteMetadataDecrypter {
   @override
   Future<RemoteBackupEntry> decrypt(RemoteBackupObject object) async {
     try {
+      final plainMetadata = _plainMetadata(object);
+      if (plainMetadata != null) {
+        final name = plainMetadata['name'] as String? ?? _plainName(object);
+        return RemoteBackupEntry(
+          syncRootId: object.syncRootId,
+          objectId: object.objectId,
+          versionId: object.versionId,
+          name: name,
+          relativePath: plainMetadata['relative_path'] as String? ?? name,
+          sizeBytes: object.sizeBytes,
+          updatedAt: object.updatedAt,
+        );
+      }
       final metadata = await _decryptMetadata(object);
       final name = await _decryptName(object);
       return RemoteBackupEntry(
@@ -64,6 +77,33 @@ class XChaCha20RemoteMetadataDecrypter implements RemoteMetadataDecrypter {
         updatedAt: object.updatedAt,
         decryptable: false,
       );
+    }
+  }
+
+  Map<String, Object?>? _plainMetadata(RemoteBackupObject object) {
+    try {
+      final metadata = jsonDecode(object.metadataJson) as Map<String, Object?>;
+      if (metadata['format'] == 'vaultsync-metadata-plain-v1') {
+        return metadata;
+      }
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
+  String _plainName(RemoteBackupObject object) {
+    const prefix = 'vaultsync-name:plain-v1:';
+    final encryptedName = object.encryptedName;
+    if (!encryptedName.startsWith(prefix)) {
+      return '未命名文件';
+    }
+    try {
+      return utf8.decode(
+        _base64UrlDecode(encryptedName.substring(prefix.length)),
+      );
+    } catch (_) {
+      return '未命名文件';
     }
   }
 

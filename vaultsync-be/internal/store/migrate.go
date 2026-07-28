@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS sync_roots (
     user_id TEXT NOT NULL,
     device_id TEXT NOT NULL,
     encrypted_path TEXT NOT NULL,
+    encryption_enabled INTEGER NOT NULL DEFAULT 1,
     cleanup_policy TEXT NOT NULL,
     archive_path TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
@@ -157,6 +158,9 @@ func migrate(db *sql.DB) error {
 		}
 	}
 	if err := ensureColumn(db, "download_releases", "size_bytes", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "sync_roots", "encryption_enabled", "INTEGER NOT NULL DEFAULT 1"); err != nil {
 		return err
 	}
 	return nil

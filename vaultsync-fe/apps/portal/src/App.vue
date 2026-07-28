@@ -34,7 +34,10 @@ const downloads = [
       <div class="hero-grid">
         <div class="hero-copy">
           <p class="eyebrow">Private encrypted sync for every device</p>
-          <h1>把你的文件云，重新放回自己手里。</h1>
+          <h1>
+            <span>把你的文件云</span>
+            <span>重新放回自己手里</span>
+          </h1>
           <p class="lead">
             VaultSync 面向个人和小团队，把 NAS、端到端加密、多端同步和相册清理组合成一套可自控的私有同步系统。
           </p>

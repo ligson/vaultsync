@@ -142,7 +142,11 @@ func (s *UploadService) Complete(ctx context.Context, userID, sessionID string) 
 	if session.ReceivedSize != session.TotalSize {
 		return domain.FileVersion{}, InvalidRequest("文件还没有上传完整")
 	}
-	contentPath, hashValue, size, err := s.storage.FinalizeUpload(userID, sessionID, session.VersionID)
+	root, err := s.syncRootRepo.GetForUser(ctx, userID, session.SyncRootID)
+	if err != nil {
+		return domain.FileVersion{}, InvalidRequest("同步目录不存在或无权访问")
+	}
+	contentPath, hashValue, size, err := s.storage.FinalizeUpload(userID, sessionID, session.VersionID, root.EncryptionEnabled)
 	if err != nil {
 		return domain.FileVersion{}, err
 	}

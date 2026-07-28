@@ -25,7 +25,7 @@ func NewSyncRootService(repo *store.SyncRootRepo, deviceRepo *store.DeviceRepo, 
 	}
 }
 
-func (s *SyncRootService) Create(ctx context.Context, userID, deviceID, encryptedPath, cleanupPolicy, archivePath string) (domain.SyncRoot, error) {
+func (s *SyncRootService) Create(ctx context.Context, userID, deviceID, encryptedPath, cleanupPolicy, archivePath string, encryptionEnabled bool) (domain.SyncRoot, error) {
 	deviceID = strings.TrimSpace(deviceID)
 	encryptedPath = strings.TrimSpace(encryptedPath)
 	cleanupPolicy = strings.TrimSpace(cleanupPolicy)
@@ -47,13 +47,14 @@ func (s *SyncRootService) Create(ctx context.Context, userID, deviceID, encrypte
 	}
 
 	root := domain.SyncRoot{
-		ID:            newID(),
-		UserID:        userID,
-		DeviceID:      deviceID,
-		EncryptedPath: encryptedPath,
-		CleanupPolicy: cleanupPolicy,
-		ArchivePath:   archivePath,
-		CreatedAt:     s.now().Format(time.RFC3339),
+		ID:                newID(),
+		UserID:            userID,
+		DeviceID:          deviceID,
+		EncryptedPath:     encryptedPath,
+		EncryptionEnabled: encryptionEnabled,
+		CleanupPolicy:     cleanupPolicy,
+		ArchivePath:       archivePath,
+		CreatedAt:         s.now().Format(time.RFC3339),
 	}
 	return s.repo.Create(ctx, root)
 }

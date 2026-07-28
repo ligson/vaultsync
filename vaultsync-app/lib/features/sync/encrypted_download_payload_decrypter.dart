@@ -48,6 +48,14 @@ class StoredEncryptedDownloadPayloadDecrypter
     required String metadataJson,
     required List<int> payloadBytes,
   }) async {
+    final plainObject = _plainObject(
+      encryptedName: encryptedName,
+      metadataJson: metadataJson,
+      payloadBytes: payloadBytes,
+    );
+    if (plainObject != null) {
+      return plainObject;
+    }
     final keys = await keyStore.loadUploadKeys();
     return EncryptedDownloadPayloadDecrypter(
       contentKeyBytes: keys.contentKeyBytes,
@@ -61,6 +69,44 @@ class StoredEncryptedDownloadPayloadDecrypter
       metadataJson: metadataJson,
       payloadBytes: payloadBytes,
     );
+  }
+
+  DecryptedRemoteObject? _plainObject({
+    required String encryptedName,
+    required String metadataJson,
+    required List<int> payloadBytes,
+  }) {
+    try {
+      final metadata = jsonDecode(metadataJson) as Map<String, Object?>;
+      if (metadata['format'] != 'vaultsync-metadata-plain-v1') {
+        return null;
+      }
+      final name = metadata['name'] as String? ?? _plainName(encryptedName);
+      return DecryptedRemoteObject(
+        name: name,
+        relativePath: metadata['relative_path'] as String? ?? name,
+        metadata: metadata,
+        bytes: payloadBytes,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _plainName(String encryptedName) {
+    const prefix = 'vaultsync-name:plain-v1:';
+    if (!encryptedName.startsWith(prefix)) {
+      return '未命名文件';
+    }
+    try {
+      return utf8.decode(
+        base64Url.decode(
+          base64Url.normalize(encryptedName.substring(prefix.length)),
+        ),
+      );
+    } catch (_) {
+      return '未命名文件';
+    }
   }
 }
 

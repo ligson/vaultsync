@@ -44,6 +44,7 @@ class LocalSyncScanner implements LocalSyncScanGateway {
             relativePath: _relativePath(mapping.localPath, entity.path),
             sizeBytes: stat.size,
             modifiedAt: stat.modified,
+            encryptionEnabled: mapping.encryptionEnabled,
           ),
         );
       }

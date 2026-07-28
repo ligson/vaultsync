@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -34,6 +36,43 @@ func TestUploadCiphertextAndCompleteVersion(t *testing.T) {
 	testutil.AssertStatus(t, resp, http.StatusNoContent)
 	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions/"+sessionID+"/complete", `{}`, token)
 	testutil.AssertStatus(t, resp, http.StatusCreated)
+}
+
+func TestPlainSyncRootStoresPlainObject(t *testing.T) {
+	instance, app := testutil.NewTestAppAndServer(t)
+	token := registerAndLogin(t, app, "plain@example.com")
+
+	deviceBody := `{"name":"Alice MacBook","platform":"macos"}`
+	resp := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/devices", deviceBody, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	deviceID := testutil.MustReadJSONField(t, resp, "id")
+
+	rootBody := fmt.Sprintf(`{"device_id":"%s","encrypted_path":"base64:path","encryption_enabled":false,"cleanup_policy":"keep","archive_path":""}`, deviceID)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/sync-roots", rootBody, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	rootID := testutil.MustReadJSONField(t, resp, "id")
+
+	sessionID := createUploadSession(t, app, token, deviceID, rootID, "obj-plain", "ver-plain", 5)
+	resp = testutil.BinaryRequest(t, app, http.MethodPut, "/api/v1/upload-sessions/"+sessionID+"/parts/0", []byte("hello"), token)
+	testutil.AssertStatus(t, resp, http.StatusNoContent)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions/"+sessionID+"/complete", `{}`, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+
+	path := filepath.Join(instance.Config.DataDir, "objects")
+	matches, err := filepath.Glob(filepath.Join(path, "*", "plain", "ver-plain.bin"))
+	if err != nil {
+		t.Fatalf("glob plain object: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected one plain object under %s, got %v", path, matches)
+	}
+	content, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("read plain object: %v", err)
+	}
+	if string(content) != "hello" {
+		t.Fatalf("unexpected plain object content: %q", string(content))
+	}
 }
 
 func TestGetUploadSessionReturnsProgress(t *testing.T) {

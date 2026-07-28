@@ -59,6 +59,7 @@ void main() {
           expect(jsonDecode(request.body), {
             'device_id': 'device-1',
             'encrypted_path': 'base64:new-path',
+            'encryption_enabled': false,
             'cleanup_policy': 'archive',
             'archive_path': 'base64:archive-path',
           });
@@ -72,6 +73,7 @@ void main() {
                 'user_id': 'user-1',
                 'device_id': 'device-1',
                 'encrypted_path': 'base64:new-path',
+                'encryption_enabled': false,
                 'cleanup_policy': 'archive',
                 'archive_path': 'base64:archive-path',
                 'created_at': '2026-06-27T01:00:00Z',
@@ -87,6 +89,7 @@ void main() {
       token: 'server-token',
       deviceId: 'device-1',
       encryptedPath: 'base64:new-path',
+      encryptionEnabled: false,
       cleanupPolicy: 'archive',
       archivePath: 'base64:archive-path',
     );
@@ -94,6 +97,7 @@ void main() {
     expect(root.id, 'root-2');
     expect(root.deviceId, 'device-1');
     expect(root.encryptedPath, 'base64:new-path');
+    expect(root.encryptionEnabled, isFalse);
     expect(root.cleanupPolicy, 'archive');
     expect(root.archivePath, 'base64:archive-path');
   });

@@ -214,12 +214,15 @@ class VaultSyncApp extends StatefulWidget {
 
 class _VaultSyncAppState extends State<VaultSyncApp> {
   late Uri _apiBaseUrl;
+  late DeviceProfile _deviceProfile;
   bool _serverSettingsLoaded = false;
 
   @override
   void initState() {
     super.initState();
     _apiBaseUrl = widget.config.apiBaseUrl;
+    _deviceProfile = DeviceProfile.current();
+    _loadDeviceProfile();
     _loadServerSettings();
   }
 
@@ -253,7 +256,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
         : SyncService(apiClient);
     final resolvedUploads = widget.uploads ?? UploadApiService(apiClient);
     final resolvedDownloads = widget.downloads ?? DownloadService(apiClient);
-    final deviceProfile = DeviceProfile.current();
+    final deviceProfile = _deviceProfile;
     final mediaGateway = const PhotoManagerMediaGateway();
     final resolvedUploadExecutor =
         widget.uploadExecutor ??
@@ -326,6 +329,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
                   ? widget.storage as MediaBackupSourceStore
                   : null,
               mediaGateway: mediaGateway,
+              currentDeviceDisplayName: deviceProfile.name,
               autoSyncEnabled: widget.autoSyncEnabled,
               onSignOut: _signOut,
             );
@@ -362,6 +366,16 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
         },
       ),
     );
+  }
+
+  Future<void> _loadDeviceProfile() async {
+    final profile = await DeviceProfile.currentFriendly();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _deviceProfile = profile;
+    });
   }
 
   Future<bool> _hasLocalSession(AuthGateway auth) async {

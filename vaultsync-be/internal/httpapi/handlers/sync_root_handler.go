@@ -21,17 +21,22 @@ func NewSyncRootHandler(service *service.SyncRootService) *SyncRootHandler {
 func (h *SyncRootHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.MustUserID(r.Context())
 	var req struct {
-		DeviceID      string `json:"device_id"`
-		EncryptedPath string `json:"encrypted_path"`
-		CleanupPolicy string `json:"cleanup_policy"`
-		ArchivePath   string `json:"archive_path"`
+		DeviceID          string `json:"device_id"`
+		EncryptedPath     string `json:"encrypted_path"`
+		EncryptionEnabled *bool  `json:"encryption_enabled"`
+		CleanupPolicy     string `json:"cleanup_policy"`
+		ArchivePath       string `json:"archive_path"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
 		return
 	}
 
-	root, err := h.service.Create(r.Context(), userID, req.DeviceID, req.EncryptedPath, req.CleanupPolicy, req.ArchivePath)
+	encryptionEnabled := true
+	if req.EncryptionEnabled != nil {
+		encryptionEnabled = *req.EncryptionEnabled
+	}
+	root, err := h.service.Create(r.Context(), userID, req.DeviceID, req.EncryptedPath, req.CleanupPolicy, req.ArchivePath, encryptionEnabled)
 	if err != nil {
 		writeServiceError(w, err)
 		return

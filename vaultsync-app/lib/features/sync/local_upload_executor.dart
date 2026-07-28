@@ -48,6 +48,8 @@ class UploadExecutionResult {
 typedef UploadTaskIDFactory = String Function(LocalUploadTask task);
 
 class LocalUploadExecutor implements LocalUploadExecutionGateway {
+  static const _progressPersistBytes = 8 * 1024 * 1024;
+
   final SessionStore sessionStore;
   final UploadTaskStore uploadTasks;
   final UploadGateway uploads;
@@ -143,6 +145,8 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
         }
 
         var partIndex = session.receivedSize ~/ chunkSize;
+        var nextProgressPersistAt =
+            session.receivedSize + _progressPersistBytes;
         for (
           var offset = session.receivedSize;
           offset < payload.bytes.length;
@@ -165,7 +169,10 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
             uploadChunkSize: chunkSize,
             uploadedBytes: end,
           );
-          await _saveProgress(updatedTasks, tasks, taskIndex, currentTask);
+          if (end == payload.bytes.length || end >= nextProgressPersistAt) {
+            await _saveProgress(updatedTasks, tasks, taskIndex, currentTask);
+            nextProgressPersistAt = end + _progressPersistBytes;
+          }
           partIndex += 1;
         }
         await uploads.completeUploadSession(
@@ -305,6 +312,7 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
       sourceType: task.sourceType,
       assetId: task.assetId,
       assetMediaType: task.assetMediaType,
+      encryptionEnabled: task.encryptionEnabled,
     );
   }
 

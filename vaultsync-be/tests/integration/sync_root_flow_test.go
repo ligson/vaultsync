@@ -21,6 +21,7 @@ func TestRegisterAndManageSyncRoots(t *testing.T) {
 	rootBody := fmt.Sprintf(`{"device_id":"%s","encrypted_path":"base64:path","cleanup_policy":"delete","archive_path":""}`, deviceID)
 	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/sync-roots", rootBody, token)
 	testutil.AssertStatus(t, resp, http.StatusCreated)
+	testutil.AssertJSONContains(t, resp, `"encryption_enabled":true`)
 
 	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/sync-roots", "", token)
 	testutil.AssertStatus(t, resp, http.StatusOK)
@@ -29,6 +30,20 @@ func TestRegisterAndManageSyncRoots(t *testing.T) {
 	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/sync-roots", "", token)
 	testutil.AssertStatus(t, resp, http.StatusOK)
 	testutil.AssertJSONContains(t, resp, `"device_name":"Alice MacBook"`)
+}
+
+func TestCreatePlainSyncRoot(t *testing.T) {
+	app, token := testutil.NewAuthenticatedServer(t)
+
+	deviceBody := `{"name":"Alice MacBook","platform":"macos"}`
+	resp := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/devices", deviceBody, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	deviceID := testutil.MustReadJSONField(t, resp, "id")
+
+	rootBody := fmt.Sprintf(`{"device_id":"%s","encrypted_path":"base64:path","encryption_enabled":false,"cleanup_policy":"keep","archive_path":""}`, deviceID)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/sync-roots", rootBody, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	testutil.AssertJSONContains(t, resp, `"encryption_enabled":false`)
 }
 
 func TestSyncRootRemoteObjectsSubrouteReturnsJSONEnvelope(t *testing.T) {

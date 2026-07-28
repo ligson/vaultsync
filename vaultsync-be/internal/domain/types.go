@@ -27,14 +27,15 @@ type Device struct {
 }
 
 type SyncRoot struct {
-	ID            string `json:"id"`
-	UserID        string `json:"user_id"`
-	DeviceID      string `json:"device_id"`
-	DeviceName    string `json:"device_name,omitempty"`
-	EncryptedPath string `json:"encrypted_path"`
-	CleanupPolicy string `json:"cleanup_policy"`
-	ArchivePath   string `json:"archive_path"`
-	CreatedAt     string `json:"created_at"`
+	ID                string `json:"id"`
+	UserID            string `json:"user_id"`
+	DeviceID          string `json:"device_id"`
+	DeviceName        string `json:"device_name,omitempty"`
+	EncryptedPath     string `json:"encrypted_path"`
+	EncryptionEnabled bool   `json:"encryption_enabled"`
+	CleanupPolicy     string `json:"cleanup_policy"`
+	ArchivePath       string `json:"archive_path"`
+	CreatedAt         string `json:"created_at"`
 }
 
 type UploadSession struct {

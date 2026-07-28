@@ -4,6 +4,7 @@ class SyncRoot {
   final String deviceId;
   final String deviceName;
   final String encryptedPath;
+  final bool encryptionEnabled;
   final String cleanupPolicy;
   final String archivePath;
   final String createdAt;
@@ -14,6 +15,7 @@ class SyncRoot {
     required this.deviceId,
     this.deviceName = '',
     required this.encryptedPath,
+    this.encryptionEnabled = true,
     required this.cleanupPolicy,
     required this.archivePath,
     required this.createdAt,
@@ -26,6 +28,7 @@ class SyncRoot {
       deviceId: json['device_id'] as String,
       deviceName: json['device_name'] as String? ?? '',
       encryptedPath: json['encrypted_path'] as String,
+      encryptionEnabled: json['encryption_enabled'] as bool? ?? true,
       cleanupPolicy: json['cleanup_policy'] as String,
       archivePath: json['archive_path'] as String? ?? '',
       createdAt: json['created_at'] as String,
@@ -37,6 +40,7 @@ class LocalSyncRootMapping {
   final String syncRootId;
   final String localPath;
   final String encryptedPath;
+  final bool encryptionEnabled;
   final String cleanupPolicy;
   final String archivePath;
 
@@ -44,6 +48,7 @@ class LocalSyncRootMapping {
     required this.syncRootId,
     required this.localPath,
     required this.encryptedPath,
+    this.encryptionEnabled = true,
     required this.cleanupPolicy,
     required this.archivePath,
   });
@@ -53,6 +58,7 @@ class LocalSyncRootMapping {
       syncRootId: json['sync_root_id'] as String,
       localPath: json['local_path'] as String,
       encryptedPath: json['encrypted_path'] as String,
+      encryptionEnabled: json['encryption_enabled'] as bool? ?? true,
       cleanupPolicy: json['cleanup_policy'] as String,
       archivePath: json['archive_path'] as String? ?? '',
     );
@@ -63,6 +69,7 @@ class LocalSyncRootMapping {
       'sync_root_id': syncRootId,
       'local_path': localPath,
       'encrypted_path': encryptedPath,
+      'encryption_enabled': encryptionEnabled,
       'cleanup_policy': cleanupPolicy,
       'archive_path': archivePath,
     };
@@ -75,6 +82,7 @@ class LocalSyncFile {
   final String relativePath;
   final int sizeBytes;
   final DateTime modifiedAt;
+  final bool encryptionEnabled;
 
   const LocalSyncFile({
     required this.syncRootId,
@@ -82,6 +90,7 @@ class LocalSyncFile {
     required this.relativePath,
     required this.sizeBytes,
     required this.modifiedAt,
+    this.encryptionEnabled = true,
   });
 }
 
@@ -104,6 +113,7 @@ class LocalUploadTask {
   final String sourceType;
   final String assetId;
   final String assetMediaType;
+  final bool encryptionEnabled;
 
   const LocalUploadTask({
     required this.id,
@@ -124,6 +134,7 @@ class LocalUploadTask {
     this.sourceType = 'file',
     this.assetId = '',
     this.assetMediaType = '',
+    this.encryptionEnabled = true,
   });
 
   factory LocalUploadTask.fromJson(Map<String, Object?> json) {
@@ -146,6 +157,7 @@ class LocalUploadTask {
       sourceType: json['source_type'] as String? ?? 'file',
       assetId: json['asset_id'] as String? ?? '',
       assetMediaType: json['asset_media_type'] as String? ?? '',
+      encryptionEnabled: json['encryption_enabled'] as bool? ?? true,
     );
   }
 
@@ -169,6 +181,7 @@ class LocalUploadTask {
       'source_type': sourceType,
       'asset_id': assetId,
       'asset_media_type': assetMediaType,
+      'encryption_enabled': encryptionEnabled,
     };
   }
 }

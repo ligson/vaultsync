@@ -31,9 +31,13 @@ func (s *FSStorage) AppendChunk(userID, sessionID string, chunk io.Reader) (int6
 	return io.Copy(file, chunk)
 }
 
-func (s *FSStorage) FinalizeUpload(userID, sessionID, versionID string) (string, string, int64, error) {
+func (s *FSStorage) FinalizeUpload(userID, sessionID, versionID string, encrypted bool) (string, string, int64, error) {
 	sourcePath := filepath.Join(s.rootDir, "uploads", userID, sessionID+".part")
-	targetPath := filepath.Join(s.rootDir, "objects", userID, versionID+".bin")
+	storageClass := "plain"
+	if encrypted {
+		storageClass = "encrypted"
+	}
+	targetPath := filepath.Join(s.rootDir, "objects", userID, storageClass, versionID+".bin")
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 		return "", "", 0, err
 	}

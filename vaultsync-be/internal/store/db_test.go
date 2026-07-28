@@ -28,7 +28,7 @@ func TestOpenRunsMigrationsAndEnablesWAL(t *testing.T) {
 		"users":             {"id", "email", "password_hash", "role", "status", "quota_bytes", "used_bytes", "created_at"},
 		"sessions":          {"token_id", "user_id", "device_id", "created_at", "expires_at"},
 		"devices":           {"id", "user_id", "name", "platform", "created_at"},
-		"sync_roots":        {"id", "user_id", "device_id", "encrypted_path", "cleanup_policy", "archive_path", "created_at"},
+		"sync_roots":        {"id", "user_id", "device_id", "encrypted_path", "encryption_enabled", "cleanup_policy", "archive_path", "created_at"},
 		"upload_sessions":   {"id", "user_id", "device_id", "sync_root_id", "object_id", "version_id", "total_size", "chunk_size", "received_size", "status", "metadata_json", "created_at"},
 		"file_versions":     {"id", "user_id", "sync_root_id", "object_id", "encrypted_name", "content_path", "content_hash", "size_bytes", "metadata_json", "created_at"},
 		"file_tombstones":   {"id", "user_id", "device_id", "sync_root_id", "object_id", "metadata_json", "created_at"},

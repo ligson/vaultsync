@@ -38,13 +38,13 @@ func Auth(tokenVerifier TokenVerifier, next http.Handler) http.Handler {
 		header := r.Header.Get("Authorization")
 		tokenValue, ok := strings.CutPrefix(header, "Bearer ")
 		if !ok || tokenValue == "" {
-			writeAuthError(w, "missing bearer token")
+			writeAuthError(w, "请先登录")
 			return
 		}
 
 		claims, err := tokenVerifier.VerifyToken(tokenValue)
 		if err != nil {
-			writeAuthError(w, "invalid bearer token")
+			writeAuthError(w, "登录状态已失效，请重新登录")
 			return
 		}
 

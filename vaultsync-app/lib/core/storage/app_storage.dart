@@ -21,6 +21,10 @@ abstract interface class SessionStore {
   Future<void> saveDevice(RegisteredDevice device);
 }
 
+abstract interface class CurrentDeviceInfoStore {
+  Future<String?> loadDeviceName();
+}
+
 abstract interface class ServerSettingsStore {
   Future<String?> loadServerAddress();
 
@@ -94,6 +98,7 @@ class AppStorage
     implements
         ServerSettingsStore,
         SessionStore,
+        CurrentDeviceInfoStore,
         SyncRootMappingStore,
         UploadTaskStore,
         MediaBackupSourceStore,
@@ -173,6 +178,12 @@ class AppStorage
   Future<String?> loadDeviceId() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_deviceIdKey);
+  }
+
+  @override
+  Future<String?> loadDeviceName() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_deviceNameKey);
   }
 
   @override

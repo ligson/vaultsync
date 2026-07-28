@@ -30,10 +30,12 @@ func (r *SyncRootRepo) Create(ctx context.Context, root domain.SyncRoot) (domain
 func (r *SyncRootRepo) GetForUser(ctx context.Context, userID, rootID string) (domain.SyncRoot, error) {
 	var root domain.SyncRoot
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, user_id, device_id, encrypted_path, cleanup_policy, archive_path, created_at
-		FROM sync_roots
-		WHERE user_id = ? AND id = ?
-	`, userID, rootID).Scan(&root.ID, &root.UserID, &root.DeviceID, &root.EncryptedPath, &root.CleanupPolicy, &root.ArchivePath, &root.CreatedAt)
+		SELECT sr.id, sr.user_id, sr.device_id, COALESCE(d.name, ''),
+			sr.encrypted_path, sr.cleanup_policy, sr.archive_path, sr.created_at
+		FROM sync_roots sr
+		LEFT JOIN devices d ON d.id = sr.device_id AND d.user_id = sr.user_id
+		WHERE sr.user_id = ? AND sr.id = ?
+	`, userID, rootID).Scan(&root.ID, &root.UserID, &root.DeviceID, &root.DeviceName, &root.EncryptedPath, &root.CleanupPolicy, &root.ArchivePath, &root.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.SyncRoot{}, ErrNotFound
 	}
@@ -45,10 +47,12 @@ func (r *SyncRootRepo) GetForUser(ctx context.Context, userID, rootID string) (d
 
 func (r *SyncRootRepo) ListByUser(ctx context.Context, userID string) ([]domain.SyncRoot, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, user_id, device_id, encrypted_path, cleanup_policy, archive_path, created_at
-		FROM sync_roots
-		WHERE user_id = ?
-		ORDER BY created_at, id
+		SELECT sr.id, sr.user_id, sr.device_id, COALESCE(d.name, ''),
+			sr.encrypted_path, sr.cleanup_policy, sr.archive_path, sr.created_at
+		FROM sync_roots sr
+		LEFT JOIN devices d ON d.id = sr.device_id AND d.user_id = sr.user_id
+		WHERE sr.user_id = ?
+		ORDER BY sr.created_at, sr.id
 	`, userID)
 	if err != nil {
 		return nil, err
@@ -58,7 +62,7 @@ func (r *SyncRootRepo) ListByUser(ctx context.Context, userID string) ([]domain.
 	roots := make([]domain.SyncRoot, 0)
 	for rows.Next() {
 		var root domain.SyncRoot
-		if err := rows.Scan(&root.ID, &root.UserID, &root.DeviceID, &root.EncryptedPath, &root.CleanupPolicy, &root.ArchivePath, &root.CreatedAt); err != nil {
+		if err := rows.Scan(&root.ID, &root.UserID, &root.DeviceID, &root.DeviceName, &root.EncryptedPath, &root.CleanupPolicy, &root.ArchivePath, &root.CreatedAt); err != nil {
 			return nil, err
 		}
 		roots = append(roots, root)

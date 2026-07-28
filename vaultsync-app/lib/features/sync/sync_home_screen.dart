@@ -121,6 +121,10 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     if (token == null || token.isEmpty) {
       throw Exception('登录状态已失效');
     }
+    final currentDeviceId = await widget.storage.loadDeviceId();
+    final currentDeviceName = widget.storage is CurrentDeviceInfoStore
+        ? await (widget.storage as CurrentDeviceInfoStore).loadDeviceName()
+        : null;
     final roots = await widget.syncRoots.listSyncRoots(token: token);
     final remoteBackupEntries = await _loadRemoteBackupEntries(token, roots);
     final mappings = await widget.syncRootMappings.loadSyncRootMappings();
@@ -141,6 +145,8 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       issues: issues,
       remoteBackupEntries: remoteBackupEntries,
       autoSyncStatus: autoSyncStatus,
+      currentDeviceId: currentDeviceId ?? '',
+      currentDeviceName: currentDeviceName ?? '',
     );
   }
 
@@ -369,9 +375,9 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       _isUploading = true;
     });
     try {
-      final result = await executor.executePendingUploads(
-        syncRootId: syncRootId,
-      );
+      final result = syncRootId == null
+          ? await _executeCurrentDevicePendingUploads(executor)
+          : await executor.executePendingUploads(syncRootId: syncRootId);
       await _addHistory(
         type: 'upload',
         result: result.failedCount > 0 ? 'failed' : 'success',
@@ -413,6 +419,34 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         });
       }
     }
+  }
+
+  Future<UploadExecutionResult> _executeCurrentDevicePendingUploads(
+    LocalUploadExecutionGateway executor,
+  ) async {
+    final token = await widget.storage.loadAuthToken();
+    final currentDeviceId = await widget.storage.loadDeviceId();
+    if (token == null || token.isEmpty) {
+      throw Exception('登录状态已失效');
+    }
+    if (currentDeviceId == null || currentDeviceId.isEmpty) {
+      throw Exception('设备状态已失效');
+    }
+    final roots = await widget.syncRoots.listSyncRoots(token: token);
+    var uploadedCount = 0;
+    var failedCount = 0;
+    for (final root in roots) {
+      if (root.deviceId != currentDeviceId) {
+        continue;
+      }
+      final result = await executor.executePendingUploads(syncRootId: root.id);
+      uploadedCount += result.uploadedCount;
+      failedCount += result.failedCount;
+    }
+    return UploadExecutionResult(
+      uploadedCount: uploadedCount,
+      failedCount: failedCount,
+    );
   }
 
   Future<void> _ensureAndroidSharedMediaDirectoryPermission(
@@ -761,7 +795,9 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         setState(() {
           _isUploading = true;
         });
-        final result = await uploadExecutor.executePendingUploads();
+        final result = await _executeCurrentDevicePendingUploads(
+          uploadExecutor,
+        );
         uploadedCount = result.uploadedCount;
         failedCount = result.failedCount;
         if (mounted) {
@@ -1192,10 +1228,19 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
                   _SyncRootPanel(
                     rootView: rootView,
                     initiallyExpanded: rootViews.length == 1,
-                    onManage: () => _openManageSyncRootDialog(rootView),
-                    onScan: () => _scanLocalFiles(syncRootId: rootView.root.id),
-                    onBind: () => _bindLocalFolder(rootView),
-                    onUpload: widget.uploadExecutor == null || _isUploading
+                    onManage: rootView.isCurrentDeviceRoot
+                        ? () => _openManageSyncRootDialog(rootView)
+                        : null,
+                    onScan: rootView.canRunLocalSync
+                        ? () => _scanLocalFiles(syncRootId: rootView.root.id)
+                        : null,
+                    onBind: rootView.isCurrentDeviceRoot
+                        ? () => _bindLocalFolder(rootView)
+                        : null,
+                    onUpload:
+                        widget.uploadExecutor == null ||
+                            _isUploading ||
+                            !rootView.canRunLocalSync
                         ? null
                         : () => _executePendingUploads(
                             syncRootId: rootView.root.id,
@@ -1203,13 +1248,18 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
                     onRetryFailed:
                         widget.uploadExecutor == null ||
                             _isUploading ||
-                            rootView.failedTaskCount == 0
+                            rootView.failedTaskCount == 0 ||
+                            !rootView.isCurrentDeviceRoot
                         ? null
                         : () =>
                               _retryFailedUploads(syncRootId: rootView.root.id),
-                    onDeleteFile: (file) => _deleteRemoteFile(rootView, file),
-                    onDeleteFolder: (folderPath) =>
-                        _deleteRemoteFolder(rootView, folderPath),
+                    onDeleteFile: rootView.isCurrentDeviceRoot
+                        ? (file) => _deleteRemoteFile(rootView, file)
+                        : null,
+                    onDeleteFolder: rootView.isCurrentDeviceRoot
+                        ? (folderPath) =>
+                              _deleteRemoteFolder(rootView, folderPath)
+                        : null,
                   ),
             ],
           );
@@ -1599,6 +1649,8 @@ class _SyncHomeData {
   final List<LocalSyncIssue> issues;
   final Map<String, List<RemoteBackupEntry>> remoteBackupEntries;
   final AutoSyncStatus autoSyncStatus;
+  final String currentDeviceId;
+  final String currentDeviceName;
 
   const _SyncHomeData({
     this.roots = const [],
@@ -1607,6 +1659,8 @@ class _SyncHomeData {
     this.issues = const [],
     this.remoteBackupEntries = const {},
     this.autoSyncStatus = const AutoSyncStatus(),
+    this.currentDeviceId = '',
+    this.currentDeviceName = '',
   });
 
   List<LocalSyncIssue> get openIssues {
@@ -1631,6 +1685,8 @@ class _SyncHomeData {
               if (issue.syncRootId == root.id) issue,
           ],
           remoteBackups: remoteBackupEntries[root.id] ?? const [],
+          currentDeviceId: currentDeviceId,
+          currentDeviceName: currentDeviceName,
         ),
     ];
   }
@@ -2974,13 +3030,13 @@ class _RootStatusLine extends StatelessWidget {
 class _SyncRootPanel extends StatelessWidget {
   final _SyncRootViewData rootView;
   final bool initiallyExpanded;
-  final VoidCallback onManage;
-  final VoidCallback onScan;
-  final VoidCallback onBind;
+  final VoidCallback? onManage;
+  final VoidCallback? onScan;
+  final VoidCallback? onBind;
   final VoidCallback? onUpload;
   final VoidCallback? onRetryFailed;
-  final ValueChanged<_UnifiedFileRecord> onDeleteFile;
-  final ValueChanged<String> onDeleteFolder;
+  final ValueChanged<_UnifiedFileRecord>? onDeleteFile;
+  final ValueChanged<String>? onDeleteFolder;
 
   const _SyncRootPanel({
     required this.rootView,
@@ -2996,24 +3052,50 @@ class _SyncRootPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 6),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       child: ExpansionTile(
         initiallyExpanded: initiallyExpanded,
         leading: Icon(
-          Icons.folder_outlined,
-          color: Theme.of(context).colorScheme.primary,
+          rootView.isCurrentDeviceRoot
+              ? Icons.folder_outlined
+              : Icons.folder_shared_outlined,
+          color: rootView.isCurrentDeviceRoot
+              ? colorScheme.primary
+              : colorScheme.outline,
         ),
         title: Text(rootView.displayName),
-        subtitle: Text(
-          rootView.subtitle,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              rootView.subtitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              rootView.deviceLine,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: rootView.isCurrentDeviceRoot
+                    ? colorScheme.primary
+                    : colorScheme.outline,
+              ),
+            ),
+          ],
         ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (!rootView.isCurrentDeviceRoot)
+              const Padding(
+                padding: EdgeInsets.only(right: 6),
+                child: _StatusBadge(label: '只读'),
+              ),
             _StatusBadge(label: rootView.statusLabel),
             PopupMenuButton<_SyncRootQuickAction>(
               key: ValueKey('sync_root_quick_actions_${rootView.root.id}'),
@@ -3021,9 +3103,9 @@ class _SyncRootPanel extends StatelessWidget {
               onSelected: (action) {
                 switch (action) {
                   case _SyncRootQuickAction.bind:
-                    onBind();
+                    onBind?.call();
                   case _SyncRootQuickAction.scan:
-                    onScan();
+                    onScan?.call();
                   case _SyncRootQuickAction.upload:
                     onUpload?.call();
                   case _SyncRootQuickAction.retryFailed:
@@ -3031,18 +3113,20 @@ class _SyncRootPanel extends StatelessWidget {
                 }
               },
               itemBuilder: (context) => [
-                if (rootView.isUnbound)
-                  const PopupMenuItem(
+                if (rootView.isUnbound && rootView.isCurrentDeviceRoot)
+                  PopupMenuItem(
                     value: _SyncRootQuickAction.bind,
-                    child: ListTile(
+                    enabled: onBind != null,
+                    child: const ListTile(
                       dense: true,
                       leading: Icon(Icons.folder_open_outlined),
                       title: Text('绑定本地目录'),
                     ),
                   ),
-                const PopupMenuItem(
+                PopupMenuItem(
                   value: _SyncRootQuickAction.scan,
-                  child: ListTile(
+                  enabled: onScan != null,
+                  child: const ListTile(
                     dense: true,
                     leading: Icon(Icons.search),
                     title: Text('扫描此目录'),
@@ -3071,7 +3155,7 @@ class _SyncRootPanel extends StatelessWidget {
             ),
             IconButton(
               key: ValueKey('manage_sync_root_${rootView.root.id}'),
-              tooltip: '管理同步目录',
+              tooltip: rootView.isCurrentDeviceRoot ? '管理同步目录' : '其他设备目录仅可查看',
               onPressed: onManage,
               icon: const Icon(Icons.settings_outlined),
             ),
@@ -3080,6 +3164,10 @@ class _SyncRootPanel extends StatelessWidget {
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
         children: [
           _RootMetaRow(rootView: rootView),
+          if (!rootView.isCurrentDeviceRoot) ...[
+            const SizedBox(height: 8),
+            _ReadOnlyDeviceNotice(deviceLine: rootView.deviceLine),
+          ],
           if (rootView.shouldShowDeletePolicyNotice) ...[
             const SizedBox(height: 8),
             _DeletePolicyNotice(
@@ -3114,6 +3202,12 @@ class _RootMetaRow extends StatelessWidget {
       spacing: 8,
       runSpacing: 6,
       children: [
+        _MetaChip(
+          icon: rootView.isCurrentDeviceRoot
+              ? Icons.phone_android_outlined
+              : Icons.devices_other_outlined,
+          label: rootView.deviceLine,
+        ),
         _MetaChip(
           icon: Icons.cleaning_services_outlined,
           label: '清理策略：${_cleanupPolicyLabel(rootView.root.cleanupPolicy)}',
@@ -3172,10 +3266,37 @@ class _MetaChip extends StatelessWidget {
   }
 }
 
+class _ReadOnlyDeviceNotice extends StatelessWidget {
+  final String deviceLine;
+
+  const _ReadOnlyDeviceNotice({required this.deviceLine});
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
+        border: Border.all(color: colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.visibility_outlined, size: 18, color: colorScheme.outline),
+          const SizedBox(width: 8),
+          Expanded(child: Text('$deviceLine。此目录不是当前设备创建的，只能查看服务器备份和状态。')),
+        ],
+      ),
+    );
+  }
+}
+
 class _UnifiedFileTree extends StatefulWidget {
   final _SyncRootViewData rootView;
-  final ValueChanged<_UnifiedFileRecord> onDeleteFile;
-  final ValueChanged<String> onDeleteFolder;
+  final ValueChanged<_UnifiedFileRecord>? onDeleteFile;
+  final ValueChanged<String>? onDeleteFolder;
 
   const _UnifiedFileTree({
     required this.rootView,
@@ -3188,7 +3309,10 @@ class _UnifiedFileTree extends StatefulWidget {
 }
 
 class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
+  static const _entryBatchSize = 150;
+
   final _expandedFolders = <String>{};
+  var _visibleEntryLimit = _entryBatchSize;
 
   void _toggleFolder(String path) {
     setState(() {
@@ -3218,26 +3342,53 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
       widget.rootView.fileEntries,
       widget.rootView,
     );
+    final allVisibleEntries = [
+      for (final entry in _UnifiedTreeEntry.fromFiles(
+        widget.rootView.fileEntries,
+      ))
+        if (_isVisible(entry)) entry,
+    ];
+    final visibleEntries = allVisibleEntries
+        .take(_visibleEntryLimit)
+        .toList(growable: false);
+    final hiddenCount = allVisibleEntries.length - visibleEntries.length;
     return Column(
       children: [
-        for (final entry in _UnifiedTreeEntry.fromFiles(
-          widget.rootView.fileEntries,
-        ))
-          if (_isVisible(entry))
-            switch (entry) {
-              _UnifiedFolderEntry() => _UnifiedFolderRow(
-                entry: entry,
-                summary: folderSummaries.byPath[entry.path]!,
-                expanded: _expandedFolders.contains(entry.path),
-                onToggle: () => _toggleFolder(entry.path),
-                onDelete: () => widget.onDeleteFolder(entry.path),
+        for (final entry in visibleEntries)
+          switch (entry) {
+            _UnifiedFolderEntry() => _UnifiedFolderRow(
+              entry: entry,
+              summary: folderSummaries.byPath[entry.path]!,
+              expanded: _expandedFolders.contains(entry.path),
+              onToggle: () => _toggleFolder(entry.path),
+              onDelete: widget.onDeleteFolder == null
+                  ? null
+                  : () => widget.onDeleteFolder?.call(entry.path),
+            ),
+            _UnifiedFileEntry() => _UnifiedFileRow(
+              entry: entry,
+              statusLabel: widget.rootView.fileStatusLabel(entry.file),
+              onDelete: widget.onDeleteFile == null
+                  ? null
+                  : () => widget.onDeleteFile?.call(entry.file),
+            ),
+          },
+        if (hiddenCount > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: OutlinedButton.icon(
+              key: ValueKey('load_more_files_${widget.rootView.root.id}'),
+              onPressed: () {
+                setState(() {
+                  _visibleEntryLimit += _entryBatchSize;
+                });
+              },
+              icon: const Icon(Icons.expand_more),
+              label: Text(
+                '继续显示 ${hiddenCount > _entryBatchSize ? _entryBatchSize : hiddenCount} 项',
               ),
-              _UnifiedFileEntry() => _UnifiedFileRow(
-                entry: entry,
-                statusLabel: widget.rootView.fileStatusLabel(entry.file),
-                onDelete: () => widget.onDeleteFile(entry.file),
-              ),
-            },
+            ),
+          ),
       ],
     );
   }
@@ -3348,7 +3499,7 @@ class _UnifiedFolderRow extends StatelessWidget {
   final _UnifiedFolderSummary summary;
   final bool expanded;
   final VoidCallback onToggle;
-  final VoidCallback onDelete;
+  final VoidCallback? onDelete;
 
   const _UnifiedFolderRow({
     required this.entry,
@@ -3386,25 +3537,26 @@ class _UnifiedFolderRow extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           _StatusBadge(label: summary.statusLabel),
-          PopupMenuButton<_FileTreeAction>(
-            tooltip: '文件夹操作',
-            onSelected: (action) {
-              switch (action) {
-                case _FileTreeAction.delete:
-                  onDelete();
-              }
-            },
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: _FileTreeAction.delete,
-                child: ListTile(
-                  dense: true,
-                  leading: Icon(Icons.delete_outline),
-                  title: Text('删除服务器备份'),
+          if (onDelete != null)
+            PopupMenuButton<_FileTreeAction>(
+              tooltip: '文件夹操作',
+              onSelected: (action) {
+                switch (action) {
+                  case _FileTreeAction.delete:
+                    onDelete?.call();
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: _FileTreeAction.delete,
+                  child: ListTile(
+                    dense: true,
+                    leading: Icon(Icons.delete_outline),
+                    title: Text('删除服务器备份'),
+                  ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
         ],
       ),
     );
@@ -3414,7 +3566,7 @@ class _UnifiedFolderRow extends StatelessWidget {
 class _UnifiedFileRow extends StatelessWidget {
   final _UnifiedFileEntry entry;
   final String statusLabel;
-  final VoidCallback onDelete;
+  final VoidCallback? onDelete;
 
   const _UnifiedFileRow({
     required this.entry,
@@ -3438,25 +3590,26 @@ class _UnifiedFileRow extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           _StatusBadge(label: statusLabel),
-          PopupMenuButton<_FileTreeAction>(
-            tooltip: '文件操作',
-            onSelected: (action) {
-              switch (action) {
-                case _FileTreeAction.delete:
-                  onDelete();
-              }
-            },
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: _FileTreeAction.delete,
-                child: ListTile(
-                  dense: true,
-                  leading: Icon(Icons.delete_outline),
-                  title: Text('删除服务器备份'),
+          if (onDelete != null)
+            PopupMenuButton<_FileTreeAction>(
+              tooltip: '文件操作',
+              onSelected: (action) {
+                switch (action) {
+                  case _FileTreeAction.delete:
+                    onDelete?.call();
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: _FileTreeAction.delete,
+                  child: ListTile(
+                    dense: true,
+                    leading: Icon(Icons.delete_outline),
+                    title: Text('删除服务器备份'),
+                  ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
         ],
       ),
     );
@@ -3536,6 +3689,8 @@ class _SyncRootViewData {
   final List<LocalUploadTask> tasks;
   final List<LocalSyncIssue> issues;
   final List<RemoteBackupEntry> remoteBackups;
+  final String currentDeviceId;
+  final String currentDeviceName;
 
   const _SyncRootViewData({
     required this.root,
@@ -3543,6 +3698,8 @@ class _SyncRootViewData {
     required this.tasks,
     required this.issues,
     required this.remoteBackups,
+    required this.currentDeviceId,
+    required this.currentDeviceName,
   });
 
   String get displayName {
@@ -3560,6 +3717,37 @@ class _SyncRootViewData {
 
   String get shortRootId {
     return root.id.length <= 8 ? root.id : root.id.substring(0, 8);
+  }
+
+  String get shortDeviceId {
+    return root.deviceId.length <= 8
+        ? root.deviceId
+        : root.deviceId.substring(0, 8);
+  }
+
+  bool get isCurrentDeviceRoot {
+    return currentDeviceId.isNotEmpty && root.deviceId == currentDeviceId;
+  }
+
+  bool get canRunLocalSync {
+    return isCurrentDeviceRoot;
+  }
+
+  String get deviceDisplayName {
+    final serverDeviceName = root.deviceName.trim();
+    if (serverDeviceName.isNotEmpty) {
+      return serverDeviceName;
+    }
+    final localDeviceName = currentDeviceName.trim();
+    if (isCurrentDeviceRoot && localDeviceName.isNotEmpty) {
+      return localDeviceName;
+    }
+    return '设备 $shortDeviceId';
+  }
+
+  String get deviceLine {
+    final scope = isCurrentDeviceRoot ? '当前设备' : '其他设备';
+    return '$scope：$deviceDisplayName';
   }
 
   bool get isUnbound {

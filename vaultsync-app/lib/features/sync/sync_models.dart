@@ -2,6 +2,7 @@ class SyncRoot {
   final String id;
   final String userId;
   final String deviceId;
+  final String deviceName;
   final String encryptedPath;
   final String cleanupPolicy;
   final String archivePath;
@@ -11,6 +12,7 @@ class SyncRoot {
     required this.id,
     required this.userId,
     required this.deviceId,
+    this.deviceName = '',
     required this.encryptedPath,
     required this.cleanupPolicy,
     required this.archivePath,
@@ -22,6 +24,7 @@ class SyncRoot {
       id: json['id'] as String,
       userId: json['user_id'] as String,
       deviceId: json['device_id'] as String,
+      deviceName: json['device_name'] as String? ?? '',
       encryptedPath: json['encrypted_path'] as String,
       cleanupPolicy: json['cleanup_policy'] as String,
       archivePath: json['archive_path'] as String? ?? '',

@@ -25,6 +25,10 @@ func TestRegisterAndManageSyncRoots(t *testing.T) {
 	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/sync-roots", "", token)
 	testutil.AssertStatus(t, resp, http.StatusOK)
 	testutil.AssertJSONContains(t, resp, `"cleanup_policy":"delete"`)
+
+	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/sync-roots", "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	testutil.AssertJSONContains(t, resp, `"device_name":"Alice MacBook"`)
 }
 
 func TestSyncRootRemoteObjectsSubrouteReturnsJSONEnvelope(t *testing.T) {

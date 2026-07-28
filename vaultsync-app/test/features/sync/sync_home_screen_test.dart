@@ -747,6 +747,171 @@ void main() {
     expect(find.text('服务器已备份，本地已删除'), findsOneWidget);
   });
 
+  testWidgets('sync home renders large file lists in batches', (tester) async {
+    final remoteObjects = [
+      for (var index = 0; index < 180; index += 1)
+        RemoteBackupObject(
+          cursorValue: index + 1,
+          syncRootId: 'root-1',
+          objectId: 'object-$index',
+          versionId: 'version-$index',
+          encryptedName: 'enc:$index',
+          contentHash: 'sha256:$index',
+          sizeBytes: 1024,
+          metadataJson: '{}',
+          updatedAt: '2026-07-01T10:00:00Z',
+        ),
+    ];
+    final entries = {
+      for (var index = 0; index < 180; index += 1)
+        'object-$index': RemoteBackupEntry(
+          syncRootId: 'root-1',
+          objectId: 'object-$index',
+          versionId: 'version-$index',
+          name: 'file-${index.toString().padLeft(3, '0')}.txt',
+          relativePath: 'file-${index.toString().padLeft(3, '0')}.txt',
+          sizeBytes: 1024,
+          updatedAt: '2026-07-01T10:00:00Z',
+        ),
+    };
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore([
+            const LocalSyncRootMapping(
+              syncRootId: 'root-1',
+              localPath: '/Users/alice/Documents',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+            ),
+          ]),
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: FakeSyncRootGateway([
+            const SyncRoot(
+              id: 'root-1',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-06-27T00:00:00Z',
+            ),
+          ]),
+          remoteBackups: FakeRemoteBackupGateway(remoteObjects),
+          remoteMetadataDecrypter: FakeRemoteMetadataDecrypter(entries),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('file-000.txt'), findsOneWidget);
+    expect(find.text('file-179.txt'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('load_more_files_root-1')),
+      findsOneWidget,
+    );
+
+    tester
+        .widget<OutlinedButton>(
+          find.byKey(const ValueKey('load_more_files_root-1')),
+        )
+        .onPressed
+        ?.call();
+    await tester.pumpAndSettle();
+
+    expect(find.text('file-179.txt'), findsOneWidget);
+  });
+
+  testWidgets('sync home marks other device roots readonly', (tester) async {
+    final scanner = FakeLocalSyncScanner([
+      LocalSyncFile(
+        syncRootId: 'root-remote',
+        localPath: '/remote/a.jpg',
+        relativePath: 'a.jpg',
+        sizeBytes: 1,
+        modifiedAt: DateTime.utc(2026, 7, 1),
+      ),
+    ]);
+    final uploadExecutor = FakeUploadExecutor(uploadedCount: 1);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-current',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore(),
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: FakeSyncRootGateway([
+            const SyncRoot(
+              id: 'root-remote',
+              userId: 'user-1',
+              deviceId: 'device-remote',
+              deviceName: 'Alice MacBook',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-06-27T00:00:00Z',
+            ),
+          ]),
+          localScanner: scanner,
+          uploadExecutor: uploadExecutor,
+          remoteBackups: FakeRemoteBackupGateway([
+            const RemoteBackupObject(
+              cursorValue: 1,
+              syncRootId: 'root-remote',
+              objectId: 'object-remote',
+              versionId: 'version-remote',
+              encryptedName: 'enc:a',
+              contentHash: 'sha256:a',
+              sizeBytes: 1024,
+              metadataJson: '{}',
+              updatedAt: '2026-07-01T10:00:00Z',
+            ),
+          ]),
+          remoteMetadataDecrypter: const FakeRemoteMetadataDecrypter({
+            'object-remote': RemoteBackupEntry(
+              syncRootId: 'root-remote',
+              objectId: 'object-remote',
+              versionId: 'version-remote',
+              name: 'a.jpg',
+              relativePath: 'a.jpg',
+              sizeBytes: 1024,
+              updatedAt: '2026-07-01T10:00:00Z',
+            ),
+          }),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('其他设备：Alice MacBook'), findsWidgets);
+    expect(find.text('只读'), findsOneWidget);
+    final manageButton = tester.widget<IconButton>(
+      find.byKey(const ValueKey('manage_sync_root_root-remote')),
+    );
+    expect(manageButton.onPressed, isNull);
+    expect(find.byTooltip('文件操作'), findsNothing);
+
+    await tester.tap(
+      find.byKey(const ValueKey('sync_root_quick_actions_root-remote')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('扫描此目录'));
+    await tester.tap(find.text('上传此目录'));
+    await tester.pumpAndSettle();
+
+    expect(scanner.callCount, 0);
+    expect(uploadExecutor.callCount, 0);
+  });
+
   testWidgets('sync home can delete one server backed file', (tester) async {
     final remoteBackups = FakeRemoteBackupGateway([
       const RemoteBackupObject(
@@ -1189,7 +1354,17 @@ void main() {
           ),
           syncRootMappings: FakeSyncRootMappingStore(),
           uploadTasks: FakeUploadTaskStore(),
-          syncRoots: FakeSyncRootGateway(const []),
+          syncRoots: FakeSyncRootGateway([
+            const SyncRoot(
+              id: 'root-1',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-01T00:00:00Z',
+            ),
+          ]),
           uploadExecutor: uploadExecutor,
         ),
       ),
@@ -1200,7 +1375,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(uploadExecutor.callCount, 1);
-    expect(uploadExecutor.syncRootId, isNull);
+    expect(uploadExecutor.syncRootId, 'root-1');
     expect(find.text('已上传 2 个任务'), findsOneWidget);
   });
 

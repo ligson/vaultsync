@@ -151,6 +151,63 @@ void main() {
     expect(uploadTasks.saved.single.uploadedBytes, 7);
   });
 
+  test(
+    'executePendingUploads recreates completed-size pending session',
+    () async {
+      final uploadTasks = FakeUploadTaskStore([
+        LocalUploadTask(
+          id: 'root-1:a.jpg',
+          syncRootId: 'root-1',
+          localPath: '/Users/alice/Photos/a.jpg',
+          relativePath: 'a.jpg',
+          sizeBytes: 7,
+          modifiedAt: DateTime.utc(2026, 6, 27, 9),
+          status: 'failed',
+          attempts: 1,
+          createdAt: DateTime.utc(2026, 6, 27, 10),
+          uploadSessionId: 'session-stale',
+          uploadPayloadHash:
+              '32bbe378a25091502b2baf9f7258c19444e7a43ee4593b08030acd790bd66e6a',
+          uploadTotalSize: 7,
+          uploadChunkSize: 3,
+          uploadedBytes: 7,
+        ),
+      ]);
+      final uploads = FakeUploadGateway(
+        existingSession: const UploadSession(
+          id: 'session-stale',
+          status: 'pending',
+          totalSize: 7,
+          chunkSize: 3,
+          receivedSize: 7,
+        ),
+      );
+      final executor = LocalUploadExecutor(
+        sessionStore: FakeSessionStore(
+          token: 'server-token',
+          deviceId: 'device-1',
+        ),
+        uploadTasks: uploadTasks,
+        uploads: uploads,
+        payloadPreparer: const FakeUploadPayloadPreparer(
+          bytes: [1, 2, 3, 4, 5, 6, 7],
+        ),
+        objectIdForTask: (_) => 'object-1',
+        versionIdForTask: (_) => 'version-1',
+        chunkSize: 3,
+      );
+
+      final result = await executor.executePendingUploads();
+
+      expect(result.uploadedCount, 1);
+      expect(uploads.requestedSessionId, 'session-stale');
+      expect(uploads.createCount, 1);
+      expect(uploads.uploadedPartIndexes, [0, 1, 2]);
+      expect(uploadTasks.saved.single.status, 'uploaded');
+      expect(uploadTasks.saved.single.uploadSessionId, 'session-1');
+    },
+  );
+
   test('executePendingUploads can upload one sync root only', () async {
     final uploadTasks = FakeUploadTaskStore([
       LocalUploadTask(

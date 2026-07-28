@@ -232,7 +232,7 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
             session.totalSize == payload.bytes.length &&
             session.chunkSize == chunkSize &&
             session.receivedSize >= 0 &&
-            session.receivedSize <= payload.bytes.length) {
+            session.receivedSize < payload.bytes.length) {
           return session;
         }
         if (session.status == 'completed') {

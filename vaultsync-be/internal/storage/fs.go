@@ -56,15 +56,19 @@ func (s *FSStorage) FinalizeUpload(placement UploadObjectPlacement) (string, str
 		return "", "", 0, err
 	}
 	if err := os.Rename(sourcePath, targetPath); err != nil {
-		if placement.ExpectedSize != 0 || !errors.Is(err, os.ErrNotExist) {
+		if !errors.Is(err, os.ErrNotExist) {
 			return "", "", 0, err
 		}
-		file, createErr := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-		if createErr != nil {
-			return "", "", 0, createErr
-		}
-		if closeErr := file.Close(); closeErr != nil {
-			return "", "", 0, closeErr
+		if placement.ExpectedSize == 0 {
+			file, createErr := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+			if createErr != nil {
+				return "", "", 0, createErr
+			}
+			if closeErr := file.Close(); closeErr != nil {
+				return "", "", 0, closeErr
+			}
+		} else if err := validateExistingFinalizedFile(targetPath, placement.ExpectedSize); err != nil {
+			return "", "", 0, err
 		}
 	}
 	if mirrorPath != "" {
@@ -78,6 +82,46 @@ func (s *FSStorage) FinalizeUpload(placement UploadObjectPlacement) (string, str
 		return "", "", 0, err
 	}
 	return targetPath, hashValue, size, nil
+}
+
+func (s *FSStorage) InspectRecoverableUpload(placement UploadObjectPlacement) (string, string, int64, error) {
+	sourcePath := filepath.Join(s.rootDir, "uploads", placement.UserID, placement.SessionID+".part")
+	targetPath, _, err := s.targetPaths(placement)
+	if err != nil {
+		return "", "", 0, err
+	}
+	hashPath := targetPath
+	if err := validateExistingFinalizedFile(targetPath, placement.ExpectedSize); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", "", 0, err
+		}
+		hashPath = sourcePath
+		if err := validateExistingFinalizedFile(sourcePath, placement.ExpectedSize); err != nil {
+			return "", "", 0, err
+		}
+	}
+	hashValue, size, err := hashFile(hashPath)
+	if err != nil {
+		return "", "", 0, err
+	}
+	return targetPath, hashValue, size, nil
+}
+
+func validateExistingFinalizedFile(path string, expectedSize int64) error {
+	stat, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return err
+	}
+	if stat.IsDir() {
+		return fmt.Errorf("正式文件路径是目录：%s", path)
+	}
+	if stat.Size() != expectedSize {
+		return fmt.Errorf("正式文件大小不一致：got %d want %d", stat.Size(), expectedSize)
+	}
+	return nil
 }
 
 func (s *FSStorage) targetPaths(placement UploadObjectPlacement) (string, string, error) {

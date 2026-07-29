@@ -321,15 +321,25 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       _isScanning = true;
     });
     try {
-      await _ensureAndroidSharedMediaDirectoryPermission(syncRootId);
+      final actionSyncRootIds = await _resolveCurrentDeviceActionSyncRootIds(
+        syncRootId: syncRootId,
+      );
+      await _ensureAndroidSharedMediaDirectoryPermission(
+        syncRootId,
+        allowedSyncRootIds: actionSyncRootIds,
+      );
       final scanner =
           widget.localScanner ??
           LocalSyncScanner(mappings: widget.syncRootMappings);
-      final files = await scanner.scanMappedRoots(syncRootId: syncRootId);
+      final files = await _scanMappedRootsForSyncRootIds(
+        scanner: scanner,
+        syncRootIds: actionSyncRootIds,
+      );
       final planner = LocalUploadPlanner(uploadTasks: widget.uploadTasks);
       final tasks = await planner.enqueueScannedFiles(files);
       final mediaResult = await _scanMediaBackupSources(
         syncRootId: syncRootId,
+        allowedSyncRootIds: actionSyncRootIds,
         includeDisabled: true,
       );
       final scannedCount = files.length + mediaResult.scannedCount;
@@ -459,9 +469,43 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     );
   }
 
-  Future<void> _ensureAndroidSharedMediaDirectoryPermission(
+  Future<Set<String>> _resolveCurrentDeviceActionSyncRootIds({
     String? syncRootId,
-  ) async {
+  }) async {
+    final token = await widget.storage.loadAuthToken();
+    final currentDeviceId = await widget.storage.loadDeviceId();
+    if (token == null || token.isEmpty) {
+      throw Exception('登录状态已失效');
+    }
+    if (currentDeviceId == null || currentDeviceId.isEmpty) {
+      throw Exception('设备状态已失效');
+    }
+    final roots = await widget.syncRoots.listSyncRoots(token: token);
+    final currentDeviceRootIds = {
+      for (final root in roots)
+        if (root.deviceId == currentDeviceId) root.id,
+    };
+    if (syncRootId != null && !currentDeviceRootIds.contains(syncRootId)) {
+      throw Exception('该同步目录属于其他设备，只能查看，不能在当前设备执行同步');
+    }
+    return syncRootId == null ? currentDeviceRootIds : {syncRootId};
+  }
+
+  Future<List<LocalSyncFile>> _scanMappedRootsForSyncRootIds({
+    required LocalSyncScanGateway scanner,
+    required Set<String> syncRootIds,
+  }) async {
+    final files = <LocalSyncFile>[];
+    for (final syncRootId in syncRootIds) {
+      files.addAll(await scanner.scanMappedRoots(syncRootId: syncRootId));
+    }
+    return files;
+  }
+
+  Future<void> _ensureAndroidSharedMediaDirectoryPermission(
+    String? syncRootId, {
+    Set<String>? allowedSyncRootIds,
+  }) async {
     final platform = widget.devicePlatform ?? DeviceProfile.current().platform;
     if (platform != 'android') {
       return;
@@ -473,6 +517,10 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     final mappings = await widget.syncRootMappings.loadSyncRootMappings();
     final needsMediaPermission = mappings.any((mapping) {
       if (syncRootId != null && mapping.syncRootId != syncRootId) {
+        return false;
+      }
+      if (allowedSyncRootIds != null &&
+          !allowedSyncRootIds.contains(mapping.syncRootId)) {
         return false;
       }
       if (_isMediaBackupEncryptedPath(mapping.encryptedPath)) {
@@ -776,6 +824,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     var downloadedCount = 0;
     var remoteDeleteCount = 0;
     var blockedDeleteCount = 0;
+    String? currentStage;
     setState(() {
       _isAutoSyncing = true;
     });
@@ -784,14 +833,23 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         setState(() {
           _isScanning = true;
         });
+        currentStage = '扫描本地目录';
+        final actionSyncRootIds =
+            await _resolveCurrentDeviceActionSyncRootIds();
         final scanner =
             widget.localScanner ??
             LocalSyncScanner(mappings: widget.syncRootMappings);
-        final files = await scanner.scanMappedRoots();
+        final files = await _scanMappedRootsForSyncRootIds(
+          scanner: scanner,
+          syncRootIds: actionSyncRootIds,
+        );
         scannedCount = files.length;
         final planner = LocalUploadPlanner(uploadTasks: widget.uploadTasks);
         await planner.enqueueScannedFiles(files);
-        final mediaResult = await _scanMediaBackupSources();
+        currentStage = '扫描相册备份';
+        final mediaResult = await _scanMediaBackupSources(
+          allowedSyncRootIds: actionSyncRootIds,
+        );
         scannedCount += mediaResult.scannedCount;
         if (mounted) {
           setState(() {
@@ -805,6 +863,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         setState(() {
           _isUploading = true;
         });
+        currentStage = '上传待处理任务';
         final result = await _executeCurrentDevicePendingUploads(
           uploadExecutor,
         );
@@ -822,6 +881,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         setState(() {
           _isPulling = true;
         });
+        currentStage = '拉取服务器变更';
         final result = await pullExecutor.pullRemoteChanges();
         downloadedCount = result.downloadedCount;
         remoteDeleteCount = result.deleteCount;
@@ -832,6 +892,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
           });
         }
       }
+      currentStage = null;
 
       await statusStore?.saveAutoSyncStatus(
         AutoSyncStatus(
@@ -855,8 +916,10 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         message:
             '扫描 $scannedCount 个，上传 $uploadedCount 个，失败 $failedCount 个，下载 $downloadedCount 个，删除 $remoteDeleteCount 个',
       );
-    } catch (error) {
-      final message = userReadableErrorMessage(error);
+    } catch (error, stackTrace) {
+      debugPrint('VaultSync auto sync failed [$currentStage]: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      final message = _syncStageErrorMessage(currentStage, error);
       await statusStore?.saveAutoSyncStatus(
         AutoSyncStatus(
           lastStartedAt: startedAt,
@@ -892,6 +955,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
 
   Future<MediaBackupScanResult> _scanMediaBackupSources({
     String? syncRootId,
+    Set<String>? allowedSyncRootIds,
     bool includeDisabled = false,
   }) async {
     final mediaSources = _mediaBackupSourcesStore;
@@ -914,6 +978,10 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       if (syncRootId != null && source.syncRootId != syncRootId) {
         continue;
       }
+      if (allowedSyncRootIds != null &&
+          !allowedSyncRootIds.contains(source.syncRootId)) {
+        continue;
+      }
       if (!includeDisabled && !source.autoBackupEnabled) {
         continue;
       }
@@ -925,6 +993,14 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       scannedCount: scannedCount,
       createdTaskCount: createdTaskCount,
     );
+  }
+
+  String _syncStageErrorMessage(String? stage, Object error) {
+    final message = userReadableErrorMessage(error);
+    if (stage == null || stage.isEmpty) {
+      return message;
+    }
+    return '$stage失败：$message';
   }
 
   Future<List<LocalMediaBackupSource>> _fallbackMediaBackupSources(

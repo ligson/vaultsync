@@ -1,3 +1,7 @@
+import 'dart:io';
+
+import 'package:flutter/services.dart';
+
 class ApiException implements Exception {
   final int statusCode;
   final String code;
@@ -61,6 +65,12 @@ String userReadableErrorMessage(Object error) {
       statusCode: error.statusCode,
     );
   }
+  if (error is FileSystemException) {
+    return _readableFileSystemMessage(error);
+  }
+  if (error is PlatformException) {
+    return _readablePlatformMessage(error);
+  }
   final message = error.toString().replaceFirst('Exception: ', '').trim();
   if (message.isEmpty) {
     return '操作失败，请稍后重试';
@@ -69,6 +79,49 @@ String userReadableErrorMessage(Object error) {
     return '操作失败，请稍后重试';
   }
   return message;
+}
+
+String _readableFileSystemMessage(FileSystemException error) {
+  final path = error.path?.trim();
+  final lower = '${error.message} ${error.osError?.message ?? ''}'
+      .toLowerCase();
+  if (lower.contains('permission') ||
+      lower.contains('operation not permitted')) {
+    return path == null || path.isEmpty
+        ? '无法访问文件或目录，请确认系统权限后重试'
+        : '无法访问目录 $path，请确认系统权限后重试';
+  }
+  if (lower.contains('no such file') || lower.contains('not found')) {
+    return path == null || path.isEmpty
+        ? '文件或目录不存在，请确认后重试'
+        : '目录 $path 不存在，请确认后重试';
+  }
+  return path == null || path.isEmpty
+      ? '无法读取文件或目录，请稍后重试'
+      : '无法读取目录 $path，请稍后重试';
+}
+
+String _readablePlatformMessage(PlatformException error) {
+  final raw = '${error.code} ${error.message ?? ''} ${error.details ?? ''}';
+  final lower = raw.toLowerCase();
+  if (lower.contains('permission') ||
+      lower.contains('denied') ||
+      lower.contains('not authorized')) {
+    return '没有获得必要权限，请在系统设置中授权后重试';
+  }
+  if (lower.contains('not found') || lower.contains('no such')) {
+    return '系统找不到要访问的文件或目录，请确认后重试';
+  }
+  if (lower.contains('cancel')) {
+    return '操作已取消';
+  }
+  final message = error.message?.trim();
+  if (message != null &&
+      message.isNotEmpty &&
+      !_looksLikeEnglishError(message)) {
+    return message;
+  }
+  return '系统组件调用失败，请稍后重试';
 }
 
 bool _looksLikeEnglishError(String message) {

@@ -352,6 +352,66 @@ void main() {
     expect(find.text('未获得相册访问权限'), findsOneWidget);
   });
 
+  testWidgets('scan all only scans current device sync roots', (tester) async {
+    final scanner = FakeLocalSyncScanner(const []);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-current',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore([
+            const LocalSyncRootMapping(
+              syncRootId: 'root-current',
+              localPath: '/sdcard/Download',
+              encryptedPath: 'vaultsync-path:v1:download-current',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+            ),
+            const LocalSyncRootMapping(
+              syncRootId: 'root-other',
+              localPath: '/sdcard/Download',
+              encryptedPath: 'vaultsync-path:v1:download-other',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+            ),
+          ]),
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: FakeSyncRootGateway([
+            const SyncRoot(
+              id: 'root-current',
+              userId: 'user-1',
+              deviceId: 'device-current',
+              encryptedPath: 'vaultsync-path:v1:download-current',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-03T01:00:00Z',
+            ),
+            const SyncRoot(
+              id: 'root-other',
+              userId: 'user-1',
+              deviceId: 'device-other',
+              encryptedPath: 'vaultsync-path:v1:download-other',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-03T01:00:00Z',
+            ),
+          ]),
+          localScanner: scanner,
+          autoSyncEnabled: false,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('scan_local_files_button')));
+    await tester.pumpAndSettle();
+
+    expect(scanner.syncRootIds, ['root-current']);
+  });
+
   testWidgets('sync home opens sync history page and clears history', (
     tester,
   ) async {
@@ -1339,7 +1399,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(scanner.callCount, 1);
-    expect(scanner.syncRootId, isNull);
+    expect(scanner.syncRootId, 'root-1');
     expect(uploadTasks.saved, hasLength(2));
     expect(uploadTasks.saved.first.status, 'pending');
     expect(find.text('扫描发现 2 个本地文件，生成 2 个待上传任务'), findsOneWidget);
@@ -3069,6 +3129,7 @@ class FakeLocalSyncScanner implements LocalSyncScanGateway {
   final List<LocalSyncFile> files;
   int callCount = 0;
   String? syncRootId;
+  final syncRootIds = <String?>[];
 
   FakeLocalSyncScanner(this.files);
 
@@ -3076,6 +3137,7 @@ class FakeLocalSyncScanner implements LocalSyncScanGateway {
   Future<List<LocalSyncFile>> scanMappedRoots({String? syncRootId}) async {
     callCount += 1;
     this.syncRootId = syncRootId;
+    syncRootIds.add(syncRootId);
     return files;
   }
 }

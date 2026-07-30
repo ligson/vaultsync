@@ -9,6 +9,8 @@
 - Flutter 客户端基于各平台可读取的公开设备信息生成稳定 key：Android 使用品牌、型号、产品、硬件和系统构建指纹等信息；iOS/macOS/Windows/Linux 分别使用系统提供的 vendor/system/device/machine 标识。拿不到稳定信息时不发送 key，避免误合并设备。
 - 本次变更不删除服务端 `data/`、不清空 SQLite、不修改已有同步目录绑定、不清理客户端本地上传队列或相册备份记录；数据库仅做非破坏性新增字段和索引。
 - 修正旧 SQLite 数据库升级时的设备索引创建顺序：先为 `devices` 表补 `client_key` 字段，再创建唯一索引，避免旧库启动时报 `no such column: client_key`。发布过程中发现该问题后已先回滚线上后端恢复服务，随后补充旧库迁移回归测试。
+- 设备认领策略增加线上旧数据兼容：如果同一用户下存在多个旧 Android 设备记录，且只有一台或最明确的一台旧设备拥有同步目录，新客户端登录时会优先把 `client_key` 绑定到这台旧设备，避免真实手机重装后仍被显示成“其他设备”。
+- 已重新构建 Android release APK `versionCode=2026073001` 并上传到 `https://files.ligson.xyz/downloads/vaultsync-android-latest.apk`；本次仅替换下载包，不安装到手机、不清空客户端数据。
 
 ## 2026-07-29
 

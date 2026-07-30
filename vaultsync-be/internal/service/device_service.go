@@ -51,6 +51,14 @@ func (s *DeviceService) Register(ctx context.Context, userID, name, platform, cl
 			device.ClientKey = clientKey
 			return s.repo.UpdateClientKeyAndProfile(ctx, device)
 		}
+		if device, found, err := s.repo.FindSingleUnclaimedWithSyncRoots(ctx, userID, platform); err != nil {
+			return domain.Device{}, err
+		} else if found {
+			device.Name = name
+			device.Platform = platform
+			device.ClientKey = clientKey
+			return s.repo.UpdateClientKeyAndProfile(ctx, device)
+		}
 	}
 
 	device := domain.Device{

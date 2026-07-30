@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -51,5 +52,28 @@ func TestRegisterDeviceClaimsSingleLegacyDevice(t *testing.T) {
 
 	if nextID != legacyID {
 		t.Fatalf("expected legacy device to be claimed as %q, got %q", legacyID, nextID)
+	}
+}
+
+func TestRegisterDeviceClaimsLegacyDeviceWithSyncRoots(t *testing.T) {
+	app, token := testutil.NewAuthenticatedServer(t)
+
+	emptyLegacy := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/devices", `{"name":"VaultSync android","platform":"android"}`, token)
+	testutil.AssertStatus(t, emptyLegacy, http.StatusCreated)
+
+	ownedLegacy := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/devices", `{"name":"VaultSync android","platform":"android"}`, token)
+	testutil.AssertStatus(t, ownedLegacy, http.StatusCreated)
+	ownedLegacyID := testutil.MustReadJSONField(t, ownedLegacy, "id")
+	rootBody := fmt.Sprintf(`{"device_id":"%s","encrypted_path":"base64:path","cleanup_policy":"keep","archive_path":""}`, ownedLegacyID)
+	root := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/sync-roots", rootBody, token)
+	testutil.AssertStatus(t, root, http.StatusCreated)
+
+	nextBody := `{"name":"HUAWEI NOH-AN00","platform":"android","client_key":"vaultsync-device:v1:android:phone-key"}`
+	next := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/devices", nextBody, token)
+	testutil.AssertStatus(t, next, http.StatusCreated)
+	nextID := testutil.MustReadJSONField(t, next, "id")
+
+	if nextID != ownedLegacyID {
+		t.Fatalf("expected device with sync roots to be claimed as %q, got %q", ownedLegacyID, nextID)
 	}
 }

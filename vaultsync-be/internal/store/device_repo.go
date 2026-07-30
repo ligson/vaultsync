@@ -74,6 +74,44 @@ func (r *DeviceRepo) FindSingleUnclaimedByNamePlatform(ctx context.Context, user
 	return devices[0], true, nil
 }
 
+func (r *DeviceRepo) FindSingleUnclaimedWithSyncRoots(ctx context.Context, userID, platform string) (domain.Device, bool, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT d.id, d.user_id, d.name, d.platform, d.client_key, d.created_at, COUNT(sr.id) AS sync_root_count
+		FROM devices d
+		JOIN sync_roots sr ON sr.device_id = d.id AND sr.user_id = d.user_id
+		WHERE d.user_id = ? AND d.platform = ? AND d.client_key = ''
+		GROUP BY d.id, d.user_id, d.name, d.platform, d.client_key, d.created_at
+		ORDER BY sync_root_count DESC, d.created_at DESC
+		LIMIT 2
+	`, userID, platform)
+	if err != nil {
+		return domain.Device{}, false, err
+	}
+	defer rows.Close()
+
+	devices := make([]domain.Device, 0, 2)
+	counts := make([]int64, 0, 2)
+	for rows.Next() {
+		var device domain.Device
+		var syncRootCount int64
+		if err := rows.Scan(&device.ID, &device.UserID, &device.Name, &device.Platform, &device.ClientKey, &device.CreatedAt, &syncRootCount); err != nil {
+			return domain.Device{}, false, err
+		}
+		devices = append(devices, device)
+		counts = append(counts, syncRootCount)
+	}
+	if err := rows.Err(); err != nil {
+		return domain.Device{}, false, err
+	}
+	if len(devices) == 0 {
+		return domain.Device{}, false, nil
+	}
+	if len(devices) == 1 || counts[0] > counts[1] {
+		return devices[0], true, nil
+	}
+	return domain.Device{}, false, nil
+}
+
 func (r *DeviceRepo) UpdateClientKeyAndProfile(ctx context.Context, device domain.Device) (domain.Device, error) {
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE devices

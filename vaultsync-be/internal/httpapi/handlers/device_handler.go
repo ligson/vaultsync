@@ -20,15 +20,16 @@ func NewDeviceHandler(service *service.DeviceService) *DeviceHandler {
 func (h *DeviceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.MustUserID(r.Context())
 	var req struct {
-		Name     string `json:"name"`
-		Platform string `json:"platform"`
+		Name      string `json:"name"`
+		Platform  string `json:"platform"`
+		ClientKey string `json:"client_key"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
 		return
 	}
 
-	device, err := h.service.Register(r.Context(), userID, req.Name, req.Platform)
+	device, err := h.service.Register(r.Context(), userID, req.Name, req.Platform, req.ClientKey)
 	if err != nil {
 		writeServiceError(w, err)
 		return

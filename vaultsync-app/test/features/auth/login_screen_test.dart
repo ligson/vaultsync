@@ -43,6 +43,7 @@ void main() {
           deviceProfile: const DeviceProfile(
             name: 'Alice iPhone',
             platform: 'ios',
+            clientKey: 'vaultsync-device:v1:ios:test-key',
           ),
           syncRoots: syncRoots,
         ),
@@ -65,6 +66,7 @@ void main() {
     expect(devices.token, 'server-token');
     expect(devices.name, 'Alice iPhone');
     expect(devices.platform, 'ios');
+    expect(devices.clientKey, 'vaultsync-device:v1:ios:test-key');
     expect(uploadKeys.email, 'alice@example.com');
     expect(uploadKeys.password, 'passw0rd!');
     expect(storage.savedSession?.token, 'server-token');
@@ -402,6 +404,7 @@ class FakeDeviceGateway implements DeviceGateway {
   String? token;
   String? name;
   String? platform;
+  String? clientKey;
 
   FakeDeviceGateway({this.errorMessage});
 
@@ -410,10 +413,12 @@ class FakeDeviceGateway implements DeviceGateway {
     required String token,
     required String name,
     required String platform,
+    required String clientKey,
   }) async {
     this.token = token;
     this.name = name;
     this.platform = platform;
+    this.clientKey = clientKey;
     final message = errorMessage;
     if (message != null) {
       throw ApiException(

@@ -3,6 +3,7 @@ class RegisteredDevice {
   final String userId;
   final String name;
   final String platform;
+  final String clientKey;
   final String createdAt;
 
   const RegisteredDevice({
@@ -10,6 +11,7 @@ class RegisteredDevice {
     required this.userId,
     required this.name,
     required this.platform,
+    this.clientKey = '',
     required this.createdAt,
   });
 
@@ -19,6 +21,7 @@ class RegisteredDevice {
       userId: json['user_id'] as String,
       name: json['name'] as String,
       platform: json['platform'] as String,
+      clientKey: json['client_key'] as String? ?? '',
       createdAt: json['created_at'] as String,
     );
   }

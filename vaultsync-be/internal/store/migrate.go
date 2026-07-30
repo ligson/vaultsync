@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS devices (
     user_id TEXT NOT NULL,
     name TEXT NOT NULL,
     platform TEXT NOT NULL,
+    client_key TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
@@ -138,6 +139,10 @@ CREATE TABLE IF NOT EXISTS download_releases (
     size_bytes INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_user_client_key
+ON devices(user_id, client_key)
+WHERE client_key <> '';
 `
 
 func migrate(db *sql.DB) error {
@@ -161,6 +166,16 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	if err := ensureColumn(db, "sync_roots", "encryption_enabled", "INTEGER NOT NULL DEFAULT 1"); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "devices", "client_key", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_user_client_key
+		ON devices(user_id, client_key)
+		WHERE client_key <> '';
+	`); err != nil {
 		return err
 	}
 	return nil

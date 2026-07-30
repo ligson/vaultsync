@@ -230,6 +230,7 @@ class _LoginScreenState extends State<LoginScreen> {
         token: session.token,
         name: widget.deviceProfile.name,
         platform: widget.deviceProfile.platform,
+        clientKey: widget.deviceProfile.clientKey,
       );
     } catch (error) {
       throw Exception('登录已成功，但注册当前设备失败：${userReadableErrorMessage(error)}');

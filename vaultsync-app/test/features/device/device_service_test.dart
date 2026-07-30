@@ -18,6 +18,7 @@ void main() {
           expect(jsonDecode(request.body), {
             'name': 'Alice iPhone',
             'platform': 'ios',
+            'client_key': 'vaultsync-device:v1:ios:test-key',
           });
           return http.Response(
             jsonEncode({
@@ -29,6 +30,7 @@ void main() {
                 'user_id': 'user-1',
                 'name': 'Alice iPhone',
                 'platform': 'ios',
+                'client_key': 'vaultsync-device:v1:ios:test-key',
                 'created_at': '2026-06-27T00:00:00Z',
               },
             }),
@@ -42,11 +44,13 @@ void main() {
       token: 'server-token',
       name: 'Alice iPhone',
       platform: 'ios',
+      clientKey: 'vaultsync-device:v1:ios:test-key',
     );
 
     expect(device.id, 'device-1');
     expect(device.userId, 'user-1');
     expect(device.name, 'Alice iPhone');
     expect(device.platform, 'ios');
+    expect(device.clientKey, 'vaultsync-device:v1:ios:test-key');
   });
 }

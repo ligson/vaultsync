@@ -1,11 +1,19 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 
 class DeviceProfile {
   final String name;
   final String platform;
+  final String clientKey;
 
-  const DeviceProfile({required this.name, required this.platform});
+  const DeviceProfile({
+    required this.name,
+    required this.platform,
+    this.clientKey = '',
+  });
 
   factory DeviceProfile.current() {
     final platform = _platformName(defaultTargetPlatform);
@@ -29,8 +37,24 @@ class DeviceProfile {
         TargetPlatform.fuchsia => '',
       };
       final normalizedName = _cleanName(name);
+      final clientKey = switch (resolvedPlatform) {
+        TargetPlatform.android => _androidClientKey(
+          await deviceInfo.androidInfo,
+        ),
+        TargetPlatform.iOS => _iosClientKey(await deviceInfo.iosInfo),
+        TargetPlatform.macOS => _macosClientKey(await deviceInfo.macOsInfo),
+        TargetPlatform.windows => _windowsClientKey(
+          await deviceInfo.windowsInfo,
+        ),
+        TargetPlatform.linux => _linuxClientKey(await deviceInfo.linuxInfo),
+        TargetPlatform.fuchsia => '',
+      };
       if (normalizedName.isNotEmpty) {
-        return DeviceProfile(name: normalizedName, platform: platform);
+        return DeviceProfile(
+          name: normalizedName,
+          platform: platform,
+          clientKey: clientKey,
+        );
       }
     } catch (_) {
       // 部分测试环境或未注册平台插件时可能无法读取设备信息，回退到稳定默认名。
@@ -53,6 +77,19 @@ class DeviceProfile {
     return _joinUnique([info.manufacturer, info.model]);
   }
 
+  static String _androidClientKey(AndroidDeviceInfo info) {
+    return stableClientKey('android', [
+      info.manufacturer,
+      info.brand,
+      info.model,
+      info.device,
+      info.product,
+      info.hardware,
+      info.fingerprint,
+      info.isPhysicalDevice ? 'physical' : 'emulator',
+    ]);
+  }
+
   static String _iosName(IosDeviceInfo info) {
     final userName = _cleanName(info.name);
     if (userName.isNotEmpty && userName != info.model) {
@@ -61,16 +98,65 @@ class DeviceProfile {
     return _joinUnique([info.modelName, info.localizedModel, info.model]);
   }
 
+  static String _iosClientKey(IosDeviceInfo info) {
+    return stableClientKey('ios', [
+      info.identifierForVendor ?? '',
+      info.model,
+      info.localizedModel,
+      info.systemName,
+    ]);
+  }
+
   static String _macosName(MacOsDeviceInfo info) {
     return _firstNotBlank([info.computerName, info.modelName, info.model]);
+  }
+
+  static String _macosClientKey(MacOsDeviceInfo info) {
+    return stableClientKey('macos', [
+      info.systemGUID ?? '',
+      info.computerName,
+      info.modelName,
+      info.model,
+    ]);
   }
 
   static String _windowsName(WindowsDeviceInfo info) {
     return _firstNotBlank([info.computerName, info.productName]);
   }
 
+  static String _windowsClientKey(WindowsDeviceInfo info) {
+    return stableClientKey('windows', [
+      info.deviceId,
+      info.computerName,
+      info.productName,
+    ]);
+  }
+
   static String _linuxName(LinuxDeviceInfo info) {
     return _firstNotBlank([info.prettyName, info.name]);
+  }
+
+  static String _linuxClientKey(LinuxDeviceInfo info) {
+    return stableClientKey('linux', [
+      info.machineId ?? '',
+      info.name,
+      info.prettyName,
+    ]);
+  }
+
+  @visibleForTesting
+  static String stableClientKey(String platform, List<String> values) {
+    final cleanedValues = values
+        .map(_cleanName)
+        .where((value) => value.isNotEmpty)
+        .toList();
+    if (cleanedValues.isEmpty) {
+      return '';
+    }
+    final normalizedPlatform = _cleanName(platform).toLowerCase();
+    final payload = '$normalizedPlatform|${cleanedValues.join('|')}';
+    final digest = sha256.convert(utf8.encode(payload)).toString();
+    return 'vaultsync-device:v1:$normalizedPlatform:$digest';
   }
 
   static String _joinUnique(List<String> parts) {

@@ -25,9 +25,14 @@ CREATE TABLE IF NOT EXISTS devices (
     user_id TEXT NOT NULL,
     name TEXT NOT NULL,
     platform TEXT NOT NULL,
+    client_key TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_user_client_key
+ON devices(user_id, client_key)
+WHERE client_key <> '';
 
 CREATE TABLE IF NOT EXISTS sync_roots (
     id TEXT PRIMARY KEY,

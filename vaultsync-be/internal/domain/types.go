@@ -23,6 +23,7 @@ type Device struct {
 	UserID    string `json:"user_id"`
 	Name      string `json:"name"`
 	Platform  string `json:"platform"`
+	ClientKey string `json:"client_key,omitempty"`
 	CreatedAt string `json:"created_at"`
 }
 

@@ -82,6 +82,8 @@ class SyncHomeScreen extends StatefulWidget {
 }
 
 class _SyncHomeScreenState extends State<SyncHomeScreen> {
+  static const _androidDownloadsPath = '/storage/emulated/0/Download';
+
   late Future<_SyncHomeData> _homeFuture;
   Timer? _initialAutoSyncTimer;
   Timer? _autoSyncTimer;
@@ -142,6 +144,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       roots: roots,
       mappings: mappings,
       uploadTasks: uploadTasks,
+      currentDeviceId: currentDeviceId ?? '',
     );
     final issues = await widget.syncIssues?.loadSyncIssues() ?? const [];
     return _SyncHomeData(
@@ -160,19 +163,29 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     required List<SyncRoot> roots,
     required List<LocalSyncRootMapping> mappings,
     required List<LocalUploadTask> uploadTasks,
+    required String currentDeviceId,
   }) async {
     final rootIds = {for (final root in roots) root.id};
-    final prunedMappings = [
+    var prunedMappings = [
       for (final mapping in mappings)
         if (rootIds.contains(mapping.syncRootId)) mapping,
     ];
+    final restoredMappings = _restoreKnownCurrentDeviceMappings(
+      roots: roots,
+      mappings: prunedMappings,
+      currentDeviceId: currentDeviceId,
+    );
+    if (restoredMappings.isNotEmpty) {
+      prunedMappings = [...prunedMappings, ...restoredMappings];
+    }
     final prunedTasks = [
       for (final task in uploadTasks)
         if (rootIds.contains(task.syncRootId) &&
             !isIgnoredLocalSyncRelativePath(task.relativePath))
           task,
     ];
-    if (prunedMappings.length != mappings.length) {
+    if (prunedMappings.length != mappings.length ||
+        restoredMappings.isNotEmpty) {
       await widget.syncRootMappings.saveSyncRootMappings(prunedMappings);
     }
     if (prunedTasks.length != uploadTasks.length) {
@@ -182,6 +195,52 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       mappings: prunedMappings,
       uploadTasks: prunedTasks,
     );
+  }
+
+  List<LocalSyncRootMapping> _restoreKnownCurrentDeviceMappings({
+    required List<SyncRoot> roots,
+    required List<LocalSyncRootMapping> mappings,
+    required String currentDeviceId,
+  }) {
+    if (currentDeviceId.isEmpty) {
+      return const [];
+    }
+    final mappedRootIds = {for (final mapping in mappings) mapping.syncRootId};
+    final restored = <LocalSyncRootMapping>[];
+    final platform = widget.devicePlatform ?? DeviceProfile.current().platform;
+    for (final root in roots) {
+      if (root.deviceId != currentDeviceId || mappedRootIds.contains(root.id)) {
+        continue;
+      }
+      final restoredPath = _restorableLocalPathFor(root, platform);
+      if (restoredPath == null) {
+        continue;
+      }
+      restored.add(
+        LocalSyncRootMapping(
+          syncRootId: root.id,
+          localPath: restoredPath,
+          encryptedPath: root.encryptedPath,
+          encryptionEnabled: root.encryptionEnabled,
+          cleanupPolicy: root.cleanupPolicy,
+          archivePath: root.archivePath,
+        ),
+      );
+      mappedRootIds.add(root.id);
+    }
+    return restored;
+  }
+
+  String? _restorableLocalPathFor(SyncRoot root, String platform) {
+    if (_isMediaBackupEncryptedPath(root.encryptedPath)) {
+      return '';
+    }
+    if (platform == 'android' &&
+        root.encryptedPath ==
+            widget.pathProtector.protectLocalPath(_androidDownloadsPath)) {
+      return _androidDownloadsPath;
+    }
+    return null;
   }
 
   Future<Map<String, List<RemoteBackupEntry>>> _loadRemoteBackupEntries(

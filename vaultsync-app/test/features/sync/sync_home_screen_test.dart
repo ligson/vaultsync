@@ -559,6 +559,89 @@ void main() {
     expect(find.text('/Users/alice/Old'), findsNothing);
   });
 
+  testWidgets('sync home restores media backup mapping after reinstall', (
+    tester,
+  ) async {
+    final mappings = FakeSyncRootMappingStore();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: mappings,
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: FakeSyncRootGateway([
+            const SyncRoot(
+              id: 'media-root',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'media-backup:v1:media-source-1',
+              cleanupPolicy: 'delete',
+              archivePath: '',
+              createdAt: '2026-07-30T00:00:00Z',
+            ),
+          ]),
+          devicePlatform: 'android',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(mappings.saved, hasLength(1));
+    expect(mappings.saved.single.syncRootId, 'media-root');
+    expect(mappings.saved.single.localPath, '');
+    expect(
+      mappings.saved.single.encryptedPath,
+      'media-backup:v1:media-source-1',
+    );
+    expect(find.text('相册备份'), findsOneWidget);
+    expect(find.textContaining('未绑定目录'), findsNothing);
+  });
+
+  testWidgets('sync home restores Android downloads mapping after reinstall', (
+    tester,
+  ) async {
+    final mappings = FakeSyncRootMappingStore();
+    final protectedDownloads = const Sha256LocalPathProtector()
+        .protectLocalPath('/storage/emulated/0/Download');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: mappings,
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: FakeSyncRootGateway([
+            SyncRoot(
+              id: 'download-root',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: protectedDownloads,
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-30T00:00:00Z',
+            ),
+          ]),
+          devicePlatform: 'android',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(mappings.saved, hasLength(1));
+    expect(mappings.saved.single.syncRootId, 'download-root');
+    expect(mappings.saved.single.localPath, '/storage/emulated/0/Download');
+    expect(find.text('Download'), findsWidgets);
+    expect(find.text('/storage/emulated/0/Download'), findsOneWidget);
+    expect(find.textContaining('未绑定目录'), findsNothing);
+  });
+
   testWidgets('sync home prunes ignored third-party sync control tasks', (
     tester,
   ) async {

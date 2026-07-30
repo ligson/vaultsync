@@ -8,6 +8,7 @@
 - 后端 `devices` 表新增 `client_key` 字段和 `(user_id, client_key)` 非空唯一索引；旧客户端不传 `client_key` 时仍按原逻辑注册设备。新客户端第一次登录时，如果发现同一用户下存在唯一的“同名同平台且未绑定 key”的旧设备，会把 key 绑定到旧设备并复用原 `device_id`。
 - Flutter 客户端基于各平台可读取的公开设备信息生成稳定 key：Android 使用品牌、型号、产品、硬件和系统构建指纹等信息；iOS/macOS/Windows/Linux 分别使用系统提供的 vendor/system/device/machine 标识。拿不到稳定信息时不发送 key，避免误合并设备。
 - 本次变更不删除服务端 `data/`、不清空 SQLite、不修改已有同步目录绑定、不清理客户端本地上传队列或相册备份记录；数据库仅做非破坏性新增字段和索引。
+- 修正旧 SQLite 数据库升级时的设备索引创建顺序：先为 `devices` 表补 `client_key` 字段，再创建唯一索引，避免旧库启动时报 `no such column: client_key`。发布过程中发现该问题后已先回滚线上后端恢复服务，随后补充旧库迁移回归测试。
 
 ## 2026-07-29
 

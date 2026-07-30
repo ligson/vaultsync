@@ -140,9 +140,6 @@ CREATE TABLE IF NOT EXISTS download_releases (
     updated_at TEXT NOT NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_user_client_key
-ON devices(user_id, client_key)
-WHERE client_key <> '';
 `
 
 func migrate(db *sql.DB) error {

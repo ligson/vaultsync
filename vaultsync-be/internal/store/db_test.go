@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 )
@@ -81,5 +82,49 @@ func TestOpenRunsMigrationsAndEnablesWAL(t *testing.T) {
 				t.Fatalf("table %s column %d mismatch: got %q want %q (full=%v)", table, i, got[i], column, got)
 			}
 		}
+	}
+}
+
+func TestMigrateAddsDeviceClientKeyToLegacyDatabase(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "legacy.db"))
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+	if _, err := db.Exec(`
+		CREATE TABLE devices (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			platform TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		);
+		INSERT INTO devices (id, user_id, name, platform, created_at)
+		VALUES ('dev-1', 'user-1', 'HUAWEI NOH-AN00', 'android', '2026-07-30T00:00:00Z');
+	`); err != nil {
+		t.Fatalf("seed legacy devices table: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate legacy database: %v", err)
+	}
+
+	var clientKey string
+	if err := db.QueryRow(`SELECT client_key FROM devices WHERE id='dev-1'`).Scan(&clientKey); err != nil {
+		t.Fatalf("read client_key: %v", err)
+	}
+	if clientKey != "" {
+		t.Fatalf("legacy client_key = %q, want empty string", clientKey)
+	}
+
+	var indexName string
+	if err := db.QueryRow(`
+		SELECT name
+		FROM sqlite_master
+		WHERE type = 'index' AND name = 'idx_devices_user_client_key'
+	`).Scan(&indexName); err != nil {
+		t.Fatalf("read device client key index: %v", err)
 	}
 }

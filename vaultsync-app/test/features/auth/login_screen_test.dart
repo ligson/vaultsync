@@ -72,7 +72,7 @@ void main() {
     expect(storage.savedSession?.token, 'server-token');
     expect(storage.savedDevice?.id, 'device-1');
     expect(syncRoots.token, 'server-token');
-    expect(find.text('同步主页'), findsOneWidget);
+    expect(find.text('同步'), findsOneWidget);
     expect(find.byTooltip('返回'), findsNothing);
   });
 
@@ -342,7 +342,7 @@ void main() {
     expect(auth.email, 'alice@example.com');
     expect(auth.password, 'passw0rd!');
     expect(storage.savedSession?.token, 'server-token');
-    expect(find.text('同步主页'), findsOneWidget);
+    expect(find.text('同步'), findsOneWidget);
   });
 }
 

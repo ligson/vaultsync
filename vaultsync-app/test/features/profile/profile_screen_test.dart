@@ -8,6 +8,7 @@ import 'package:vaultsync_app/features/auth/auth_models.dart';
 import 'package:vaultsync_app/features/auth/auth_service.dart';
 import 'package:vaultsync_app/features/device/device_models.dart';
 import 'package:vaultsync_app/features/profile/authenticated_shell.dart';
+import 'package:vaultsync_app/features/profile/app_permission_gateway.dart';
 import 'package:vaultsync_app/features/profile/avatar_store.dart';
 import 'package:vaultsync_app/features/profile/profile_screen.dart';
 
@@ -165,23 +166,85 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('退出登录'), findsOneWidget);
   });
+
+  testWidgets('profile checks and requests sync permissions', (tester) async {
+    final permissions = FakeAppPermissionGateway(
+      const AppPermissionSnapshot(
+        media: AppPermissionState.granted,
+        allFiles: AppPermissionState.denied,
+      ),
+    );
+    await tester.pumpWidget(
+      _profileApp(
+        gateway: FakeProfileGateway(),
+        permissionGateway: permissions,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('app_permissions_tile')),
+      200,
+      scrollable: find.byType(Scrollable),
+    );
+    await tester.tap(find.byKey(const ValueKey('app_permissions_tile')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('权限与存储'), findsOneWidget);
+    expect(find.text('有权限需要处理'), findsOneWidget);
+    expect(find.text('照片和视频'), findsOneWidget);
+    expect(find.text('共享文件夹访问'), findsOneWidget);
+
+    permissions.snapshot = const AppPermissionSnapshot(
+      media: AppPermissionState.granted,
+      allFiles: AppPermissionState.granted,
+    );
+    final fileTile = find.byKey(const ValueKey('file_access_permission_tile'));
+    await tester.tap(find.descendant(of: fileTile, matching: find.text('未授权')));
+    await tester.pumpAndSettle();
+
+    expect(permissions.fileRequestCount, 1);
+    expect(find.text('同步权限已满足'), findsOneWidget);
+  });
 }
 
 Widget _profileApp({
   required FakeProfileGateway gateway,
   Future<void> Function()? onSignOut,
+  AppPermissionGateway? permissionGateway,
 }) {
   return MaterialApp(
     home: ProfileScreen(
       storage: FakeSessionStore(),
       profileGateway: gateway,
       avatarStore: MemoryAvatarStore(),
+      permissionGateway: permissionGateway,
       platform: 'android',
       serverAddress: 'https://files.example.com',
       onSignOut: onSignOut,
       appVersionLoader: () async => '1.0.0+1',
     ),
   );
+}
+
+class FakeAppPermissionGateway implements AppPermissionGateway {
+  AppPermissionSnapshot snapshot;
+  int fileRequestCount = 0;
+
+  FakeAppPermissionGateway(this.snapshot);
+
+  @override
+  Future<AppPermissionSnapshot> checkPermissions() async => snapshot;
+
+  @override
+  Future<void> openSystemSettings() async {}
+
+  @override
+  Future<void> requestFileAccessPermission() async {
+    fileRequestCount += 1;
+  }
+
+  @override
+  Future<void> requestMediaPermission() async {}
 }
 
 class FakeProfileGateway implements UserProfileGateway {

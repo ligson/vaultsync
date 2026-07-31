@@ -13,6 +13,7 @@ import 'features/media_backup/media_upload_content_reader.dart';
 import 'features/media_backup/photo_manager_media_gateway.dart';
 import 'features/preview/remote_file_preview.dart';
 import 'features/profile/authenticated_shell.dart';
+import 'features/profile/app_permission_gateway.dart';
 import 'features/sync/encrypted_download_payload_decrypter.dart';
 import 'features/sync/encrypted_upload_payload_preparer.dart';
 import 'features/sync/local_cleanup_executor.dart';
@@ -318,6 +319,9 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
         storage: widget.storage,
         profileGateway: profileGateway,
         releaseGateway: releaseGateway,
+        permissionGateway: PlatformAppPermissionGateway(
+          platform: deviceProfile.platform,
+        ),
         platform: deviceProfile.platform,
         serverAddress: _apiBaseUrl.toString(),
         onConfigureServer: () => _openServerSettings(auth),

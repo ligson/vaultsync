@@ -32,7 +32,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('同步主页'), findsOneWidget);
+    expect(
+      find.descendant(of: find.byType(AppBar), matching: find.text('同步')),
+      findsOneWidget,
+    );
     expect(find.text('登录'), findsNothing);
   });
 
@@ -162,7 +165,10 @@ void main() {
     expect(auth.refreshToken, 'old-token');
     expect(storage.savedSession?.token, 'new-token');
     expect(syncRoots.token, 'new-token');
-    expect(find.text('同步主页'), findsOneWidget);
+    expect(
+      find.descendant(of: find.byType(AppBar), matching: find.text('同步')),
+      findsOneWidget,
+    );
   });
 }
 

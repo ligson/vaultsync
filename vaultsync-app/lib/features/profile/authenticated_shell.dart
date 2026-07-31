@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/storage/app_storage.dart';
 import '../auth/auth_service.dart';
+import 'app_permission_gateway.dart';
 import 'avatar_store.dart';
 import 'profile_screen.dart';
 
@@ -11,6 +12,7 @@ class AuthenticatedShell extends StatefulWidget {
   final UserProfileGateway profileGateway;
   final AppReleaseGateway? releaseGateway;
   final AvatarStore avatarStore;
+  final AppPermissionGateway? permissionGateway;
   final String platform;
   final String serverAddress;
   final Future<void> Function()? onConfigureServer;
@@ -23,6 +25,7 @@ class AuthenticatedShell extends StatefulWidget {
     required this.profileGateway,
     this.releaseGateway,
     this.avatarStore = const LocalAvatarStore(),
+    this.permissionGateway,
     required this.platform,
     required this.serverAddress,
     this.onConfigureServer,
@@ -50,6 +53,7 @@ class _AuthenticatedShellState extends State<AuthenticatedShell> {
               profileGateway: widget.profileGateway,
               releaseGateway: widget.releaseGateway,
               avatarStore: widget.avatarStore,
+              permissionGateway: widget.permissionGateway,
               platform: widget.platform,
               serverAddress: widget.serverAddress,
               onConfigureServer: widget.onConfigureServer,

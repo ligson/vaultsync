@@ -77,7 +77,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(syncRoots.token, 'server-token');
-    expect(find.text('同步主页'), findsOneWidget);
+    expect(find.text('同步'), findsOneWidget);
     expect(find.text('Photos'), findsWidgets);
     expect(find.text('/Users/alice/Photos'), findsOneWidget);
     expect(find.text('1 个文件'), findsWidgets);
@@ -114,6 +114,49 @@ void main() {
     expect(find.text('暂无同步目录'), findsOneWidget);
   });
 
+  testWidgets('sync home keeps a compact action bar in landscape', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(640, 360);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore(),
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: FakeSyncRootGateway(const []),
+          devicePlatform: 'android',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('同步'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('open_sync_status_button')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('sync_more_actions_button')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('scan_local_files_button')), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('sync_more_actions_button')));
+    await tester.pumpAndSettle();
+    expect(find.text('相册备份'), findsOneWidget);
+    expect(find.text('扫描本地文件'), findsOneWidget);
+    expect(find.text('拉取远端变更'), findsOneWidget);
+  });
+
   testWidgets('sync home opens media backup screen on mobile', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -131,7 +174,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('open_media_backup_button')));
+    await _tapHomeAction(tester, 'open_media_backup_button');
     await tester.pumpAndSettle();
 
     expect(find.text('相册备份'), findsOneWidget);
@@ -240,7 +283,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('scan_local_files_button')));
+    await _tapHomeAction(tester, 'scan_local_files_button');
     await tester.pumpAndSettle();
 
     expect(find.text('未获得相册访问权限'), findsOneWidget);
@@ -292,7 +335,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const ValueKey('scan_local_files_button')));
+      await _tapHomeAction(tester, 'scan_local_files_button');
       await tester.pumpAndSettle();
 
       expect(find.text('未获得相册访问权限'), findsOneWidget);
@@ -347,7 +390,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('scan_local_files_button')));
+    await _tapHomeAction(tester, 'scan_local_files_button');
     await tester.pumpAndSettle();
 
     expect(mediaGateway.requestCount, 1);
@@ -411,7 +454,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('scan_local_files_button')));
+    await _tapHomeAction(tester, 'scan_local_files_button');
     await tester.pumpAndSettle();
 
     expect(scanner.syncRootIds, ['root-current']);
@@ -449,7 +492,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('open_sync_history_button')));
+    await _tapHomeAction(tester, 'open_sync_history_button');
     await tester.pumpAndSettle();
 
     expect(find.text('同步记录'), findsOneWidget);
@@ -1804,7 +1847,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('scan_local_files_button')));
+    await _tapHomeAction(tester, 'scan_local_files_button');
     await tester.pumpAndSettle();
 
     expect(scanner.callCount, 1);
@@ -1858,7 +1901,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('scan_local_files_button')));
+    await _tapHomeAction(tester, 'scan_local_files_button');
     await tester.pumpAndSettle();
 
     expect(fileAccessPermission.openCount, 1);
@@ -1961,7 +2004,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('execute_uploads_button')));
+    await _tapHomeAction(tester, 'execute_uploads_button');
     await tester.pumpAndSettle();
 
     expect(uploadExecutor.callCount, 1);
@@ -2761,7 +2804,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('pull_remote_changes_button')));
+    await _tapHomeAction(tester, 'pull_remote_changes_button');
     await tester.pumpAndSettle();
 
     expect(pullExecutor.callCount, 1);
@@ -3505,6 +3548,12 @@ void main() {
 
     expect(syncRoots.deletedRemote, isTrue);
   });
+}
+
+Future<void> _tapHomeAction(WidgetTester tester, String key) async {
+  await tester.tap(find.byKey(const ValueKey('sync_more_actions_button')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(ValueKey(key)));
 }
 
 class FakeSyncRootGateway implements SyncRootGateway {

@@ -9,6 +9,8 @@ import '../../core/network/api_exception.dart';
 import '../../core/storage/app_storage.dart';
 import '../auth/auth_models.dart';
 import '../auth/auth_service.dart';
+import 'app_permission_gateway.dart';
+import 'app_permissions_screen.dart';
 import 'avatar_store.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -16,6 +18,7 @@ class ProfileScreen extends StatefulWidget {
   final UserProfileGateway profileGateway;
   final AppReleaseGateway? releaseGateway;
   final AvatarStore avatarStore;
+  final AppPermissionGateway? permissionGateway;
   final String platform;
   final String serverAddress;
   final Future<void> Function()? onConfigureServer;
@@ -28,6 +31,7 @@ class ProfileScreen extends StatefulWidget {
     required this.profileGateway,
     this.releaseGateway,
     required this.avatarStore,
+    this.permissionGateway,
     required this.platform,
     required this.serverAddress,
     this.onConfigureServer,
@@ -160,6 +164,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   trailing: const Icon(Icons.chevron_right),
                   onTap: widget.onConfigureServer,
                 ),
+                ListTile(
+                  key: const ValueKey('app_permissions_tile'),
+                  leading: const Icon(Icons.shield_outlined),
+                  title: const Text('权限与存储'),
+                  subtitle: const Text('检查相册和文件夹访问权限'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _openPermissions,
+                ),
                 const Divider(height: 1, indent: 56),
                 _SectionLabel('应用'),
                 ListTile(
@@ -199,6 +211,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           );
         },
+      ),
+    );
+  }
+
+  Future<void> _openPermissions() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => AppPermissionsScreen(
+          gateway:
+              widget.permissionGateway ??
+              PlatformAppPermissionGateway(platform: widget.platform),
+          platform: widget.platform,
+        ),
       ),
     );
   }

@@ -27,6 +27,22 @@ import 'sync_service.dart';
 
 const _androidDownloadsPath = '/storage/emulated/0/Download';
 
+enum _HomeAction { mediaBackup, history, scan, upload, pull }
+
+class _HomeActionLabel extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _HomeActionLabel({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [Icon(icon, size: 20), const SizedBox(width: 12), Text(label)],
+    );
+  }
+}
+
 class SyncHomeScreen extends StatefulWidget {
   final SessionStore storage;
   final SyncRootMappingStore syncRootMappings;
@@ -1383,48 +1399,58 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: false,
-        title: const Text('同步主页'),
+        title: const Text('同步'),
         actions: [
-          if (_isMobilePlatform)
-            IconButton(
-              key: const ValueKey('open_media_backup_button'),
-              tooltip: '相册备份',
-              onPressed: _openMediaBackupScreen,
-              icon: const Icon(Icons.photo_library_outlined),
-            ),
           IconButton(
             key: const ValueKey('open_sync_status_button'),
             tooltip: '同步状态',
             onPressed: _openSyncStatusPage,
             icon: const Icon(Icons.sync),
           ),
-          IconButton(
-            key: const ValueKey('open_sync_history_button'),
-            tooltip: '同步记录',
-            onPressed: _openSyncHistoryPage,
-            icon: const Icon(Icons.history),
-          ),
-          IconButton(
-            key: const ValueKey('scan_local_files_button'),
-            tooltip: '扫描本地文件',
-            onPressed: () => _scanLocalFiles(),
-            icon: const Icon(Icons.search),
-          ),
-          IconButton(
-            key: const ValueKey('execute_uploads_button'),
-            tooltip: '上传待处理任务',
-            onPressed: widget.uploadExecutor == null || _isUploading
-                ? null
-                : () => _executePendingUploads(),
-            icon: const Icon(Icons.cloud_upload),
-          ),
-          IconButton(
-            key: const ValueKey('pull_remote_changes_button'),
-            tooltip: '拉取远端变更',
-            onPressed: widget.remotePullExecutor == null || _isPulling
-                ? null
-                : _pullRemoteChanges,
-            icon: const Icon(Icons.cloud_download),
+          PopupMenuButton<_HomeAction>(
+            key: const ValueKey('sync_more_actions_button'),
+            tooltip: '更多操作',
+            onSelected: _handleHomeAction,
+            itemBuilder: (context) => [
+              if (_isMobilePlatform)
+                const PopupMenuItem(
+                  key: ValueKey('open_media_backup_button'),
+                  value: _HomeAction.mediaBackup,
+                  child: _HomeActionLabel(
+                    icon: Icons.photo_library_outlined,
+                    label: '相册备份',
+                  ),
+                ),
+              const PopupMenuItem(
+                key: ValueKey('open_sync_history_button'),
+                value: _HomeAction.history,
+                child: _HomeActionLabel(icon: Icons.history, label: '同步记录'),
+              ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
+                key: ValueKey('scan_local_files_button'),
+                value: _HomeAction.scan,
+                child: _HomeActionLabel(icon: Icons.search, label: '扫描本地文件'),
+              ),
+              PopupMenuItem(
+                key: const ValueKey('execute_uploads_button'),
+                value: _HomeAction.upload,
+                enabled: widget.uploadExecutor != null && !_isUploading,
+                child: const _HomeActionLabel(
+                  icon: Icons.cloud_upload_outlined,
+                  label: '上传待处理任务',
+                ),
+              ),
+              PopupMenuItem(
+                key: const ValueKey('pull_remote_changes_button'),
+                value: _HomeAction.pull,
+                enabled: widget.remotePullExecutor != null && !_isPulling,
+                child: const _HomeActionLabel(
+                  icon: Icons.cloud_download_outlined,
+                  label: '拉取远端变更',
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -1475,6 +1501,21 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         },
       ),
     );
+  }
+
+  void _handleHomeAction(_HomeAction action) {
+    switch (action) {
+      case _HomeAction.mediaBackup:
+        _openMediaBackupScreen();
+      case _HomeAction.history:
+        _openSyncHistoryPage();
+      case _HomeAction.scan:
+        _scanLocalFiles();
+      case _HomeAction.upload:
+        _executePendingUploads();
+      case _HomeAction.pull:
+        _pullRemoteChanges();
+    }
   }
 
   Widget _buildHomeContent(

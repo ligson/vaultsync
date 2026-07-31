@@ -250,7 +250,7 @@ func TestListChangesAndDownloadCiphertext(t *testing.T) {
 	testutil.AssertHeader(t, resp, "Content-Type", "application/octet-stream")
 }
 
-func TestChangesCursorIsScopedByDevice(t *testing.T) {
+func TestChangesAreFilteredAndCursorIsScopedByDevice(t *testing.T) {
 	instance, app := testutil.NewTestAppAndServer(t)
 	token := registerAndLogin(t, app, "alice@example.com")
 
@@ -279,7 +279,10 @@ func TestChangesCursorIsScopedByDevice(t *testing.T) {
 
 	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/changes?cursor=0&device_id="+deviceBID, "", token)
 	testutil.AssertStatus(t, resp, http.StatusOK)
-	testutil.AssertJSONContains(t, resp, "ver-device-cursor")
+	env := testutil.DecodeJSONEnvelope(t, resp)
+	if strings.Contains(string(env.Data), "ver-device-cursor") {
+		t.Fatalf("expected device B changes to exclude device A version, got %s", string(env.Data))
+	}
 
 	var cursorRows int
 	err := instance.DB().QueryRow(`
@@ -290,8 +293,8 @@ func TestChangesCursorIsScopedByDevice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("count sync cursors: %v", err)
 	}
-	if cursorRows != 2 {
-		t.Fatalf("expected two device scoped cursors, got %d", cursorRows)
+	if cursorRows != 1 {
+		t.Fatalf("expected only the device with changes to advance cursor, got %d", cursorRows)
 	}
 }
 

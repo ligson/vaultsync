@@ -33,13 +33,7 @@ func (s *ChangeService) List(ctx context.Context, userID, deviceID string, curso
 		return domain.ChangePage{}, err
 	}
 	startCursor := cursorValue
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT rowid, change_type, version_id, object_id, sync_root_id, created_at
-		FROM sync_events
-		WHERE user_id = ? AND rowid > ?
-		ORDER BY rowid
-		LIMIT ?
-	`, userID, startCursor, limit+1)
+	rows, err := s.queryChanges(ctx, userID, cursorDeviceID, startCursor, limit)
 	if err != nil {
 		return domain.ChangePage{}, err
 	}
@@ -79,6 +73,26 @@ func (s *ChangeService) List(ctx context.Context, userID, deviceID string, curso
 		}
 	}
 	return domain.ChangePage{Items: items, NextCursor: nextCursor, HasMore: hasMore}, nil
+}
+
+func (s *ChangeService) queryChanges(ctx context.Context, userID, cursorDeviceID string, startCursor int64, limit int) (*sql.Rows, error) {
+	if cursorDeviceID == legacyCursorDeviceID {
+		return s.db.QueryContext(ctx, `
+			SELECT rowid, change_type, version_id, object_id, sync_root_id, created_at
+			FROM sync_events
+			WHERE user_id = ? AND rowid > ?
+			ORDER BY rowid
+			LIMIT ?
+		`, userID, startCursor, limit+1)
+	}
+	return s.db.QueryContext(ctx, `
+		SELECT se.rowid, se.change_type, se.version_id, se.object_id, se.sync_root_id, se.created_at
+		FROM sync_events se
+		JOIN sync_roots sr ON sr.id = se.sync_root_id AND sr.user_id = se.user_id
+		WHERE se.user_id = ? AND sr.device_id = ? AND se.rowid > ?
+		ORDER BY se.rowid
+		LIMIT ?
+	`, userID, cursorDeviceID, startCursor, limit+1)
 }
 
 func normalizeChangeLimit(limit int) (int, error) {

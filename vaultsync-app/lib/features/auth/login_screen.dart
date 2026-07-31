@@ -154,7 +154,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _openServerSettings() async {
     await showDialog<void>(
       context: context,
-      builder: (_) => _ServerSettingsDialog(
+      builder: (_) => ServerSettingsDialog(
         serverAddress: widget.serverAddress ?? '',
         auth: widget.auth,
         onServerAddressChanged: widget.onServerAddressChanged,
@@ -278,13 +278,14 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-class _ServerSettingsDialog extends StatefulWidget {
+class ServerSettingsDialog extends StatefulWidget {
   final String serverAddress;
   final AuthGateway auth;
   final Future<void> Function(String address)? onServerAddressChanged;
   final Future<void> Function(String address)? onTestServerConnection;
 
-  const _ServerSettingsDialog({
+  const ServerSettingsDialog({
+    super.key,
     required this.serverAddress,
     required this.auth,
     this.onServerAddressChanged,
@@ -292,10 +293,10 @@ class _ServerSettingsDialog extends StatefulWidget {
   });
 
   @override
-  State<_ServerSettingsDialog> createState() => _ServerSettingsDialogState();
+  State<ServerSettingsDialog> createState() => _ServerSettingsDialogState();
 }
 
-class _ServerSettingsDialogState extends State<_ServerSettingsDialog> {
+class _ServerSettingsDialogState extends State<ServerSettingsDialog> {
   late final TextEditingController _controller;
   bool _isTesting = false;
   bool _isSaving = false;

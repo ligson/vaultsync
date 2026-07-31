@@ -49,6 +49,8 @@ class SyncHomeScreen extends StatefulWidget {
   final MediaBackupGateway? mediaGateway;
   final String? devicePlatform;
   final String? currentDeviceDisplayName;
+  final String? serverAddress;
+  final Future<void> Function()? onConfigureServer;
   final Future<void> Function()? onSignOut;
 
   const SyncHomeScreen({
@@ -76,6 +78,8 @@ class SyncHomeScreen extends StatefulWidget {
     this.mediaGateway,
     this.devicePlatform,
     this.currentDeviceDisplayName,
+    this.serverAddress,
+    this.onConfigureServer,
     this.onSignOut,
   });
 
@@ -1434,7 +1438,10 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
                 error is ApiException && error.statusCode == 401;
             return _SyncErrorView(
               message: message,
+              serverAddress: widget.serverAddress ?? '',
               canSignOut: canSignOut,
+              onRetry: _reloadSyncRoots,
+              onConfigureServer: widget.onConfigureServer,
               onSignOut: _signOut,
             );
           }
@@ -2111,12 +2118,18 @@ class _PrunedLocalSyncState {
 
 class _SyncErrorView extends StatelessWidget {
   final String message;
+  final String serverAddress;
   final bool canSignOut;
+  final VoidCallback onRetry;
+  final Future<void> Function()? onConfigureServer;
   final Future<void> Function() onSignOut;
 
   const _SyncErrorView({
     required this.message,
+    required this.serverAddress,
     required this.canSignOut,
+    required this.onRetry,
+    this.onConfigureServer,
     required this.onSignOut,
   });
 
@@ -2131,6 +2144,35 @@ class _SyncErrorView extends StatelessWidget {
             const Icon(Icons.error_outline, size: 36),
             const SizedBox(height: 12),
             Text(message, textAlign: TextAlign.center),
+            if (serverAddress.trim().isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                '当前后端地址：$serverAddress',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+            const SizedBox(height: 16),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  key: const ValueKey('error_retry_button'),
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('重试'),
+                ),
+                if (onConfigureServer != null)
+                  OutlinedButton.icon(
+                    key: const ValueKey('error_server_settings_button'),
+                    onPressed: onConfigureServer,
+                    icon: const Icon(Icons.settings_outlined),
+                    label: const Text('后端地址'),
+                  ),
+              ],
+            ),
             if (canSignOut) ...[
               const SizedBox(height: 16),
               FilledButton.icon(

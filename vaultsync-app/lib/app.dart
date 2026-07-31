@@ -332,6 +332,8 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
               mediaGateway: mediaGateway,
               currentDeviceDisplayName: deviceProfile.name,
               autoSyncEnabled: widget.autoSyncEnabled,
+              serverAddress: _apiBaseUrl.toString(),
+              onConfigureServer: () => _openServerSettings(auth),
               onSignOut: _signOut,
             );
           }
@@ -444,6 +446,21 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
   Future<void> _testServerConnection(String address) async {
     final uri = _parseServerAddress(address);
     await AuthService(ApiClient(baseUrl: uri)).ping();
+  }
+
+  Future<void> _openServerSettings(AuthGateway auth) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => ServerSettingsDialog(
+        serverAddress: _apiBaseUrl.toString(),
+        auth: auth,
+        onServerAddressChanged: _saveServerAddress,
+        onTestServerConnection: _testServerConnection,
+      ),
+    );
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   Uri? _tryParseServerAddress(String? address) {

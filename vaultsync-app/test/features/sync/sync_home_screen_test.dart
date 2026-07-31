@@ -853,6 +853,48 @@ void main() {
     expect(signedOut, isTrue);
   });
 
+  testWidgets('sync error view can open server settings', (tester) async {
+    var openedSettings = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore(),
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: ThrowingSyncRootGateway(
+            const ApiException(
+              statusCode: 0,
+              code: 'connection_failure',
+              message: '无法连接后端服务，请确认 VaultSync 后端已启动，或检查后端地址是否正确',
+            ),
+          ),
+          serverAddress: 'https://files.ligson.xyz',
+          onConfigureServer: () async {
+            openedSettings = true;
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('当前后端地址：https://files.ligson.xyz'), findsOneWidget);
+    expect(find.byKey(const ValueKey('error_retry_button')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('error_server_settings_button')),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('error_server_settings_button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(openedSettings, isTrue);
+  });
+
   testWidgets('sync home clearly shows server backed files deleted locally', (
     tester,
   ) async {

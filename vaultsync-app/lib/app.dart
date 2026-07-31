@@ -262,6 +262,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
         widget.uploadExecutor ??
         LocalUploadExecutor(
           sessionStore: widget.storage,
+          syncRootMappings: widget.syncRootMappings,
           uploadTasks: widget.uploadTasks,
           uploads: resolvedUploads,
           payloadPreparer: StoredEncryptedUploadPayloadPreparer(

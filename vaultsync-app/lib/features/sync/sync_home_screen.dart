@@ -166,10 +166,14 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     required String currentDeviceId,
   }) async {
     final rootIds = {for (final root in roots) root.id};
-    var prunedMappings = [
-      for (final mapping in mappings)
-        if (rootIds.contains(mapping.syncRootId)) mapping,
-    ];
+    final rootsById = {for (final root in roots) root.id: root};
+    var prunedMappings = _syncMappingsWithRemoteRoots(
+      mappings: [
+        for (final mapping in mappings)
+          if (rootIds.contains(mapping.syncRootId)) mapping,
+      ],
+      rootsById: rootsById,
+    );
     final restoredMappings = _restoreKnownCurrentDeviceMappings(
       roots: roots,
       mappings: prunedMappings,
@@ -178,22 +182,86 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     if (restoredMappings.isNotEmpty) {
       prunedMappings = [...prunedMappings, ...restoredMappings];
     }
-    final prunedTasks = [
-      for (final task in uploadTasks)
-        if (rootIds.contains(task.syncRootId) &&
-            !isIgnoredLocalSyncRelativePath(task.relativePath))
-          task,
-    ];
-    if (prunedMappings.length != mappings.length ||
-        restoredMappings.isNotEmpty) {
+    final prunedTasks = _syncUploadTasksWithRemoteRoots(
+      tasks: [
+        for (final task in uploadTasks)
+          if (rootIds.contains(task.syncRootId) &&
+              !isIgnoredLocalSyncRelativePath(task.relativePath))
+            task,
+      ],
+      rootsById: rootsById,
+    );
+    if (!_sameSyncRootMappings(prunedMappings, mappings)) {
       await widget.syncRootMappings.saveSyncRootMappings(prunedMappings);
     }
-    if (prunedTasks.length != uploadTasks.length) {
+    if (!_sameUploadTasks(prunedTasks, uploadTasks)) {
       await widget.uploadTasks.saveUploadTasks(prunedTasks);
     }
     return _PrunedLocalSyncState(
       mappings: prunedMappings,
       uploadTasks: prunedTasks,
+    );
+  }
+
+  List<LocalSyncRootMapping> _syncMappingsWithRemoteRoots({
+    required List<LocalSyncRootMapping> mappings,
+    required Map<String, SyncRoot> rootsById,
+  }) {
+    return [
+      for (final mapping in mappings)
+        _syncMappingWithRemoteRoot(mapping, rootsById),
+    ];
+  }
+
+  LocalSyncRootMapping _syncMappingWithRemoteRoot(
+    LocalSyncRootMapping mapping,
+    Map<String, SyncRoot> rootsById,
+  ) {
+    final root = rootsById[mapping.syncRootId];
+    if (root == null) {
+      return mapping;
+    }
+    if (mapping.encryptedPath == root.encryptedPath &&
+        mapping.encryptionEnabled == root.encryptionEnabled &&
+        mapping.cleanupPolicy == root.cleanupPolicy &&
+        mapping.archivePath == root.archivePath) {
+      return mapping;
+    }
+    return LocalSyncRootMapping(
+      syncRootId: mapping.syncRootId,
+      localPath: mapping.localPath,
+      encryptedPath: root.encryptedPath,
+      encryptionEnabled: root.encryptionEnabled,
+      cleanupPolicy: root.cleanupPolicy,
+      archivePath: root.archivePath,
+    );
+  }
+
+  List<LocalUploadTask> _syncUploadTasksWithRemoteRoots({
+    required List<LocalUploadTask> tasks,
+    required Map<String, SyncRoot> rootsById,
+  }) {
+    return [
+      for (final task in tasks) _syncUploadTaskWithRemoteRoot(task, rootsById),
+    ];
+  }
+
+  LocalUploadTask _syncUploadTaskWithRemoteRoot(
+    LocalUploadTask task,
+    Map<String, SyncRoot> rootsById,
+  ) {
+    final root = rootsById[task.syncRootId];
+    if (root == null || task.encryptionEnabled == root.encryptionEnabled) {
+      return task;
+    }
+    return _copyUploadTask(
+      task,
+      uploadSessionId: '',
+      uploadPayloadHash: '',
+      uploadTotalSize: 0,
+      uploadChunkSize: 0,
+      uploadedBytes: 0,
+      encryptionEnabled: root.encryptionEnabled,
     );
   }
 
@@ -459,6 +527,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       _isUploading = true;
     });
     try {
+      await _homeFuture;
       final result = syncRootId == null
           ? await _executeCurrentDevicePendingUploads(executor)
           : await executor.executePendingUploads(syncRootId: syncRootId);
@@ -928,6 +997,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       _isAutoSyncing = true;
     });
     try {
+      await _homeFuture;
       if (scanAndUpload && !_isScanning) {
         setState(() {
           _isScanning = true;
@@ -1812,6 +1882,7 @@ LocalUploadTask _copyUploadTask(
   int? uploadTotalSize,
   int? uploadChunkSize,
   int? uploadedBytes,
+  bool? encryptionEnabled,
 }) {
   return LocalUploadTask(
     id: task.id,
@@ -1832,8 +1903,62 @@ LocalUploadTask _copyUploadTask(
     sourceType: task.sourceType,
     assetId: task.assetId,
     assetMediaType: task.assetMediaType,
-    encryptionEnabled: task.encryptionEnabled,
+    encryptionEnabled: encryptionEnabled ?? task.encryptionEnabled,
   );
+}
+
+bool _sameSyncRootMappings(
+  List<LocalSyncRootMapping> left,
+  List<LocalSyncRootMapping> right,
+) {
+  if (left.length != right.length) {
+    return false;
+  }
+  for (var index = 0; index < left.length; index += 1) {
+    final a = left[index];
+    final b = right[index];
+    if (a.syncRootId != b.syncRootId ||
+        a.localPath != b.localPath ||
+        a.encryptedPath != b.encryptedPath ||
+        a.encryptionEnabled != b.encryptionEnabled ||
+        a.cleanupPolicy != b.cleanupPolicy ||
+        a.archivePath != b.archivePath) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool _sameUploadTasks(List<LocalUploadTask> left, List<LocalUploadTask> right) {
+  if (left.length != right.length) {
+    return false;
+  }
+  for (var index = 0; index < left.length; index += 1) {
+    final a = left[index];
+    final b = right[index];
+    if (a.id != b.id ||
+        a.syncRootId != b.syncRootId ||
+        a.localPath != b.localPath ||
+        a.relativePath != b.relativePath ||
+        a.sizeBytes != b.sizeBytes ||
+        !a.modifiedAt.isAtSameMomentAs(b.modifiedAt) ||
+        a.status != b.status ||
+        a.attempts != b.attempts ||
+        !a.createdAt.isAtSameMomentAs(b.createdAt) ||
+        a.lastError != b.lastError ||
+        a.uploadSessionId != b.uploadSessionId ||
+        a.uploadPayloadHash != b.uploadPayloadHash ||
+        a.uploadTotalSize != b.uploadTotalSize ||
+        a.uploadChunkSize != b.uploadChunkSize ||
+        a.uploadedBytes != b.uploadedBytes ||
+        a.sourceType != b.sourceType ||
+        a.assetId != b.assetId ||
+        a.assetMediaType != b.assetMediaType ||
+        a.encryptionEnabled != b.encryptionEnabled) {
+      return false;
+    }
+  }
+  return true;
 }
 
 class _SyncHomeData {

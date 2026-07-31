@@ -51,6 +51,7 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
   static const _progressPersistBytes = 8 * 1024 * 1024;
 
   final SessionStore sessionStore;
+  final SyncRootMappingStore? syncRootMappings;
   final UploadTaskStore uploadTasks;
   final UploadGateway uploads;
   final UploadPayloadPreparer payloadPreparer;
@@ -61,6 +62,7 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
 
   const LocalUploadExecutor({
     required this.sessionStore,
+    this.syncRootMappings,
     required this.uploadTasks,
     required this.uploads,
     required this.payloadPreparer,
@@ -84,6 +86,7 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
     }
 
     final tasks = await uploadTasks.loadUploadTasks();
+    final mappingsByRootId = await _loadMappingsByRootId();
     var uploadedCount = 0;
     var failedCount = 0;
     final updatedTasks = <LocalUploadTask>[];
@@ -97,12 +100,15 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
         updatedTasks.add(task);
         continue;
       }
-      final objectId = objectIdForTask(task);
-      final versionId = versionIdForTask(task);
-      var currentTask = task;
+      var currentTask = _syncTaskWithCurrentMapping(
+        task,
+        mappingsByRootId[task.syncRootId],
+      );
+      final objectId = objectIdForTask(currentTask);
+      final versionId = versionIdForTask(currentTask);
       try {
         final payload = await payloadPreparer.prepare(
-          task,
+          currentTask,
           objectId: objectId,
           versionId: versionId,
         );
@@ -110,14 +116,14 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
         final session = await _resolveUploadSession(
           token: token,
           deviceId: deviceId,
-          task: task,
+          task: currentTask,
           objectId: objectId,
           versionId: versionId,
           payload: payload,
           payloadHash: payloadHash,
         );
         currentTask = _withStatus(
-          task,
+          currentTask,
           'pending',
           lastError: '',
           uploadSessionId: session.id,
@@ -210,6 +216,46 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
     return UploadExecutionResult(
       uploadedCount: uploadedCount,
       failedCount: failedCount,
+    );
+  }
+
+  Future<Map<String, LocalSyncRootMapping>> _loadMappingsByRootId() async {
+    final mappingsStore = syncRootMappings;
+    if (mappingsStore == null) {
+      return const {};
+    }
+    final mappings = await mappingsStore.loadSyncRootMappings();
+    return {for (final mapping in mappings) mapping.syncRootId: mapping};
+  }
+
+  LocalUploadTask _syncTaskWithCurrentMapping(
+    LocalUploadTask task,
+    LocalSyncRootMapping? mapping,
+  ) {
+    if (mapping == null ||
+        task.encryptionEnabled == mapping.encryptionEnabled) {
+      return task;
+    }
+    return LocalUploadTask(
+      id: task.id,
+      syncRootId: task.syncRootId,
+      localPath: task.localPath,
+      relativePath: task.relativePath,
+      sizeBytes: task.sizeBytes,
+      modifiedAt: task.modifiedAt,
+      status: task.status,
+      attempts: task.attempts,
+      createdAt: task.createdAt,
+      lastError: task.lastError,
+      uploadSessionId: '',
+      uploadPayloadHash: '',
+      uploadTotalSize: 0,
+      uploadChunkSize: 0,
+      uploadedBytes: 0,
+      sourceType: task.sourceType,
+      assetId: task.assetId,
+      assetMediaType: task.assetMediaType,
+      encryptionEnabled: mapping.encryptionEnabled,
     );
   }
 

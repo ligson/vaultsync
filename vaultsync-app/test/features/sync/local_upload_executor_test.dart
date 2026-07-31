@@ -268,6 +268,75 @@ void main() {
     },
   );
 
+  test(
+    'executePendingUploads reconciles task encryption with local root mapping',
+    () async {
+      final uploadTasks = FakeUploadTaskStore([
+        LocalUploadTask(
+          id: 'root-1:a.jpg',
+          syncRootId: 'root-1',
+          localPath: '/Users/alice/Photos/a.jpg',
+          relativePath: 'a.jpg',
+          sizeBytes: 3,
+          modifiedAt: DateTime.utc(2026, 6, 27, 9),
+          status: 'failed',
+          attempts: 1,
+          createdAt: DateTime.utc(2026, 6, 27, 10),
+          lastError: '普通存储文件缺少相对路径',
+          uploadSessionId: 'session-stale-encrypted',
+          uploadPayloadHash:
+              '9c2805d83f3cd3cd02e0fa84a9f0415f32d7fdce47033342c1d41febe1c37695',
+          uploadTotalSize: 3,
+          uploadChunkSize: 3,
+          uploadedBytes: 0,
+          encryptionEnabled: true,
+        ),
+      ]);
+      final uploads = FakeUploadGateway(
+        existingSession: const UploadSession(
+          id: 'session-stale-encrypted',
+          status: 'pending',
+          totalSize: 3,
+          chunkSize: 3,
+          receivedSize: 0,
+        ),
+      );
+      final payloadPreparer = RecordingUploadPayloadPreparer();
+      final executor = LocalUploadExecutor(
+        sessionStore: FakeSessionStore(
+          token: 'server-token',
+          deviceId: 'device-1',
+        ),
+        syncRootMappings: const FakeSyncRootMappingStore([
+          LocalSyncRootMapping(
+            syncRootId: 'root-1',
+            localPath: '/Users/alice/Photos',
+            encryptedPath: 'server:path',
+            encryptionEnabled: false,
+            cleanupPolicy: 'keep',
+            archivePath: '',
+          ),
+        ]),
+        uploadTasks: uploadTasks,
+        uploads: uploads,
+        payloadPreparer: payloadPreparer,
+        objectIdForTask: (_) => 'object-1',
+        versionIdForTask: (_) => 'version-1',
+        chunkSize: 3,
+      );
+
+      final result = await executor.executePendingUploads();
+
+      expect(result.uploadedCount, 1);
+      expect(payloadPreparer.seenEncryptionEnabled, isFalse);
+      expect(uploads.requestedSessionId, isNull);
+      expect(uploads.createCount, 1);
+      expect(uploadTasks.saved.single.status, 'uploaded');
+      expect(uploadTasks.saved.single.encryptionEnabled, isFalse);
+      expect(uploadTasks.saved.single.uploadSessionId, 'session-1');
+    },
+  );
+
   test('executePendingUploads can upload one sync root only', () async {
     final uploadTasks = FakeUploadTaskStore([
       LocalUploadTask(
@@ -409,6 +478,41 @@ class FakeUploadPayloadPreparer implements UploadPayloadPreparer {
       metadataJson: '{"relative_path":"a.jpg"}',
     );
   }
+}
+
+class RecordingUploadPayloadPreparer implements UploadPayloadPreparer {
+  bool? seenEncryptionEnabled;
+
+  @override
+  Future<PreparedUploadPayload> prepare(
+    LocalUploadTask task, {
+    required String objectId,
+    required String versionId,
+  }) async {
+    seenEncryptionEnabled = task.encryptionEnabled;
+    return const PreparedUploadPayload(
+      bytes: [1, 2, 3],
+      encryptedName: 'enc:a.jpg',
+      metadataJson: '{"relative_path":"a.jpg"}',
+    );
+  }
+}
+
+class FakeSyncRootMappingStore implements SyncRootMappingStore {
+  final List<LocalSyncRootMapping> mappings;
+
+  const FakeSyncRootMappingStore(this.mappings);
+
+  @override
+  Future<List<LocalSyncRootMapping>> loadSyncRootMappings() async => mappings;
+
+  @override
+  Future<void> saveSyncRootMapping(LocalSyncRootMapping mapping) async {}
+
+  @override
+  Future<void> saveSyncRootMappings(
+    List<LocalSyncRootMapping> mappings,
+  ) async {}
 }
 
 class FakePostUploadCleaner implements LocalPostUploadCleaner {

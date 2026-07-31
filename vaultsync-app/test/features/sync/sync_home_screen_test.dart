@@ -561,6 +561,79 @@ void main() {
     expect(find.text('/Users/alice/Old'), findsNothing);
   });
 
+  testWidgets(
+    'sync home reconciles local mapping encryption with server root',
+    (tester) async {
+      final mappings = FakeSyncRootMappingStore([
+        const LocalSyncRootMapping(
+          syncRootId: 'root-1',
+          localPath: '/storage/emulated/0/Download',
+          encryptedPath: 'old:path',
+          encryptionEnabled: true,
+          cleanupPolicy: 'delete',
+          archivePath: '',
+        ),
+      ]);
+      final uploadTasks = FakeUploadTaskStore([
+        LocalUploadTask(
+          id: 'root-1:file.apk',
+          syncRootId: 'root-1',
+          localPath: '/storage/emulated/0/Download/file.apk',
+          relativePath: 'file.apk',
+          sizeBytes: 7,
+          modifiedAt: DateTime.utc(2026, 7),
+          status: 'failed',
+          attempts: 2,
+          createdAt: DateTime.utc(2026, 7),
+          lastError: '普通存储文件缺少相对路径',
+          uploadSessionId: 'stale-session',
+          uploadPayloadHash: 'stale-hash',
+          uploadTotalSize: 7,
+          uploadChunkSize: 3,
+          uploadedBytes: 7,
+          encryptionEnabled: true,
+        ),
+      ]);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SyncHomeScreen(
+            storage: FakeSessionStore(
+              token: 'server-token',
+              deviceId: 'device-1',
+            ),
+            syncRootMappings: mappings,
+            uploadTasks: uploadTasks,
+            syncRoots: FakeSyncRootGateway([
+              const SyncRoot(
+                id: 'root-1',
+                userId: 'user-1',
+                deviceId: 'device-1',
+                encryptedPath: 'server:path',
+                encryptionEnabled: false,
+                cleanupPolicy: 'keep',
+                archivePath: '',
+                createdAt: '2026-07-01T00:00:00Z',
+              ),
+            ]),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(mappings.saved.single.encryptedPath, 'server:path');
+      expect(mappings.saved.single.encryptionEnabled, isFalse);
+      expect(mappings.saved.single.cleanupPolicy, 'keep');
+      expect(uploadTasks.saved.single.encryptionEnabled, isFalse);
+      expect(uploadTasks.saved.single.uploadSessionId, '');
+      expect(uploadTasks.saved.single.uploadPayloadHash, '');
+      expect(uploadTasks.saved.single.uploadTotalSize, 0);
+      expect(uploadTasks.saved.single.uploadChunkSize, 0);
+      expect(uploadTasks.saved.single.uploadedBytes, 0);
+      expect(uploadTasks.saved.single.status, 'failed');
+    },
+  );
+
   testWidgets('sync home restores media backup mapping after reinstall', (
     tester,
   ) async {

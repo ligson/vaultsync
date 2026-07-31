@@ -243,7 +243,19 @@ func TestListChangesAndDownloadCiphertext(t *testing.T) {
 
 	resp := testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/changes?cursor=0", "", token)
 	testutil.AssertStatus(t, resp, http.StatusOK)
-	testutil.AssertJSONContains(t, resp, versionID)
+	page := decodeChangesPage(t, resp)
+	if len(page.Items) != 1 {
+		t.Fatalf("expected one change, got %d", len(page.Items))
+	}
+	if page.Items[0].VersionID != versionID {
+		t.Fatalf("expected version %s, got %s", versionID, page.Items[0].VersionID)
+	}
+	if page.Items[0].EncryptedName == "" ||
+		page.Items[0].ContentHash == "" ||
+		page.Items[0].SizeBytes == 0 ||
+		page.Items[0].MetadataJSON == "" {
+		t.Fatalf("expected change to include downloadable version metadata, got %+v", page.Items[0])
+	}
 
 	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/objects/"+versionID, "", token)
 	testutil.AssertStatus(t, resp, http.StatusOK)
@@ -435,9 +447,14 @@ func createUploadSessionWithRelativePath(t *testing.T, app *httptest.Server, tok
 
 type changesPageResponse struct {
 	Items []struct {
-		ID          string `json:"id"`
-		ChangeType  string `json:"change_type"`
-		CursorValue int64  `json:"cursor_value"`
+		ID            string `json:"id"`
+		ChangeType    string `json:"change_type"`
+		VersionID     string `json:"version_id"`
+		CursorValue   int64  `json:"cursor_value"`
+		EncryptedName string `json:"encrypted_name"`
+		ContentHash   string `json:"content_hash"`
+		SizeBytes     int64  `json:"size_bytes"`
+		MetadataJSON  string `json:"metadata_json"`
 	} `json:"items"`
 	NextCursor int64 `json:"next_cursor"`
 	HasMore    bool  `json:"has_more"`

@@ -69,12 +69,16 @@ type FileVersion struct {
 }
 
 type CursorChange struct {
-	CursorValue int64  `json:"cursor_value"`
-	ChangeType  string `json:"change_type"`
-	VersionID   string `json:"version_id"`
-	ObjectID    string `json:"object_id"`
-	SyncRootID  string `json:"sync_root_id"`
-	CreatedAt   string `json:"created_at"`
+	CursorValue   int64  `json:"cursor_value"`
+	ChangeType    string `json:"change_type"`
+	VersionID     string `json:"version_id"`
+	ObjectID      string `json:"object_id"`
+	SyncRootID    string `json:"sync_root_id"`
+	EncryptedName string `json:"encrypted_name,omitempty"`
+	ContentHash   string `json:"content_hash,omitempty"`
+	SizeBytes     int64  `json:"size_bytes,omitempty"`
+	MetadataJSON  string `json:"metadata_json,omitempty"`
+	CreatedAt     string `json:"created_at"`
 }
 
 type ChangePage struct {

@@ -43,8 +43,35 @@ func (s *ChangeService) List(ctx context.Context, userID, deviceID string, curso
 	var nextCursor int64 = cursorValue
 	for rows.Next() {
 		var change domain.CursorChange
-		if err := rows.Scan(&change.CursorValue, &change.ChangeType, &change.VersionID, &change.ObjectID, &change.SyncRootID, &change.CreatedAt); err != nil {
+		var encryptedName sql.NullString
+		var contentHash sql.NullString
+		var sizeBytes sql.NullInt64
+		var metadataJSON sql.NullString
+		if err := rows.Scan(
+			&change.CursorValue,
+			&change.ChangeType,
+			&change.VersionID,
+			&change.ObjectID,
+			&change.SyncRootID,
+			&encryptedName,
+			&contentHash,
+			&sizeBytes,
+			&metadataJSON,
+			&change.CreatedAt,
+		); err != nil {
 			return domain.ChangePage{}, err
+		}
+		if encryptedName.Valid {
+			change.EncryptedName = encryptedName.String
+		}
+		if contentHash.Valid {
+			change.ContentHash = contentHash.String
+		}
+		if sizeBytes.Valid {
+			change.SizeBytes = sizeBytes.Int64
+		}
+		if metadataJSON.Valid {
+			change.MetadataJSON = metadataJSON.String
 		}
 		nextCursor = change.CursorValue
 		items = append(items, change)
@@ -78,17 +105,23 @@ func (s *ChangeService) List(ctx context.Context, userID, deviceID string, curso
 func (s *ChangeService) queryChanges(ctx context.Context, userID, cursorDeviceID string, startCursor int64, limit int) (*sql.Rows, error) {
 	if cursorDeviceID == legacyCursorDeviceID {
 		return s.db.QueryContext(ctx, `
-			SELECT rowid, change_type, version_id, object_id, sync_root_id, created_at
-			FROM sync_events
-			WHERE user_id = ? AND rowid > ?
-			ORDER BY rowid
+			SELECT se.rowid, se.change_type, se.version_id, se.object_id, se.sync_root_id,
+				COALESCE(fv.encrypted_name, ''), COALESCE(fv.content_hash, ''),
+				COALESCE(fv.size_bytes, 0), COALESCE(fv.metadata_json, ''), se.created_at
+			FROM sync_events se
+			LEFT JOIN file_versions fv ON fv.user_id = se.user_id AND fv.id = se.version_id
+			WHERE se.user_id = ? AND se.rowid > ?
+			ORDER BY se.rowid
 			LIMIT ?
 		`, userID, startCursor, limit+1)
 	}
 	return s.db.QueryContext(ctx, `
-		SELECT se.rowid, se.change_type, se.version_id, se.object_id, se.sync_root_id, se.created_at
+		SELECT se.rowid, se.change_type, se.version_id, se.object_id, se.sync_root_id,
+			COALESCE(fv.encrypted_name, ''), COALESCE(fv.content_hash, ''),
+			COALESCE(fv.size_bytes, 0), COALESCE(fv.metadata_json, ''), se.created_at
 		FROM sync_events se
 		JOIN sync_roots sr ON sr.id = se.sync_root_id AND sr.user_id = se.user_id
+		LEFT JOIN file_versions fv ON fv.user_id = se.user_id AND fv.id = se.version_id
 		WHERE se.user_id = ? AND sr.device_id = ? AND se.rowid > ?
 		ORDER BY se.rowid
 		LIMIT ?

@@ -2149,19 +2149,47 @@ class _SyncStatusPage extends StatefulWidget {
 }
 
 class _SyncStatusPageState extends State<_SyncStatusPage> {
-  late Future<_SyncHomeData> _future;
+  late _SyncHomeData _data;
   var _isRetrying = false;
+  var _isRefreshing = false;
+  String _refreshError = '';
 
   @override
   void initState() {
     super.initState();
-    _future = Future.value(widget.initialData);
+    _data = widget.initialData;
   }
 
-  void _refresh() {
+  Future<void> _refresh() async {
+    if (_isRefreshing) {
+      return;
+    }
     setState(() {
-      _future = widget.loadData();
+      _isRefreshing = true;
+      _refreshError = '';
     });
+    try {
+      final nextData = await widget.loadData();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _data = nextData;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _refreshError = userReadableErrorMessage(error);
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRefreshing = false;
+        });
+      }
+    }
   }
 
   Future<void> _retryFailed({String? syncRootId}) async {
@@ -2176,7 +2204,7 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
       if (!mounted) {
         return;
       }
-      _refresh();
+      await _refresh();
     } finally {
       if (mounted) {
         setState(() {
@@ -2198,7 +2226,7 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
       if (!mounted) {
         return;
       }
-      _refresh();
+      await _refresh();
     } finally {
       if (mounted) {
         setState(() {
@@ -2220,7 +2248,7 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
       if (!mounted) {
         return;
       }
-      _refresh();
+      await _refresh();
     } finally {
       if (mounted) {
         setState(() {
@@ -2242,7 +2270,7 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
       if (!mounted) {
         return;
       }
-      _refresh();
+      await _refresh();
     } finally {
       if (mounted) {
         setState(() {
@@ -2257,7 +2285,7 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
     if (!mounted) {
       return;
     }
-    _refresh();
+    await _refresh();
   }
 
   Future<void> _openIssueDetail(
@@ -2284,7 +2312,7 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
     if (!mounted) {
       return;
     }
-    _refresh();
+    await _refresh();
   }
 
   @override
@@ -2296,31 +2324,27 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
           IconButton(
             key: const ValueKey('refresh_sync_status_button'),
             tooltip: '刷新状态',
-            onPressed: _refresh,
-            icon: const Icon(Icons.refresh),
+            onPressed: _isRefreshing ? null : _refresh,
+            icon: _isRefreshing
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh),
           ),
         ],
       ),
-      body: FutureBuilder<_SyncHomeData>(
-        future: _future,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Text(userReadableErrorMessage(snapshot.error!)),
-              ),
-            );
-          }
-          final data = snapshot.data ?? widget.initialData;
-          return ListView(
+      body: Stack(
+        children: [
+          ListView(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
             children: [
+              if (_refreshError.isNotEmpty) ...[
+                _InlineSyncError(message: _refreshError),
+                const SizedBox(height: 12),
+              ],
               _SyncStatusCenter(
-                data: data,
+                data: _data,
                 retryEnabled: widget.retryEnabled && !_isRetrying,
                 onRetryFailed: () => _retryFailed(),
                 onRetryCleanup: _isRetrying ? null : _retryCleanup,
@@ -2328,14 +2352,14 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
               ),
               const SizedBox(height: 12),
               _FailedUploadTaskList(
-                data: data,
+                data: _data,
                 retryEnabled: widget.retryEnabled && !_isRetrying,
                 onRetryRoot: (syncRootId) =>
                     _retryFailed(syncRootId: syncRootId),
               ),
               const SizedBox(height: 12),
               _CleanupPendingTaskList(
-                data: data,
+                data: _data,
                 onOpenMediaCleanupPage: _openMediaCleanupPage,
                 onRetryCleanup: _isRetrying ? null : _retryCleanup,
                 onRetryOne: _isRetrying ? null : _retryOneCleanup,
@@ -2343,12 +2367,50 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
               ),
               const SizedBox(height: 12),
               _OpenSyncIssueList(
-                data: data,
-                onOpenIssue: (issue) => _openIssueDetail(data, issue),
+                data: _data,
+                onOpenIssue: (issue) => _openIssueDetail(_data, issue),
               ),
             ],
-          );
-        },
+          ),
+          if (_isRefreshing)
+            const Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              child: LinearProgressIndicator(minHeight: 2),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InlineSyncError extends StatelessWidget {
+  final String message;
+
+  const _InlineSyncError({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colorScheme.errorContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.error_outline, color: colorScheme.onErrorContainer),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(color: colorScheme.onErrorContainer),
+            ),
+          ),
+        ],
       ),
     );
   }

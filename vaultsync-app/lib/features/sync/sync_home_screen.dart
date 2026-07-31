@@ -90,6 +90,7 @@ class SyncHomeScreen extends StatefulWidget {
 class _SyncHomeScreenState extends State<SyncHomeScreen> {
   late Future<_SyncHomeData> _homeFuture;
   _SyncHomeData? _cachedHomeData;
+  String _selectedDeviceFilterId = _DeviceFilterOption.currentId;
   Timer? _initialAutoSyncTimer;
   Timer? _autoSyncTimer;
   var _isScanning = false;
@@ -1479,11 +1480,30 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     String refreshError = '',
   }) {
     final roots = data.roots;
-    final issues = data.openIssues;
-    final rootViews = data.rootViews;
+    final allRootViews = data.rootViews;
+    final filterOptions = _DeviceFilterOption.fromRootViews(allRootViews);
+    final selectedFilterId = _resolveSelectedDeviceFilterId(filterOptions);
+    final rootViews = _filterRootViews(allRootViews, selectedFilterId);
+    final visibleRootIds = {for (final rootView in rootViews) rootView.root.id};
+    final issues = [
+      for (final issue in data.openIssues)
+        if (visibleRootIds.contains(issue.syncRootId)) issue,
+    ];
     final children = <Widget>[
       if (refreshError.isNotEmpty) ...[
         _InlineSyncError(message: refreshError),
+        const SizedBox(height: 12),
+      ],
+      if (filterOptions.length > 1) ...[
+        _DeviceFilterBar(
+          options: filterOptions,
+          selectedId: selectedFilterId,
+          onChanged: (nextId) {
+            setState(() {
+              _selectedDeviceFilterId = nextId;
+            });
+          },
+        ),
         const SizedBox(height: 12),
       ],
       if (issues.isNotEmpty) ...[
@@ -1524,7 +1544,15 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         Padding(
           padding: EdgeInsets.all(roots.isEmpty && issues.isEmpty ? 48 : 16),
           child: Center(
-            child: Text(refreshError.isEmpty ? '暂无同步目录' : '暂无可展示的同步目录'),
+            child: Text(
+              _emptyRootMessage(
+                roots: roots,
+                issues: issues,
+                refreshError: refreshError,
+                selectedFilterId: selectedFilterId,
+              ),
+              textAlign: TextAlign.center,
+            ),
           ),
         )
       else
@@ -1577,6 +1605,55 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
           ),
       ],
     );
+  }
+
+  String _resolveSelectedDeviceFilterId(List<_DeviceFilterOption> options) {
+    if (options.any((option) => option.id == _selectedDeviceFilterId)) {
+      return _selectedDeviceFilterId;
+    }
+    return _DeviceFilterOption.currentId;
+  }
+
+  List<_SyncRootViewData> _filterRootViews(
+    List<_SyncRootViewData> rootViews,
+    String selectedFilterId,
+  ) {
+    if (selectedFilterId == _DeviceFilterOption.allId) {
+      return rootViews;
+    }
+    if (selectedFilterId == _DeviceFilterOption.currentId) {
+      return [
+        for (final rootView in rootViews)
+          if (rootView.isCurrentDeviceRoot) rootView,
+      ];
+    }
+    const devicePrefix = _DeviceFilterOption.devicePrefix;
+    if (selectedFilterId.startsWith(devicePrefix)) {
+      final deviceId = selectedFilterId.substring(devicePrefix.length);
+      return [
+        for (final rootView in rootViews)
+          if (rootView.root.deviceId == deviceId) rootView,
+      ];
+    }
+    return rootViews;
+  }
+
+  String _emptyRootMessage({
+    required List<SyncRoot> roots,
+    required List<LocalSyncIssue> issues,
+    required String refreshError,
+    required String selectedFilterId,
+  }) {
+    if (refreshError.isNotEmpty) {
+      return '暂无可展示的同步目录';
+    }
+    if (roots.isEmpty && issues.isEmpty) {
+      return '暂无同步目录';
+    }
+    if (selectedFilterId == _DeviceFilterOption.currentId) {
+      return '当前设备暂无同步目录，可切换到“全部设备”查看其他设备目录';
+    }
+    return '此设备暂无同步目录';
   }
 
   Future<void> _markIssueResolved(String issueId) async {
@@ -2666,6 +2743,101 @@ class _InlineSyncError extends StatelessWidget {
               style: TextStyle(color: colorScheme.onErrorContainer),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DeviceFilterOption {
+  static const currentId = '_current';
+  static const allId = '_all';
+  static const devicePrefix = 'device:';
+
+  final String id;
+  final String label;
+  final int count;
+
+  const _DeviceFilterOption({
+    required this.id,
+    required this.label,
+    required this.count,
+  });
+
+  static List<_DeviceFilterOption> fromRootViews(
+    List<_SyncRootViewData> rootViews,
+  ) {
+    if (rootViews.isEmpty) {
+      return const [];
+    }
+    final currentCount = rootViews
+        .where((rootView) => rootView.isCurrentDeviceRoot)
+        .length;
+    final deviceViews = <String, List<_SyncRootViewData>>{};
+    for (final rootView in rootViews) {
+      deviceViews.putIfAbsent(rootView.root.deviceId, () => []).add(rootView);
+    }
+    final hasOtherDevices = rootViews.any(
+      (rootView) => !rootView.isCurrentDeviceRoot,
+    );
+    final options = <_DeviceFilterOption>[
+      _DeviceFilterOption(id: currentId, label: '当前设备', count: currentCount),
+    ];
+    if (hasOtherDevices) {
+      options.add(
+        _DeviceFilterOption(id: allId, label: '全部设备', count: rootViews.length),
+      );
+      final otherDeviceEntries =
+          [
+            for (final entry in deviceViews.entries)
+              if (entry.value.any((rootView) => !rootView.isCurrentDeviceRoot))
+                entry,
+          ]..sort(
+            (left, right) => left.value.first.deviceDisplayName.compareTo(
+              right.value.first.deviceDisplayName,
+            ),
+          );
+      for (final entry in otherDeviceEntries) {
+        final firstView = entry.value.first;
+        options.add(
+          _DeviceFilterOption(
+            id: '$devicePrefix${entry.key}',
+            label: firstView.deviceDisplayName,
+            count: entry.value.length,
+          ),
+        );
+      }
+    }
+    return options;
+  }
+}
+
+class _DeviceFilterBar extends StatelessWidget {
+  final List<_DeviceFilterOption> options;
+  final String selectedId;
+  final ValueChanged<String> onChanged;
+
+  const _DeviceFilterBar({
+    required this.options,
+    required this.selectedId,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (var index = 0; index < options.length; index += 1) ...[
+            ChoiceChip(
+              key: ValueKey('device_filter_${options[index].id}'),
+              selected: options[index].id == selectedId,
+              onSelected: (_) => onChanged(options[index].id),
+              label: Text('${options[index].label} ${options[index].count}'),
+            ),
+            if (index != options.length - 1) const SizedBox(width: 8),
+          ],
         ],
       ),
     );

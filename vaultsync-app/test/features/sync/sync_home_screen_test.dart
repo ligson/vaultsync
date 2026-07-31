@@ -748,10 +748,108 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('当前设备暂无同步目录，可切换到“全部设备”查看其他设备目录'), findsOneWidget);
+    expect(find.text('HUAWEI NOH-AN00 1'), findsOneWidget);
+    expect(find.text('同步目录 root-oth'), findsNothing);
+
+    await tester.tap(
+      find.byKey(const ValueKey('device_filter_device:device-2')),
+    );
+    await tester.pumpAndSettle();
+
     expect(find.text('同步目录 root-oth'), findsWidgets);
     expect(find.text('其他设备目录，仅可查看'), findsOneWidget);
     expect(find.textContaining('其他设备：HUAWEI NOH-AN00'), findsWidgets);
     expect(find.textContaining('未绑定目录'), findsNothing);
+  });
+
+  testWidgets('sync home filters root list by device by default', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-current',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore([
+            const LocalSyncRootMapping(
+              syncRootId: 'root-current-download',
+              localPath: '/storage/emulated/0/Download',
+              encryptedPath: 'vaultsync-path:v1:download-current',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+            ),
+            const LocalSyncRootMapping(
+              syncRootId: 'root-current-media',
+              localPath: '',
+              encryptedPath: 'media-backup:v1:media-current',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+            ),
+          ]),
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: FakeSyncRootGateway([
+            const SyncRoot(
+              id: 'root-other-download',
+              userId: 'user-1',
+              deviceId: 'device-other',
+              deviceName: 'HUAWEI NOH-AN00',
+              encryptedPath: 'vaultsync-path:v1:download-other',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-30T00:00:00Z',
+            ),
+            const SyncRoot(
+              id: 'root-other-media',
+              userId: 'user-1',
+              deviceId: 'device-other',
+              deviceName: 'HUAWEI NOH-AN00',
+              encryptedPath: 'media-backup:v1:media-other',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-30T00:00:00Z',
+            ),
+            const SyncRoot(
+              id: 'root-current-download',
+              userId: 'user-1',
+              deviceId: 'device-current',
+              encryptedPath: 'vaultsync-path:v1:download-current',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-30T00:00:00Z',
+            ),
+            const SyncRoot(
+              id: 'root-current-media',
+              userId: 'user-1',
+              deviceId: 'device-current',
+              encryptedPath: 'media-backup:v1:media-current',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-30T00:00:00Z',
+            ),
+          ]),
+          currentDeviceDisplayName: 'Solana Mobile Inc.',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('当前设备 2'), findsOneWidget);
+    expect(find.text('全部设备 4'), findsOneWidget);
+    expect(find.text('HUAWEI NOH-AN00 2'), findsOneWidget);
+    expect(find.text('Download'), findsOneWidget);
+    expect(find.text('相册备份'), findsOneWidget);
+    expect(find.textContaining('其他设备：HUAWEI NOH-AN00'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('device_filter__all')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Download'), findsOneWidget);
+    expect(find.text('相册备份'), findsNWidgets(2));
+    expect(find.text('同步目录 root-oth'), findsOneWidget);
+    expect(find.textContaining('其他设备：HUAWEI NOH-AN00'), findsWidgets);
   });
 
   testWidgets('sync home prunes ignored third-party sync control tasks', (
@@ -1253,6 +1351,15 @@ void main() {
           }),
         ),
       ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('当前设备暂无同步目录，可切换到“全部设备”查看其他设备目录'), findsOneWidget);
+    expect(find.text('Alice MacBook 1'), findsOneWidget);
+    expect(find.text('其他设备：Alice MacBook'), findsNothing);
+
+    await tester.tap(
+      find.byKey(const ValueKey('device_filter_device:device-remote')),
     );
     await tester.pumpAndSettle();
 
@@ -2732,7 +2839,17 @@ void main() {
               createdAt: DateTime.utc(2026, 6, 29),
             ),
           ]),
-          syncRoots: FakeSyncRootGateway(const []),
+          syncRoots: FakeSyncRootGateway(const [
+            SyncRoot(
+              id: 'root-1',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'vaultsync-path:v1:root-1',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-06-29T00:00:00Z',
+            ),
+          ]),
         ),
       ),
     );
@@ -2768,7 +2885,17 @@ void main() {
           syncRootMappings: FakeSyncRootMappingStore(),
           uploadTasks: FakeUploadTaskStore(),
           syncIssues: issueStore,
-          syncRoots: FakeSyncRootGateway(const []),
+          syncRoots: FakeSyncRootGateway(const [
+            SyncRoot(
+              id: 'root-1',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'vaultsync-path:v1:root-1',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-06-29T00:00:00Z',
+            ),
+          ]),
         ),
       ),
     );

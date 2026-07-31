@@ -89,6 +89,7 @@ class SyncHomeScreen extends StatefulWidget {
 
 class _SyncHomeScreenState extends State<SyncHomeScreen> {
   late Future<_SyncHomeData> _homeFuture;
+  _SyncHomeData? _cachedHomeData;
   Timer? _initialAutoSyncTimer;
   Timer? _autoSyncTimer;
   var _isScanning = false;
@@ -99,7 +100,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
   @override
   void initState() {
     super.initState();
-    _homeFuture = _loadHomeData();
+    _homeFuture = _loadAndCacheHomeData();
     _startAutoSync();
   }
 
@@ -161,6 +162,12 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       currentDeviceId: currentDeviceId ?? '',
       currentDeviceName: currentDeviceDisplayName ?? '',
     );
+  }
+
+  Future<_SyncHomeData> _loadAndCacheHomeData() async {
+    final data = await _loadHomeData();
+    _cachedHomeData = data;
+    return data;
   }
 
   Future<_PrunedLocalSyncState> _pruneLocalStateForCurrentRoots({
@@ -369,7 +376,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
 
   void _reloadSyncRoots() {
     setState(() {
-      _homeFuture = _loadHomeData();
+      _homeFuture = _loadAndCacheHomeData();
     });
   }
 
@@ -1124,7 +1131,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
           _isUploading = false;
           _isPulling = false;
           _isAutoSyncing = false;
-          _homeFuture = _loadHomeData();
+          _homeFuture = _loadAndCacheHomeData();
         });
       }
     }
@@ -1425,7 +1432,9 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       body: FutureBuilder<_SyncHomeData>(
         future: _homeFuture,
         builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
+          final cachedData = snapshot.data ?? _cachedHomeData;
+          final isRefreshing = snapshot.connectionState != ConnectionState.done;
+          if (isRefreshing && cachedData == null) {
             return const Center(child: CircularProgressIndicator());
           }
           if (snapshot.hasError) {
@@ -1433,6 +1442,14 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
             final message = userReadableErrorMessage(
               error ?? Exception('加载同步主页失败'),
             );
+            if (cachedData != null) {
+              return _buildHomeContent(
+                context,
+                cachedData,
+                isRefreshing: false,
+                refreshError: message,
+              );
+            }
             final canSignOut =
                 widget.onSignOut != null ||
                 error is ApiException && error.statusCode == 401;
@@ -1445,97 +1462,120 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
               onSignOut: _signOut,
             );
           }
-          final data = snapshot.data ?? const _SyncHomeData();
-          final roots = data.roots;
-          final issues = data.openIssues;
-          if (roots.isEmpty && issues.isEmpty) {
-            return const Center(child: Text('暂无同步目录'));
-          }
-          final rootViews = data.rootViews;
-          return ListView(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 88),
-            children: [
-              if (issues.isNotEmpty) ...[
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(4, 16, 4, 4),
-                  child: Text(
-                    '待处理问题 ${issues.length} 个',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-                for (final issue in issues)
-                  ListTile(
-                    title: Text(issue.message),
-                    subtitle: Text(issue.relativePath),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_syncIssueTypeLabel(issue.type)),
-                        if (issue.type == 'download_conflict')
-                          IconButton(
-                            key: ValueKey('enqueue_conflict_issue_${issue.id}'),
-                            tooltip: '加入上传队列',
-                            onPressed: () => _enqueueConflictIssue(issue),
-                            icon: const Icon(Icons.cloud_upload),
-                          ),
-                        IconButton(
-                          key: ValueKey('resolve_sync_issue_${issue.id}'),
-                          tooltip: '标记已处理',
-                          onPressed: () => _markIssueResolved(issue.id),
-                          icon: const Icon(Icons.check),
-                        ),
-                      ],
-                    ),
-                  ),
-                const Divider(height: 1),
-              ],
-              if (rootViews.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text('暂无同步目录'),
-                )
-              else
-                for (final rootView in rootViews)
-                  _SyncRootPanel(
-                    rootView: rootView,
-                    initiallyExpanded: rootViews.length == 1,
-                    onManage: rootView.isCurrentDeviceRoot
-                        ? () => _openManageSyncRootDialog(rootView)
-                        : null,
-                    onScan: rootView.canRunLocalSync
-                        ? () => _scanLocalFiles(syncRootId: rootView.root.id)
-                        : null,
-                    onBind: rootView.isCurrentDeviceRoot
-                        ? () => _bindLocalFolder(rootView)
-                        : null,
-                    onUpload:
-                        widget.uploadExecutor == null ||
-                            _isUploading ||
-                            !rootView.canRunLocalSync
-                        ? null
-                        : () => _executePendingUploads(
-                            syncRootId: rootView.root.id,
-                          ),
-                    onRetryFailed:
-                        widget.uploadExecutor == null ||
-                            _isUploading ||
-                            rootView.failedTaskCount == 0 ||
-                            !rootView.isCurrentDeviceRoot
-                        ? null
-                        : () =>
-                              _retryFailedUploads(syncRootId: rootView.root.id),
-                    onDeleteFile: rootView.isCurrentDeviceRoot
-                        ? (file) => _deleteRemoteFile(rootView, file)
-                        : null,
-                    onDeleteFolder: rootView.isCurrentDeviceRoot
-                        ? (folderPath) =>
-                              _deleteRemoteFolder(rootView, folderPath)
-                        : null,
-                  ),
-            ],
+          return _buildHomeContent(
+            context,
+            cachedData ?? const _SyncHomeData(),
+            isRefreshing: isRefreshing,
           );
         },
       ),
+    );
+  }
+
+  Widget _buildHomeContent(
+    BuildContext context,
+    _SyncHomeData data, {
+    required bool isRefreshing,
+    String refreshError = '',
+  }) {
+    final roots = data.roots;
+    final issues = data.openIssues;
+    final rootViews = data.rootViews;
+    final children = <Widget>[
+      if (refreshError.isNotEmpty) ...[
+        _InlineSyncError(message: refreshError),
+        const SizedBox(height: 12),
+      ],
+      if (issues.isNotEmpty) ...[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 16, 4, 4),
+          child: Text(
+            '待处理问题 ${issues.length} 个',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+        ),
+        for (final issue in issues)
+          ListTile(
+            title: Text(issue.message),
+            subtitle: Text(issue.relativePath),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_syncIssueTypeLabel(issue.type)),
+                if (issue.type == 'download_conflict')
+                  IconButton(
+                    key: ValueKey('enqueue_conflict_issue_${issue.id}'),
+                    tooltip: '加入上传队列',
+                    onPressed: () => _enqueueConflictIssue(issue),
+                    icon: const Icon(Icons.cloud_upload),
+                  ),
+                IconButton(
+                  key: ValueKey('resolve_sync_issue_${issue.id}'),
+                  tooltip: '标记已处理',
+                  onPressed: () => _markIssueResolved(issue.id),
+                  icon: const Icon(Icons.check),
+                ),
+              ],
+            ),
+          ),
+        const Divider(height: 1),
+      ],
+      if (rootViews.isEmpty)
+        Padding(
+          padding: EdgeInsets.all(roots.isEmpty && issues.isEmpty ? 48 : 16),
+          child: Center(
+            child: Text(refreshError.isEmpty ? '暂无同步目录' : '暂无可展示的同步目录'),
+          ),
+        )
+      else
+        for (final rootView in rootViews)
+          _SyncRootPanel(
+            rootView: rootView,
+            initiallyExpanded: rootViews.length == 1,
+            onManage: rootView.isCurrentDeviceRoot
+                ? () => _openManageSyncRootDialog(rootView)
+                : null,
+            onScan: rootView.canRunLocalSync
+                ? () => _scanLocalFiles(syncRootId: rootView.root.id)
+                : null,
+            onBind: rootView.isCurrentDeviceRoot
+                ? () => _bindLocalFolder(rootView)
+                : null,
+            onUpload:
+                widget.uploadExecutor == null ||
+                    _isUploading ||
+                    !rootView.canRunLocalSync
+                ? null
+                : () => _executePendingUploads(syncRootId: rootView.root.id),
+            onRetryFailed:
+                widget.uploadExecutor == null ||
+                    _isUploading ||
+                    rootView.failedTaskCount == 0 ||
+                    !rootView.isCurrentDeviceRoot
+                ? null
+                : () => _retryFailedUploads(syncRootId: rootView.root.id),
+            onDeleteFile: rootView.isCurrentDeviceRoot
+                ? (file) => _deleteRemoteFile(rootView, file)
+                : null,
+            onDeleteFolder: rootView.isCurrentDeviceRoot
+                ? (folderPath) => _deleteRemoteFolder(rootView, folderPath)
+                : null,
+          ),
+    ];
+    return Stack(
+      children: [
+        ListView(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 88),
+          children: children,
+        ),
+        if (isRefreshing)
+          const Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            child: LinearProgressIndicator(minHeight: 2),
+          ),
+      ],
     );
   }
 

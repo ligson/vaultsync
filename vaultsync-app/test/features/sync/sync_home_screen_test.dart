@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -2786,6 +2787,76 @@ void main() {
     expect(find.text('远端删除被本地改动保护'), findsNothing);
   });
 
+  testWidgets('sync home keeps current content while refreshing', (
+    tester,
+  ) async {
+    final reloadCompleter = Completer<List<SyncRoot>>();
+    final syncRoots = BlockingReloadSyncRootGateway([
+      const SyncRoot(
+        id: 'root-1',
+        userId: 'user-1',
+        deviceId: 'device-1',
+        encryptedPath: 'base64:path',
+        cleanupPolicy: 'keep',
+        archivePath: '',
+        createdAt: '2026-07-01T00:00:00Z',
+      ),
+    ], reloadCompleter.future);
+    final issueStore = FakeSyncIssueStore([
+      LocalSyncIssue(
+        id: 'issue-1',
+        type: 'remote_delete_blocked',
+        syncRootId: 'root-1',
+        objectId: 'object-1',
+        versionId: '',
+        relativePath: 'photos/a.jpg',
+        localPath: '/Users/alice/Photos/a.jpg',
+        message: '远端删除被本地改动保护',
+        status: 'open',
+        createdAt: DateTime.utc(2026, 6, 29),
+      ),
+    ]);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore([
+            const LocalSyncRootMapping(
+              syncRootId: 'root-1',
+              localPath: '/Users/alice/Photos',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+            ),
+          ]),
+          uploadTasks: FakeUploadTaskStore(),
+          syncIssues: issueStore,
+          syncRoots: syncRoots,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Photos'), findsWidgets);
+    await tester.tap(find.byKey(const ValueKey('resolve_sync_issue_issue-1')));
+    await tester.pump();
+
+    expect(find.text('Photos'), findsWidgets);
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    reloadCompleter.complete(syncRoots.initialRoots);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(LinearProgressIndicator), findsNothing);
+    expect(find.text('远端删除被本地改动保护'), findsNothing);
+    expect(find.text('Photos'), findsWidgets);
+  });
+
   testWidgets('sync status issue detail can resolve conflict issue', (
     tester,
   ) async {
@@ -3335,6 +3406,22 @@ class FakeSyncRootGateway implements SyncRootGateway {
     deletedSyncRootId = syncRootId;
     deletedRemote = deleteRemote;
     createdRoots.removeWhere((root) => root.id == syncRootId);
+  }
+}
+
+class BlockingReloadSyncRootGateway extends FakeSyncRootGateway {
+  final Future<List<SyncRoot>> reloadFuture;
+
+  BlockingReloadSyncRootGateway(super.initialRoots, this.reloadFuture);
+
+  @override
+  Future<List<SyncRoot>> listSyncRoots({required String token}) async {
+    this.token = token;
+    listCallCount += 1;
+    if (listCallCount == 1) {
+      return initialRoots;
+    }
+    return reloadFuture;
   }
 }
 

@@ -5,7 +5,7 @@
 ## 2026-07-31
 
 - 同步状态页新增下载冲突批量处理：可一次性“全部上传冲突副本”或“全部关闭冲突提醒”，两个操作都会先弹出中文确认说明；批量上传失败时会展示首个失败原因。该能力只新增本地上传任务或关闭本地提醒，不删除本地原文件、冲突副本、服务端备份、SQLite 数据、上传队列、同步历史或加密密钥。
-- 已重新构建 Android release APK `versionCode=2026073107`，并上传到 `https://files.ligson.xyz/downloads/vaultsync-android-latest.apk`，下载记录已更新为 `1.0.0+2026073107`。本次仅替换下载包，不清空客户端数据或服务端数据；当前本机未检测到 ADB 在线设备，因此未执行手机覆盖安装。
+- 已重新构建 Android release APK `versionCode=2026073107`，上传到 `https://files.ligson.xyz/downloads/vaultsync-android-latest.apk`，下载记录已更新为 `1.0.0+2026073107`，并已覆盖安装到设备 `SM02G4061910351`。本次仅替换下载包和覆盖安装 App，不清空客户端数据或服务端数据。
 - 修复手机端拉取服务器变更时报“密文格式无效”的问题：后端 `/api/v1/changes` 现在会为 upsert 变更返回 `encrypted_name`、`content_hash`、`size_bytes`、`metadata_json` 等版本元数据，避免客户端拿到空 metadata 后误按加密内容解密普通存储文件。本次仅补齐接口返回字段和回归测试，不修改已有同步事件、文件版本、对象文件、SQLite 数据或客户端本地队列。
 - 优化同步状态页刷新交互：点击“刷新状态”时保留当前内容，仅在顶部显示细进度条、右上角按钮显示小加载状态；刷新失败时以内联中文提示展示，不再整页切换到空白加载态。
 - 已重新构建并部署 Android release APK `versionCode=2026073106`，并同步更新到 `https://files.ligson.xyz/downloads/vaultsync-android-latest.apk`。同时后端已发布并部署镜像 `ligson/vaultsync-be:142f6ff`。本次只替换程序版本和下载包，不清空客户端数据或服务端数据。

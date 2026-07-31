@@ -107,7 +107,7 @@ void main() {
         createdAt: DateTime.utc(2026, 6, 27, 10),
         uploadSessionId: 'session-resume',
         uploadPayloadHash:
-            '32bbe378a25091502b2baf9f7258c19444e7a43ee4593b08030acd790bd66e6a',
+            '09bff66e33b6160f7f0e47ed3830eb34b969f30435fe050aea09dfd65dc96ffc',
         uploadTotalSize: 7,
         uploadChunkSize: 3,
         uploadedBytes: 3,
@@ -167,7 +167,7 @@ void main() {
           createdAt: DateTime.utc(2026, 6, 27, 10),
           uploadSessionId: 'session-stale',
           uploadPayloadHash:
-              '32bbe378a25091502b2baf9f7258c19444e7a43ee4593b08030acd790bd66e6a',
+              '09bff66e33b6160f7f0e47ed3830eb34b969f30435fe050aea09dfd65dc96ffc',
           uploadTotalSize: 7,
           uploadChunkSize: 3,
           uploadedBytes: 7,
@@ -205,6 +205,66 @@ void main() {
       expect(uploads.uploadedPartIndexes, [0, 1, 2]);
       expect(uploadTasks.saved.single.status, 'uploaded');
       expect(uploadTasks.saved.single.uploadSessionId, 'session-1');
+    },
+  );
+
+  test(
+    'executePendingUploads recreates session when metadata fingerprint changed',
+    () async {
+      final uploadTasks = FakeUploadTaskStore([
+        LocalUploadTask(
+          id: 'root-1:a.jpg',
+          syncRootId: 'root-1',
+          localPath: '/Users/alice/Photos/a.jpg',
+          relativePath: 'a.jpg',
+          sizeBytes: 7,
+          modifiedAt: DateTime.utc(2026, 6, 27, 9),
+          status: 'failed',
+          attempts: 1,
+          createdAt: DateTime.utc(2026, 6, 27, 10),
+          uploadSessionId: 'session-old-metadata',
+          uploadPayloadHash:
+              '32bbe378a25091502b2baf9f7258c19444e7a43ee4593b08030acd790bd66e6a',
+          uploadTotalSize: 7,
+          uploadChunkSize: 3,
+          uploadedBytes: 7,
+          lastError: '普通存储文件缺少相对路径',
+        ),
+      ]);
+      final uploads = FakeUploadGateway(
+        existingSession: const UploadSession(
+          id: 'session-old-metadata',
+          status: 'pending',
+          totalSize: 7,
+          chunkSize: 3,
+          receivedSize: 7,
+        ),
+      );
+      final executor = LocalUploadExecutor(
+        sessionStore: FakeSessionStore(
+          token: 'server-token',
+          deviceId: 'device-1',
+        ),
+        uploadTasks: uploadTasks,
+        uploads: uploads,
+        payloadPreparer: const FakeUploadPayloadPreparer(
+          bytes: [1, 2, 3, 4, 5, 6, 7],
+        ),
+        objectIdForTask: (_) => 'object-1',
+        versionIdForTask: (_) => 'version-1',
+        chunkSize: 3,
+      );
+
+      final result = await executor.executePendingUploads();
+
+      expect(result.uploadedCount, 1);
+      expect(uploads.requestedSessionId, isNull);
+      expect(uploads.createCount, 1);
+      expect(uploadTasks.saved.single.status, 'uploaded');
+      expect(
+        uploadTasks.saved.single.uploadPayloadHash,
+        '09bff66e33b6160f7f0e47ed3830eb34b969f30435fe050aea09dfd65dc96ffc',
+      );
     },
   );
 

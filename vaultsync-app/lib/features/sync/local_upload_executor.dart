@@ -106,7 +106,7 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
           objectId: objectId,
           versionId: versionId,
         );
-        final payloadHash = sha256.convert(payload.bytes).toString();
+        final payloadHash = _uploadPayloadFingerprint(payload);
         final session = await _resolveUploadSession(
           token: token,
           deviceId: deviceId,
@@ -331,5 +331,16 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
   static String _stableTaskHash(LocalUploadTask task) {
     final digest = sha256.convert(utf8.encode(task.id));
     return base64Url.encode(digest.bytes).replaceAll('=', '');
+  }
+
+  static String _uploadPayloadFingerprint(PreparedUploadPayload payload) {
+    final contentHash = sha256.convert(payload.bytes).toString();
+    return sha256
+        .convert(
+          utf8.encode(
+            '$contentHash\n${payload.encryptedName}\n${payload.metadataJson}',
+          ),
+        )
+        .toString();
   }
 }

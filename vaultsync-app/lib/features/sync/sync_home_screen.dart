@@ -1235,6 +1235,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
             ignoreCleanupTask: _ignoreCleanupTask,
             openMediaCleanupConfirmationPage: _openMediaCleanupConfirmationPage,
             enqueueConflictIssue: _enqueueConflictIssue,
+            enqueueConflictIssues: _enqueueConflictIssues,
             resolveIssue: _markIssueResolved,
             retryEnabled: widget.uploadExecutor != null,
             autoSyncEnabled: widget.autoSyncEnabled,
@@ -1548,16 +1549,10 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
 
   Future<void> _enqueueConflictIssue(LocalSyncIssue issue) async {
     try {
-      final syncIssues = widget.syncIssues;
-      if (syncIssues == null) {
-        throw Exception('本地问题存储不可用');
+      final result = await _enqueueConflictIssues([issue]);
+      if (result.successCount == 0) {
+        throw Exception('冲突副本加入上传队列失败');
       }
-      final resolver = LocalSyncIssueResolver(
-        mappings: widget.syncRootMappings,
-        uploadTasks: widget.uploadTasks,
-        syncIssues: syncIssues,
-      );
-      await resolver.enqueueConflictForUpload(issue);
       await _addHistory(
         type: 'issue',
         result: 'success',
@@ -1589,6 +1584,39 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         context,
       ).showSnackBar(SnackBar(content: Text(userReadableErrorMessage(error))));
     }
+  }
+
+  Future<_BatchIssueActionResult> _enqueueConflictIssues(
+    List<LocalSyncIssue> issues,
+  ) async {
+    final syncIssues = widget.syncIssues;
+    if (syncIssues == null) {
+      throw Exception('本地问题存储不可用');
+    }
+    final resolver = LocalSyncIssueResolver(
+      mappings: widget.syncRootMappings,
+      uploadTasks: widget.uploadTasks,
+      syncIssues: syncIssues,
+    );
+    var successCount = 0;
+    var failedCount = 0;
+    var firstErrorMessage = '';
+    for (final issue in issues) {
+      try {
+        await resolver.enqueueConflictForUpload(issue);
+        successCount += 1;
+      } catch (error) {
+        if (firstErrorMessage.isEmpty) {
+          firstErrorMessage = userReadableErrorMessage(error);
+        }
+        failedCount += 1;
+      }
+    }
+    return _BatchIssueActionResult(
+      successCount: successCount,
+      failedCount: failedCount,
+      firstErrorMessage: firstErrorMessage,
+    );
   }
 
   Future<void> _bindLocalFolder(_SyncRootViewData rootView) async {
@@ -1704,10 +1732,12 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         content: Text(message),
         actions: [
           TextButton(
+            key: const ValueKey('cancel_remote_delete_button'),
             onPressed: () => Navigator.of(context).pop(false),
             child: const Text('取消'),
           ),
           FilledButton(
+            key: const ValueKey('confirm_remote_delete_button'),
             onPressed: () => Navigator.of(context).pop(true),
             child: Text(confirmLabel),
           ),
@@ -2126,6 +2156,8 @@ class _SyncStatusPage extends StatefulWidget {
   final Future<void> Function(String taskId) ignoreCleanupTask;
   final Future<void> Function() openMediaCleanupConfirmationPage;
   final Future<void> Function(LocalSyncIssue issue) enqueueConflictIssue;
+  final Future<_BatchIssueActionResult> Function(List<LocalSyncIssue> issues)
+  enqueueConflictIssues;
   final Future<void> Function(String issueId) resolveIssue;
   final bool retryEnabled;
   final bool autoSyncEnabled;
@@ -2139,6 +2171,7 @@ class _SyncStatusPage extends StatefulWidget {
     required this.ignoreCleanupTask,
     required this.openMediaCleanupConfirmationPage,
     required this.enqueueConflictIssue,
+    required this.enqueueConflictIssues,
     required this.resolveIssue,
     required this.retryEnabled,
     required this.autoSyncEnabled,
@@ -2146,6 +2179,18 @@ class _SyncStatusPage extends StatefulWidget {
 
   @override
   State<_SyncStatusPage> createState() => _SyncStatusPageState();
+}
+
+class _BatchIssueActionResult {
+  final int successCount;
+  final int failedCount;
+  final String firstErrorMessage;
+
+  const _BatchIssueActionResult({
+    required this.successCount,
+    required this.failedCount,
+    this.firstErrorMessage = '',
+  });
 }
 
 class _SyncStatusPageState extends State<_SyncStatusPage> {
@@ -2315,6 +2360,130 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
     await _refresh();
   }
 
+  Future<void> _enqueueAllConflicts(List<LocalSyncIssue> issues) async {
+    final conflictIssues = _downloadConflictIssues(issues);
+    if (conflictIssues.isEmpty || _isRetrying) {
+      return;
+    }
+    final confirmed = await _confirmBatchIssueAction(
+      title: '上传冲突副本',
+      message: '将把 ${conflictIssues.length} 个冲突副本加入上传队列。原文件和服务器文件不会被删除。',
+      confirmLabel: '加入上传队列',
+    );
+    if (!confirmed || !mounted) {
+      return;
+    }
+    setState(() {
+      _isRetrying = true;
+    });
+    var successCount = 0;
+    var failedCount = 0;
+    try {
+      final result = await widget.enqueueConflictIssues(conflictIssues);
+      successCount = result.successCount;
+      failedCount = result.failedCount;
+      if (!mounted) {
+        return;
+      }
+      final failedReason =
+          failedCount > 0 && result.firstErrorMessage.isNotEmpty
+          ? '，原因：${result.firstErrorMessage}'
+          : '';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '已加入 $successCount 个冲突副本，失败 $failedCount 个$failedReason',
+          ),
+        ),
+      );
+      await _refresh();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRetrying = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _resolveAllConflicts(List<LocalSyncIssue> issues) async {
+    final conflictIssues = _downloadConflictIssues(issues);
+    if (conflictIssues.isEmpty || _isRetrying) {
+      return;
+    }
+    final confirmed = await _confirmBatchIssueAction(
+      title: '关闭冲突提醒',
+      message:
+          '将关闭 ${conflictIssues.length} 个冲突提醒。这个操作只关闭提醒，不会删除本地文件、冲突副本或服务器备份。',
+      confirmLabel: '关闭提醒',
+    );
+    if (!confirmed || !mounted) {
+      return;
+    }
+    setState(() {
+      _isRetrying = true;
+    });
+    var successCount = 0;
+    var failedCount = 0;
+    try {
+      for (final issue in conflictIssues) {
+        try {
+          await widget.resolveIssue(issue.id);
+          successCount += 1;
+        } catch (_) {
+          failedCount += 1;
+        }
+      }
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已关闭 $successCount 个冲突提醒，失败 $failedCount 个')),
+      );
+      await _refresh();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRetrying = false;
+        });
+      }
+    }
+  }
+
+  List<LocalSyncIssue> _downloadConflictIssues(List<LocalSyncIssue> issues) {
+    return [
+      for (final issue in issues)
+        if (issue.type == 'download_conflict') issue,
+    ];
+  }
+
+  Future<bool> _confirmBatchIssueAction({
+    required String title,
+    required String message,
+    required String confirmLabel,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            key: const ValueKey('cancel_batch_issue_action_button'),
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const ValueKey('confirm_batch_issue_action_button'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(confirmLabel),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -2368,7 +2537,12 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
               const SizedBox(height: 12),
               _OpenSyncIssueList(
                 data: _data,
+                batchEnabled: !_isRetrying,
                 onOpenIssue: (issue) => _openIssueDetail(_data, issue),
+                onEnqueueAllConflicts: () =>
+                    _enqueueAllConflicts(_data.openIssues),
+                onResolveAllConflicts: () =>
+                    _resolveAllConflicts(_data.openIssues),
               ),
             ],
           ),
@@ -3117,9 +3291,18 @@ class _MediaCleanupConfirmationPageState
 
 class _OpenSyncIssueList extends StatelessWidget {
   final _SyncHomeData data;
+  final bool batchEnabled;
   final ValueChanged<LocalSyncIssue> onOpenIssue;
+  final VoidCallback onEnqueueAllConflicts;
+  final VoidCallback onResolveAllConflicts;
 
-  const _OpenSyncIssueList({required this.data, required this.onOpenIssue});
+  const _OpenSyncIssueList({
+    required this.data,
+    required this.batchEnabled,
+    required this.onOpenIssue,
+    required this.onEnqueueAllConflicts,
+    required this.onResolveAllConflicts,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -3127,16 +3310,53 @@ class _OpenSyncIssueList extends StatelessWidget {
     if (issues.isEmpty) {
       return const SizedBox.shrink();
     }
+    final conflictCount = issues
+        .where((issue) => issue.type == 'download_conflict')
+        .length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
-          child: Text(
-            '待处理问题 ${issues.length} 个',
-            style: Theme.of(context).textTheme.titleMedium,
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '待处理问题 ${issues.length} 个',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              if (conflictCount > 0)
+                Text(
+                  '冲突 $conflictCount 个',
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
+            ],
           ),
         ),
+        if (conflictCount > 0) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  key: const ValueKey('enqueue_all_conflicts_button'),
+                  onPressed: batchEnabled ? onEnqueueAllConflicts : null,
+                  icon: const Icon(Icons.cloud_upload_outlined),
+                  label: const Text('全部上传冲突副本'),
+                ),
+                OutlinedButton.icon(
+                  key: const ValueKey('resolve_all_conflicts_button'),
+                  onPressed: batchEnabled ? onResolveAllConflicts : null,
+                  icon: const Icon(Icons.check_circle_outline),
+                  label: const Text('全部关闭冲突提醒'),
+                ),
+              ],
+            ),
+          ),
+        ],
         for (final issue in issues)
           Card(
             margin: const EdgeInsets.symmetric(vertical: 4),

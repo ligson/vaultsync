@@ -2832,6 +2832,187 @@ void main() {
     expect(issueStore.issues.single.status, 'resolved');
   });
 
+  testWidgets('sync status can resolve all conflict issues', (tester) async {
+    final issueStore = FakeSyncIssueStore([
+      LocalSyncIssue(
+        id: 'download_conflict:root-1:object-1',
+        type: 'download_conflict',
+        syncRootId: 'root-1',
+        objectId: 'object-1',
+        versionId: 'version-1',
+        relativePath: 'photos/a.jpg',
+        localPath: '/Users/alice/Photos/a conflict.jpg',
+        message: '远端文件与本地改动冲突，已保存冲突副本',
+        status: 'open',
+        createdAt: DateTime.utc(2026, 6, 29),
+      ),
+      LocalSyncIssue(
+        id: 'download_conflict:root-1:object-2',
+        type: 'download_conflict',
+        syncRootId: 'root-1',
+        objectId: 'object-2',
+        versionId: 'version-2',
+        relativePath: 'photos/b.jpg',
+        localPath: '/Users/alice/Photos/b conflict.jpg',
+        message: '远端文件与本地改动冲突，已保存冲突副本',
+        status: 'open',
+        createdAt: DateTime.utc(2026, 6, 29),
+      ),
+      LocalSyncIssue(
+        id: 'remote_delete_blocked:root-1:object-3',
+        type: 'remote_delete_blocked',
+        syncRootId: 'root-1',
+        objectId: 'object-3',
+        versionId: '',
+        relativePath: 'photos/c.jpg',
+        localPath: '/Users/alice/Photos/c.jpg',
+        message: '远端删除被本地改动保护',
+        status: 'open',
+        createdAt: DateTime.utc(2026, 6, 29),
+      ),
+    ]);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore([
+            const LocalSyncRootMapping(
+              syncRootId: 'root-1',
+              localPath: '/Users/alice/Photos',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+            ),
+          ]),
+          uploadTasks: FakeUploadTaskStore(),
+          syncIssues: issueStore,
+          syncRoots: FakeSyncRootGateway([
+            const SyncRoot(
+              id: 'root-1',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-01T00:00:00Z',
+            ),
+          ]),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('open_sync_status_button')));
+    await tester.pumpAndSettle();
+    expect(find.text('冲突 2 个'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('resolve_all_conflicts_button')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('关闭冲突提醒'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('confirm_batch_issue_action_button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      issueStore.issues
+          .where((issue) => issue.type == 'download_conflict')
+          .every((issue) => issue.status == 'resolved'),
+      isTrue,
+    );
+    expect(
+      issueStore.issues
+          .singleWhere((issue) => issue.type == 'remote_delete_blocked')
+          .status,
+      'open',
+    );
+  });
+
+  testWidgets('sync status shows batch enqueue confirmation', (tester) async {
+    final issueStore = FakeSyncIssueStore([
+      LocalSyncIssue(
+        id: 'download_conflict:root-1:object-1',
+        type: 'download_conflict',
+        syncRootId: 'root-1',
+        objectId: 'object-1',
+        versionId: 'version-1',
+        relativePath: 'photos/a.jpg',
+        localPath: '/Users/alice/Photos/a conflict.jpg',
+        message: '远端文件与本地改动冲突，已保存冲突副本',
+        status: 'open',
+        createdAt: DateTime.utc(2026, 6, 29),
+      ),
+      LocalSyncIssue(
+        id: 'download_conflict:root-1:object-2',
+        type: 'download_conflict',
+        syncRootId: 'root-1',
+        objectId: 'object-2',
+        versionId: 'version-2',
+        relativePath: 'photos/b.jpg',
+        localPath: '/Users/alice/Photos/b conflict.jpg',
+        message: '远端文件与本地改动冲突，已保存冲突副本',
+        status: 'open',
+        createdAt: DateTime.utc(2026, 6, 29),
+      ),
+    ]);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore([
+            const LocalSyncRootMapping(
+              syncRootId: 'root-1',
+              localPath: '/Users/alice/Photos',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+            ),
+          ]),
+          uploadTasks: FakeUploadTaskStore(),
+          syncIssues: issueStore,
+          syncRoots: FakeSyncRootGateway([
+            const SyncRoot(
+              id: 'root-1',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-01T00:00:00Z',
+            ),
+          ]),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('open_sync_status_button')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('enqueue_all_conflicts_button')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('上传冲突副本'), findsOneWidget);
+    expect(find.text('将把 2 个冲突副本加入上传队列。原文件和服务器文件不会被删除。'), findsOneWidget);
+    expect(find.text('加入上传队列'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const ValueKey('cancel_batch_issue_action_button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(issueStore.issues.every((issue) => issue.status == 'open'), isTrue);
+  });
+
   testWidgets('sync home updates cleanup policy from management dialog', (
     tester,
   ) async {

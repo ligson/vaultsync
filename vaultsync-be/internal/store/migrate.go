@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS users (
     status TEXT NOT NULL DEFAULT 'active',
     quota_bytes INTEGER NOT NULL DEFAULT 107374182400,
     used_bytes INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    username TEXT NOT NULL DEFAULT '',
+    nickname TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -154,6 +156,8 @@ func migrate(db *sql.DB) error {
 		{name: "status", def: "TEXT NOT NULL DEFAULT 'active'"},
 		{name: "quota_bytes", def: "INTEGER NOT NULL DEFAULT 107374182400"},
 		{name: "used_bytes", def: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "username", def: "TEXT NOT NULL DEFAULT ''"},
+		{name: "nickname", def: "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := ensureColumn(db, "users", column.name, column.def); err != nil {
 			return err
@@ -166,6 +170,13 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	if err := ensureColumn(db, "devices", "client_key", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username
+		ON users(username)
+		WHERE username <> '';
+	`); err != nil {
 		return err
 	}
 	if _, err := db.Exec(`

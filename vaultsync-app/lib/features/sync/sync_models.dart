@@ -546,6 +546,8 @@ class RemoteBackupEntry {
   final int sizeBytes;
   final String updatedAt;
   final bool decryptable;
+  final String encryptedName;
+  final String metadataJson;
 
   const RemoteBackupEntry({
     required this.syncRootId,
@@ -556,5 +558,25 @@ class RemoteBackupEntry {
     required this.sizeBytes,
     required this.updatedAt,
     this.decryptable = true,
+    this.encryptedName = '',
+    this.metadataJson = '',
   });
+
+  RemoteBackupEntry withPayloadMetadata({
+    required String encryptedName,
+    required String metadataJson,
+  }) {
+    return RemoteBackupEntry(
+      syncRootId: syncRootId,
+      objectId: objectId,
+      versionId: versionId,
+      name: name,
+      relativePath: relativePath,
+      sizeBytes: sizeBytes,
+      updatedAt: updatedAt,
+      decryptable: decryptable,
+      encryptedName: encryptedName,
+      metadataJson: metadataJson,
+    );
+  }
 }

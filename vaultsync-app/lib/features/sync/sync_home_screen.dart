@@ -10,6 +10,8 @@ import '../media_backup/media_backup_models.dart';
 import '../media_backup/media_backup_screen.dart';
 import '../media_backup/media_backup_gateway.dart';
 import '../media_backup/media_backup_scanner.dart';
+import '../preview/file_preview_screen.dart';
+import '../preview/remote_file_preview.dart';
 import 'file_access_permission.dart';
 import 'folder_picker.dart';
 import 'local_cleanup_executor.dart';
@@ -42,6 +44,7 @@ class SyncHomeScreen extends StatefulWidget {
   final RemoteBackupGateway? remoteBackups;
   final RemoteObjectDeleteGateway? remoteObjectDeletes;
   final RemoteMetadataDecrypter? remoteMetadataDecrypter;
+  final RemoteFilePreviewGateway? remoteFilePreviews;
   final bool autoSyncEnabled;
   final Duration autoSyncInterval;
   final Duration autoSyncInitialDelay;
@@ -71,6 +74,7 @@ class SyncHomeScreen extends StatefulWidget {
     this.remoteBackups,
     this.remoteObjectDeletes,
     this.remoteMetadataDecrypter,
+    this.remoteFilePreviews,
     this.autoSyncEnabled = false,
     this.autoSyncInterval = const Duration(minutes: 5),
     this.autoSyncInitialDelay = const Duration(seconds: 2),
@@ -341,7 +345,13 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       );
       final entries = <RemoteBackupEntry>[];
       for (final object in page.items) {
-        entries.add(await decrypter.decrypt(object));
+        final entry = await decrypter.decrypt(object);
+        entries.add(
+          entry.withPayloadMetadata(
+            encryptedName: object.encryptedName,
+            metadataJson: object.metadataJson,
+          ),
+        );
       }
       entriesByRoot[root.id] = entries;
     }
@@ -1416,12 +1426,6 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
                 : _pullRemoteChanges,
             icon: const Icon(Icons.cloud_download),
           ),
-          IconButton(
-            key: const ValueKey('sign_out_button'),
-            tooltip: '退出登录',
-            onPressed: _signOut,
-            icon: const Icon(Icons.logout),
-          ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
@@ -1484,11 +1488,6 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     final filterOptions = _DeviceFilterOption.fromRootViews(allRootViews);
     final selectedFilterId = _resolveSelectedDeviceFilterId(filterOptions);
     final rootViews = _filterRootViews(allRootViews, selectedFilterId);
-    final visibleRootIds = {for (final rootView in rootViews) rootView.root.id};
-    final issues = [
-      for (final issue in data.openIssues)
-        if (visibleRootIds.contains(issue.syncRootId)) issue,
-    ];
     final children = <Widget>[
       if (refreshError.isNotEmpty) ...[
         _InlineSyncError(message: refreshError),
@@ -1506,48 +1505,13 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         ),
         const SizedBox(height: 12),
       ],
-      if (issues.isNotEmpty) ...[
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 16, 4, 4),
-          child: Text(
-            '待处理问题 ${issues.length} 个',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-        ),
-        for (final issue in issues)
-          ListTile(
-            title: Text(issue.message),
-            subtitle: Text(issue.relativePath),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(_syncIssueTypeLabel(issue.type)),
-                if (issue.type == 'download_conflict')
-                  IconButton(
-                    key: ValueKey('enqueue_conflict_issue_${issue.id}'),
-                    tooltip: '加入上传队列',
-                    onPressed: () => _enqueueConflictIssue(issue),
-                    icon: const Icon(Icons.cloud_upload),
-                  ),
-                IconButton(
-                  key: ValueKey('resolve_sync_issue_${issue.id}'),
-                  tooltip: '标记已处理',
-                  onPressed: () => _markIssueResolved(issue.id),
-                  icon: const Icon(Icons.check),
-                ),
-              ],
-            ),
-          ),
-        const Divider(height: 1),
-      ],
       if (rootViews.isEmpty)
         Padding(
-          padding: EdgeInsets.all(roots.isEmpty && issues.isEmpty ? 48 : 16),
+          padding: EdgeInsets.all(roots.isEmpty ? 48 : 16),
           child: Center(
             child: Text(
               _emptyRootMessage(
                 roots: roots,
-                issues: issues,
                 refreshError: refreshError,
                 selectedFilterId: selectedFilterId,
               ),
@@ -1588,6 +1552,9 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
             onDeleteFolder: rootView.isCurrentDeviceRoot
                 ? (folderPath) => _deleteRemoteFolder(rootView, folderPath)
                 : null,
+            onPreviewFile: widget.remoteFilePreviews == null
+                ? null
+                : (file) => _openFilePreview(file),
           ),
     ];
     return Stack(
@@ -1640,20 +1607,41 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
 
   String _emptyRootMessage({
     required List<SyncRoot> roots,
-    required List<LocalSyncIssue> issues,
     required String refreshError,
     required String selectedFilterId,
   }) {
     if (refreshError.isNotEmpty) {
       return '暂无可展示的同步目录';
     }
-    if (roots.isEmpty && issues.isEmpty) {
+    if (roots.isEmpty) {
       return '暂无同步目录';
     }
     if (selectedFilterId == _DeviceFilterOption.currentId) {
       return '当前设备暂无同步目录，可切换到“全部设备”查看其他设备目录';
     }
     return '此设备暂无同步目录';
+  }
+
+  Future<void> _openFilePreview(_UnifiedFileRecord file) async {
+    final backup = file.backup;
+    final previews = widget.remoteFilePreviews;
+    if (backup == null || previews == null || !file.canPreview) {
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => FilePreviewScreen(
+          fileName: backup.name,
+          loader: () async {
+            final token = await widget.storage.loadAuthToken();
+            if (token == null || token.isEmpty) {
+              throw Exception('登录状态已失效，请重新登录');
+            }
+            return previews.load(token: token, entry: backup);
+          },
+        ),
+      ),
+    );
   }
 
   Future<void> _markIssueResolved(String issueId) async {
@@ -3892,6 +3880,7 @@ class _SyncRootPanel extends StatelessWidget {
   final VoidCallback? onRetryFailed;
   final ValueChanged<_UnifiedFileRecord>? onDeleteFile;
   final ValueChanged<String>? onDeleteFolder;
+  final ValueChanged<_UnifiedFileRecord>? onPreviewFile;
 
   const _SyncRootPanel({
     required this.rootView,
@@ -3903,6 +3892,7 @@ class _SyncRootPanel extends StatelessWidget {
     required this.onRetryFailed,
     required this.onDeleteFile,
     required this.onDeleteFolder,
+    required this.onPreviewFile,
   });
 
   @override
@@ -4061,6 +4051,7 @@ class _SyncRootPanel extends StatelessWidget {
               rootView: rootView,
               onDeleteFile: onDeleteFile,
               onDeleteFolder: onDeleteFolder,
+              onPreviewFile: onPreviewFile,
             ),
         ],
       ),
@@ -4182,11 +4173,13 @@ class _UnifiedFileTree extends StatefulWidget {
   final _SyncRootViewData rootView;
   final ValueChanged<_UnifiedFileRecord>? onDeleteFile;
   final ValueChanged<String>? onDeleteFolder;
+  final ValueChanged<_UnifiedFileRecord>? onPreviewFile;
 
   const _UnifiedFileTree({
     required this.rootView,
     required this.onDeleteFile,
     required this.onDeleteFolder,
+    required this.onPreviewFile,
   });
 
   @override
@@ -4253,6 +4246,9 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
             _UnifiedFileEntry() => _UnifiedFileRow(
               entry: entry,
               statusLabel: widget.rootView.fileStatusLabel(entry.file),
+              onPreview: entry.file.canPreview && widget.onPreviewFile != null
+                  ? () => widget.onPreviewFile?.call(entry.file)
+                  : null,
               onDelete: widget.onDeleteFile == null
                   ? null
                   : () => widget.onDeleteFile?.call(entry.file),
@@ -4423,17 +4419,17 @@ class _UnifiedFolderRow extends StatelessWidget {
         children: [
           _StatusBadge(label: summary.statusLabel),
           if (onDelete != null)
-            PopupMenuButton<_FileTreeAction>(
+            PopupMenuButton<_FolderTreeAction>(
               tooltip: '文件夹操作',
               onSelected: (action) {
                 switch (action) {
-                  case _FileTreeAction.delete:
+                  case _FolderTreeAction.delete:
                     onDelete?.call();
                 }
               },
               itemBuilder: (context) => const [
                 PopupMenuItem(
-                  value: _FileTreeAction.delete,
+                  value: _FolderTreeAction.delete,
                   child: ListTile(
                     dense: true,
                     leading: Icon(Icons.delete_outline),
@@ -4451,11 +4447,13 @@ class _UnifiedFolderRow extends StatelessWidget {
 class _UnifiedFileRow extends StatelessWidget {
   final _UnifiedFileEntry entry;
   final String statusLabel;
+  final VoidCallback? onPreview;
   final VoidCallback? onDelete;
 
   const _UnifiedFileRow({
     required this.entry,
     required this.statusLabel,
+    required this.onPreview,
     required this.onDelete,
   });
 
@@ -4469,30 +4467,43 @@ class _UnifiedFileRow extends StatelessWidget {
       leading: Icon(
         file.decryptable ? _fileIcon(entry.path) : Icons.lock_outline,
       ),
+      onTap: onPreview,
       title: Text(entry.name),
       subtitle: Text(file.subtitle),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           _StatusBadge(label: statusLabel),
-          if (onDelete != null)
+          if (onPreview != null || onDelete != null)
             PopupMenuButton<_FileTreeAction>(
               tooltip: '文件操作',
               onSelected: (action) {
                 switch (action) {
+                  case _FileTreeAction.preview:
+                    onPreview?.call();
                   case _FileTreeAction.delete:
                     onDelete?.call();
                 }
               },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                  value: _FileTreeAction.delete,
-                  child: ListTile(
-                    dense: true,
-                    leading: Icon(Icons.delete_outline),
-                    title: Text('删除服务器备份'),
+              itemBuilder: (context) => [
+                if (onPreview != null)
+                  const PopupMenuItem(
+                    value: _FileTreeAction.preview,
+                    child: ListTile(
+                      dense: true,
+                      leading: Icon(Icons.visibility_outlined),
+                      title: Text('在线预览'),
+                    ),
                   ),
-                ),
+                if (onDelete != null)
+                  const PopupMenuItem(
+                    value: _FileTreeAction.delete,
+                    child: ListTile(
+                      dense: true,
+                      leading: Icon(Icons.delete_outline),
+                      title: Text('删除服务器备份'),
+                    ),
+                  ),
               ],
             ),
         ],
@@ -4501,7 +4512,9 @@ class _UnifiedFileRow extends StatelessWidget {
   }
 }
 
-enum _FileTreeAction { delete }
+enum _FileTreeAction { preview, delete }
+
+enum _FolderTreeAction { delete }
 
 class _DeletePolicyNotice extends StatelessWidget {
   final int backedUpCount;
@@ -4782,6 +4795,13 @@ class _UnifiedFileRecord {
 
   bool get decryptable {
     return backup?.decryptable ?? true;
+  }
+
+  bool get canPreview {
+    final remoteBackup = backup;
+    return remoteBackup != null &&
+        remoteBackup.decryptable &&
+        remoteFilePreviewKindFor(remoteBackup.name) != null;
   }
 
   String get subtitle {

@@ -11,6 +11,8 @@ import 'features/device/device_service.dart';
 import 'features/download/download_service.dart';
 import 'features/media_backup/media_upload_content_reader.dart';
 import 'features/media_backup/photo_manager_media_gateway.dart';
+import 'features/preview/remote_file_preview.dart';
+import 'features/profile/authenticated_shell.dart';
 import 'features/sync/encrypted_download_payload_decrypter.dart';
 import 'features/sync/encrypted_upload_payload_preparer.dart';
 import 'features/sync/local_cleanup_executor.dart';
@@ -256,6 +258,13 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
         : SyncService(apiClient);
     final resolvedUploads = widget.uploads ?? UploadApiService(apiClient);
     final resolvedDownloads = widget.downloads ?? DownloadService(apiClient);
+    final resolvedDownloadDecrypter = StoredEncryptedDownloadPayloadDecrypter(
+      keyStore: widget.uploadKeys,
+    );
+    final resolvedFilePreviews = RemoteFilePreviewLoader(
+      downloads: resolvedDownloads,
+      decrypter: resolvedDownloadDecrypter,
+    );
     final deviceProfile = _deviceProfile;
     final mediaGateway = const PhotoManagerMediaGateway();
     final resolvedUploadExecutor =
@@ -285,9 +294,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
           cursorStore: widget.syncCursors,
           changes: resolvedSyncChanges,
           downloads: resolvedDownloads,
-          decrypter: StoredEncryptedDownloadPayloadDecrypter(
-            keyStore: widget.uploadKeys,
-          ),
+          decrypter: resolvedDownloadDecrypter,
           writer: LocalDownloadWriter(
             mappings: widget.syncRootMappings,
             remoteVersions: widget.remoteVersions,
@@ -299,6 +306,51 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
             syncIssues: widget.syncIssues,
           ),
         );
+    final profileGateway = auth is UserProfileGateway
+        ? auth as UserProfileGateway
+        : AuthService(apiClient);
+    final releaseGateway = auth is AppReleaseGateway
+        ? auth as AppReleaseGateway
+        : AuthService(apiClient);
+
+    Widget authenticatedHome(BuildContext context) {
+      return AuthenticatedShell(
+        storage: widget.storage,
+        profileGateway: profileGateway,
+        releaseGateway: releaseGateway,
+        platform: deviceProfile.platform,
+        serverAddress: _apiBaseUrl.toString(),
+        onConfigureServer: () => _openServerSettings(auth),
+        onSignOut: _signOut,
+        syncHome: SyncHomeScreen(
+          storage: widget.storage,
+          syncRootMappings: widget.syncRootMappings,
+          uploadTasks: widget.uploadTasks,
+          syncIssues: widget.syncIssues,
+          autoSyncStatus: widget.autoSyncStatus,
+          syncHistory: widget.syncHistory,
+          syncRoots: resolvedSyncRoots,
+          uploadExecutor: resolvedUploadExecutor,
+          remotePullExecutor: resolvedRemotePullExecutor,
+          remoteBackups: resolvedRemoteBackups,
+          remoteObjectDeletes: resolvedRemoteObjectDeletes,
+          remoteMetadataDecrypter: StoredRemoteMetadataDecrypter(
+            keyStore: widget.uploadKeys,
+          ),
+          remoteFilePreviews: resolvedFilePreviews,
+          mediaBackupSources: widget.storage is MediaBackupSourceStore
+              ? widget.storage as MediaBackupSourceStore
+              : null,
+          mediaGateway: mediaGateway,
+          currentDeviceDisplayName: deviceProfile.name,
+          autoSyncEnabled: widget.autoSyncEnabled,
+          serverAddress: _apiBaseUrl.toString(),
+          onConfigureServer: () => _openServerSettings(auth),
+          onSignOut: _signOut,
+        ),
+      );
+    }
+
     return MaterialApp(
       title: 'VaultSync',
       theme: _theme(),
@@ -311,31 +363,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
             );
           }
           if (snapshot.data == true) {
-            return SyncHomeScreen(
-              storage: widget.storage,
-              syncRootMappings: widget.syncRootMappings,
-              uploadTasks: widget.uploadTasks,
-              syncIssues: widget.syncIssues,
-              autoSyncStatus: widget.autoSyncStatus,
-              syncHistory: widget.syncHistory,
-              syncRoots: resolvedSyncRoots,
-              uploadExecutor: resolvedUploadExecutor,
-              remotePullExecutor: resolvedRemotePullExecutor,
-              remoteBackups: resolvedRemoteBackups,
-              remoteObjectDeletes: resolvedRemoteObjectDeletes,
-              remoteMetadataDecrypter: StoredRemoteMetadataDecrypter(
-                keyStore: widget.uploadKeys,
-              ),
-              mediaBackupSources: widget.storage is MediaBackupSourceStore
-                  ? widget.storage as MediaBackupSourceStore
-                  : null,
-              mediaGateway: mediaGateway,
-              currentDeviceDisplayName: deviceProfile.name,
-              autoSyncEnabled: widget.autoSyncEnabled,
-              serverAddress: _apiBaseUrl.toString(),
-              onConfigureServer: () => _openServerSettings(auth),
-              onSignOut: _signOut,
-            );
+            return authenticatedHome(context);
           }
           return LoginScreen(
             auth: auth,
@@ -356,6 +384,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
             remoteMetadataDecrypter: StoredRemoteMetadataDecrypter(
               keyStore: widget.uploadKeys,
             ),
+            remoteFilePreviews: resolvedFilePreviews,
             mediaBackupSources: widget.storage is MediaBackupSourceStore
                 ? widget.storage as MediaBackupSourceStore
                 : null,
@@ -365,6 +394,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
             serverAddress: _apiBaseUrl.toString(),
             onServerAddressChanged: _saveServerAddress,
             onTestServerConnection: _testServerConnection,
+            authenticatedBuilder: authenticatedHome,
           );
         },
       ),

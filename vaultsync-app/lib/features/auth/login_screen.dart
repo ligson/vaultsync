@@ -8,6 +8,7 @@ import 'auth_service.dart';
 import 'auth_models.dart';
 import '../device/device_service.dart';
 import '../media_backup/media_backup_gateway.dart';
+import '../preview/remote_file_preview.dart';
 import '../sync/local_upload_executor.dart';
 import '../sync/remote_metadata_decrypter.dart';
 import '../sync/sync_home_screen.dart';
@@ -32,6 +33,7 @@ class LoginScreen extends StatefulWidget {
   final RemoteBackupGateway? remoteBackups;
   final RemoteObjectDeleteGateway? remoteObjectDeletes;
   final RemoteMetadataDecrypter? remoteMetadataDecrypter;
+  final RemoteFilePreviewGateway? remoteFilePreviews;
   final MediaBackupSourceStore? mediaBackupSources;
   final MediaBackupGateway? mediaGateway;
   final bool autoSyncEnabled;
@@ -39,6 +41,7 @@ class LoginScreen extends StatefulWidget {
   final String? serverAddress;
   final Future<void> Function(String address)? onServerAddressChanged;
   final Future<void> Function(String address)? onTestServerConnection;
+  final WidgetBuilder? authenticatedBuilder;
 
   const LoginScreen({
     super.key,
@@ -58,6 +61,7 @@ class LoginScreen extends StatefulWidget {
     this.remoteBackups,
     this.remoteObjectDeletes,
     this.remoteMetadataDecrypter,
+    this.remoteFilePreviews,
     this.mediaBackupSources,
     this.mediaGateway,
     this.autoSyncEnabled = false,
@@ -65,6 +69,7 @@ class LoginScreen extends StatefulWidget {
     this.serverAddress,
     this.onServerAddressChanged,
     this.onTestServerConnection,
+    this.authenticatedBuilder,
   });
 
   @override
@@ -254,25 +259,28 @@ class _LoginScreenState extends State<LoginScreen> {
     }
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => SyncHomeScreen(
-          storage: widget.storage,
-          syncRootMappings: widget.syncRootMappings,
-          uploadTasks: widget.uploadTasks,
-          syncIssues: widget.syncIssues,
-          autoSyncStatus: widget.autoSyncStatus,
-          syncHistory: widget.syncHistory,
-          syncRoots: widget.syncRoots,
-          uploadExecutor: widget.uploadExecutor,
-          remotePullExecutor: widget.remotePullExecutor,
-          remoteBackups: widget.remoteBackups,
-          remoteObjectDeletes: widget.remoteObjectDeletes,
-          remoteMetadataDecrypter: widget.remoteMetadataDecrypter,
-          mediaBackupSources: widget.mediaBackupSources,
-          mediaGateway: widget.mediaGateway,
-          devicePlatform: widget.deviceProfile.platform,
-          autoSyncEnabled: widget.autoSyncEnabled,
-          onSignOut: widget.onSignOut,
-        ),
+        builder:
+            widget.authenticatedBuilder ??
+            (_) => SyncHomeScreen(
+              storage: widget.storage,
+              syncRootMappings: widget.syncRootMappings,
+              uploadTasks: widget.uploadTasks,
+              syncIssues: widget.syncIssues,
+              autoSyncStatus: widget.autoSyncStatus,
+              syncHistory: widget.syncHistory,
+              syncRoots: widget.syncRoots,
+              uploadExecutor: widget.uploadExecutor,
+              remotePullExecutor: widget.remotePullExecutor,
+              remoteBackups: widget.remoteBackups,
+              remoteObjectDeletes: widget.remoteObjectDeletes,
+              remoteMetadataDecrypter: widget.remoteMetadataDecrypter,
+              remoteFilePreviews: widget.remoteFilePreviews,
+              mediaBackupSources: widget.mediaBackupSources,
+              mediaGateway: widget.mediaGateway,
+              devicePlatform: widget.deviceProfile.platform,
+              autoSyncEnabled: widget.autoSyncEnabled,
+              onSignOut: widget.onSignOut,
+            ),
       ),
     );
   }

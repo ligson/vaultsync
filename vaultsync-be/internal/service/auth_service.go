@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 )
 
 const sessionTTL = 24 * time.Hour
+
+var usernamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{2,31}$`)
 
 type AuthService struct {
 	repo                     *store.AuthRepo
@@ -124,6 +127,39 @@ func (s *AuthService) ResetPassword(ctx context.Context, userID, password string
 		return err
 	}
 	return nil
+}
+
+func (s *AuthService) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error {
+	user, err := s.repo.FindUserByID(ctx, userID)
+	if err != nil {
+		return Unauthorized("登录用户不存在，请重新登录")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(currentPassword)); err != nil {
+		return InvalidRequest("当前密码不正确")
+	}
+	if len(newPassword) < 8 {
+		return InvalidRequest("新密码至少需要 8 个字符")
+	}
+	return s.ResetPassword(ctx, userID, newPassword)
+}
+
+func (s *AuthService) UpdateProfile(ctx context.Context, userID, username, nickname string) (domain.User, error) {
+	username = strings.TrimSpace(strings.ToLower(username))
+	nickname = strings.TrimSpace(nickname)
+	if !usernamePattern.MatchString(username) {
+		return domain.User{}, InvalidRequest("用户名需为 3-32 位小写字母、数字、点、短横线或下划线，且必须以字母或数字开头")
+	}
+	if len([]rune(nickname)) > 32 {
+		return domain.User{}, InvalidRequest("昵称不能超过 32 个字符")
+	}
+	user, err := s.repo.UpdateProfile(ctx, userID, username, nickname)
+	if err == store.ErrDuplicateUsername {
+		return domain.User{}, InvalidRequest("该用户名已被使用")
+	}
+	if err == store.ErrNotFound {
+		return domain.User{}, Unauthorized("登录用户不存在，请重新登录")
+	}
+	return user, err
 }
 
 func (s *AuthService) Login(ctx context.Context, email, password string) (domain.SessionToken, error) {

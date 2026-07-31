@@ -72,3 +72,58 @@ func TestAuthRefreshReturnsNewSession(t *testing.T) {
 	testutil.AssertStatus(t, resp, http.StatusOK)
 	testutil.AssertJSONContains(t, resp, `"token":"`)
 }
+
+func TestUserCanReadAndUpdateProfile(t *testing.T) {
+	app, token := testutil.NewAuthenticatedServer(t)
+
+	resp := testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/auth/me", "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	payload := testutil.DecodeJSONEnvelope(t, resp)
+	var initial struct {
+		Email      string `json:"email"`
+		QuotaBytes int64  `json:"quota_bytes"`
+		UsedBytes  int64  `json:"used_bytes"`
+	}
+	if err := json.Unmarshal(payload.Data, &initial); err != nil {
+		t.Fatalf("decode profile: %v", err)
+	}
+	if initial.Email != "alice@example.com" || initial.QuotaBytes <= 0 || initial.UsedBytes != 0 {
+		t.Fatalf("unexpected initial profile: %+v", initial)
+	}
+
+	resp = testutil.JSONRequest(t, app, http.MethodPatch, "/api/v1/auth/me", `{"username":"alice.cloud","nickname":"Alice"}`, token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	payload = testutil.DecodeJSONEnvelope(t, resp)
+	var updated struct {
+		Username string `json:"username"`
+		Nickname string `json:"nickname"`
+	}
+	if err := json.Unmarshal(payload.Data, &updated); err != nil {
+		t.Fatalf("decode updated profile: %v", err)
+	}
+	if updated.Username != "alice.cloud" || updated.Nickname != "Alice" {
+		t.Fatalf("unexpected updated profile: %+v", updated)
+	}
+}
+
+func TestUserCanChangePasswordWithCurrentPassword(t *testing.T) {
+	app, token := testutil.NewAuthenticatedServer(t)
+
+	resp := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/auth/change-password", `{"current_password":"wrong","new_password":"new-passw0rd!"}`, token)
+	testutil.AssertStatus(t, resp, http.StatusBadRequest)
+
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/auth/change-password", `{"current_password":"passw0rd!","new_password":"new-passw0rd!"}`, token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	_ = resp.Body.Close()
+
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/auth/login", `{"email":"alice@example.com","password":"new-passw0rd!"}`, "")
+	testutil.AssertStatus(t, resp, http.StatusOK)
+}
+
+func TestReleaseMetadataIsPubliclyReadable(t *testing.T) {
+	app := testutil.NewTestServer(t)
+
+	resp := testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/releases/android", "", "")
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	testutil.AssertJSONContains(t, resp, `"platform":"android"`)
+}

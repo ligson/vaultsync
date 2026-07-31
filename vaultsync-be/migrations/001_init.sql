@@ -8,8 +8,14 @@ CREATE TABLE IF NOT EXISTS users (
     status TEXT NOT NULL DEFAULT 'active',
     quota_bytes INTEGER NOT NULL DEFAULT 107374182400,
     used_bytes INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    username TEXT NOT NULL DEFAULT '',
+    nickname TEXT NOT NULL DEFAULT ''
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username
+ON users(username)
+WHERE username <> '';
 
 CREATE TABLE IF NOT EXISTS sessions (
     token_id TEXT PRIMARY KEY,

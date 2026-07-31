@@ -11,7 +11,28 @@ abstract interface class AuthGateway {
   Future<void> ping();
 }
 
-class AuthService implements AuthGateway {
+abstract interface class UserProfileGateway {
+  Future<UserProfile> loadProfile(String token);
+
+  Future<UserProfile> updateProfile({
+    required String token,
+    required String username,
+    required String nickname,
+  });
+
+  Future<void> changePassword({
+    required String token,
+    required String currentPassword,
+    required String newPassword,
+  });
+}
+
+abstract interface class AppReleaseGateway {
+  Future<AppRelease> loadRelease(String platform);
+}
+
+class AuthService
+    implements AuthGateway, UserProfileGateway, AppReleaseGateway {
   final ApiClient apiClient;
 
   const AuthService(this.apiClient);
@@ -47,5 +68,44 @@ class AuthService implements AuthGateway {
   @override
   Future<void> ping() async {
     await apiClient.ping();
+  }
+
+  @override
+  Future<UserProfile> loadProfile(String token) async {
+    final data = await apiClient.get('/api/v1/auth/me', token: token);
+    return UserProfile.fromJson(data);
+  }
+
+  @override
+  Future<UserProfile> updateProfile({
+    required String token,
+    required String username,
+    required String nickname,
+  }) async {
+    final data = await apiClient.patch(
+      '/api/v1/auth/me',
+      token: token,
+      body: {'username': username, 'nickname': nickname},
+    );
+    return UserProfile.fromJson(data);
+  }
+
+  @override
+  Future<void> changePassword({
+    required String token,
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    await apiClient.post(
+      '/api/v1/auth/change-password',
+      token: token,
+      body: {'current_password': currentPassword, 'new_password': newPassword},
+    );
+  }
+
+  @override
+  Future<AppRelease> loadRelease(String platform) async {
+    final data = await apiClient.get('/api/v1/releases/$platform');
+    return AppRelease.fromJson(data);
   }
 }

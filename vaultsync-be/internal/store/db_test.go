@@ -26,7 +26,7 @@ func TestOpenRunsMigrationsAndEnablesWAL(t *testing.T) {
 	}
 
 	wantColumns := map[string][]string{
-		"users":             {"id", "email", "password_hash", "role", "status", "quota_bytes", "used_bytes", "created_at"},
+		"users":             {"id", "email", "password_hash", "role", "status", "quota_bytes", "used_bytes", "created_at", "username", "nickname"},
 		"sessions":          {"token_id", "user_id", "device_id", "created_at", "expires_at"},
 		"devices":           {"id", "user_id", "name", "platform", "client_key", "created_at"},
 		"sync_roots":        {"id", "user_id", "device_id", "encrypted_path", "encryption_enabled", "cleanup_policy", "archive_path", "created_at"},
@@ -126,5 +126,41 @@ func TestMigrateAddsDeviceClientKeyToLegacyDatabase(t *testing.T) {
 		WHERE type = 'index' AND name = 'idx_devices_user_client_key'
 	`).Scan(&indexName); err != nil {
 		t.Fatalf("read device client key index: %v", err)
+	}
+}
+
+func TestMigrateAddsProfileColumnsWithoutChangingExistingUsers(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "legacy-users.db"))
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`
+		CREATE TABLE users (
+			id TEXT PRIMARY KEY,
+			email TEXT NOT NULL UNIQUE,
+			password_hash TEXT NOT NULL,
+			role TEXT NOT NULL,
+			status TEXT NOT NULL,
+			quota_bytes INTEGER NOT NULL,
+			used_bytes INTEGER NOT NULL,
+			created_at TEXT NOT NULL
+		);
+		INSERT INTO users VALUES ('user-1', 'alice@example.com', 'hash', 'user', 'active', 1024, 128, '2026-07-31T00:00:00Z');
+	`); err != nil {
+		t.Fatalf("seed legacy user: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate legacy database: %v", err)
+	}
+
+	var email, username, nickname string
+	var quota, used int64
+	if err := db.QueryRow(`SELECT email, username, nickname, quota_bytes, used_bytes FROM users WHERE id='user-1'`).Scan(&email, &username, &nickname, &quota, &used); err != nil {
+		t.Fatalf("read migrated user: %v", err)
+	}
+	if email != "alice@example.com" || username != "" || nickname != "" || quota != 1024 || used != 128 {
+		t.Fatalf("legacy user changed unexpectedly: email=%q username=%q nickname=%q quota=%d used=%d", email, username, nickname, quota, used)
 	}
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,6 +10,7 @@ import 'package:vaultsync_app/features/auth/auth_models.dart';
 import 'package:vaultsync_app/features/device/device_models.dart';
 import 'package:vaultsync_app/features/media_backup/media_backup_gateway.dart';
 import 'package:vaultsync_app/features/media_backup/media_backup_models.dart';
+import 'package:vaultsync_app/features/preview/remote_file_preview.dart';
 import 'package:vaultsync_app/features/sync/file_access_permission.dart';
 import 'package:vaultsync_app/features/sync/folder_picker.dart';
 import 'package:vaultsync_app/features/sync/local_path_protector.dart';
@@ -462,7 +464,9 @@ void main() {
     expect(find.text('暂无同步记录'), findsOneWidget);
   });
 
-  testWidgets('sync home exposes sign out action', (tester) async {
+  testWidgets('sync home leaves sign out action to profile navigation', (
+    tester,
+  ) async {
     var signedOut = false;
     await tester.pumpWidget(
       MaterialApp(
@@ -482,10 +486,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('sign_out_button')));
-    await tester.pumpAndSettle();
-
-    expect(signedOut, isTrue);
+    expect(find.byKey(const ValueKey('sign_out_button')), findsNothing);
+    expect(signedOut, isFalse);
   });
 
   testWidgets('sync home prunes local roots not owned by current user', (
@@ -1207,6 +1209,69 @@ void main() {
     expect(find.text('a.jpg'), findsOneWidget);
     expect(find.textContaining('2026/a.jpg · 4.0 KB'), findsOneWidget);
     expect(find.text('服务器已备份，本地已删除'), findsOneWidget);
+  });
+
+  testWidgets('sync home opens a supported server backup preview', (
+    tester,
+  ) async {
+    final previews = FakeRemoteFilePreviewGateway();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore(),
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: FakeSyncRootGateway(const [
+            SyncRoot(
+              id: 'root-1',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-31T00:00:00Z',
+            ),
+          ]),
+          remoteBackups: FakeRemoteBackupGateway(const [
+            RemoteBackupObject(
+              cursorValue: 1,
+              syncRootId: 'root-1',
+              objectId: 'object-notes',
+              versionId: 'version-notes',
+              encryptedName: 'encrypted-notes',
+              contentHash: 'sha256:notes',
+              sizeBytes: 17,
+              metadataJson: '{"format":"test"}',
+              updatedAt: '2026-07-31T00:00:00Z',
+            ),
+          ]),
+          remoteMetadataDecrypter: const FakeRemoteMetadataDecrypter({
+            'object-notes': RemoteBackupEntry(
+              syncRootId: 'root-1',
+              objectId: 'object-notes',
+              versionId: 'version-notes',
+              name: 'notes.txt',
+              relativePath: 'notes.txt',
+              sizeBytes: 17,
+              updatedAt: '2026-07-31T00:00:00Z',
+            ),
+          }),
+          remoteFilePreviews: previews,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('notes.txt'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('preview from server'), findsOneWidget);
+    expect(previews.token, 'server-token');
+    expect(previews.entry?.encryptedName, 'encrypted-notes');
+    expect(previews.entry?.metadataJson, '{"format":"test"}');
   });
 
   testWidgets('sync home renders large file lists in batches', (tester) async {
@@ -2815,7 +2880,9 @@ void main() {
     expect(autoSyncStatus.saved.downloadedCount, 1);
   });
 
-  testWidgets('sync home shows local sync issues', (tester) async {
+  testWidgets('sync home keeps local sync issues in sync status page', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
         home: SyncHomeScreen(
@@ -2855,12 +2922,25 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('待处理问题 1 个'), findsNothing);
+    expect(find.text('远端删除被本地改动保护'), findsNothing);
+    expect(find.text('photos/a.jpg'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('open_sync_status_button')));
+    await tester.pumpAndSettle();
+
     expect(find.text('待处理问题 1 个'), findsOneWidget);
-    expect(find.text('远端删除被本地改动保护'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.byKey(
+        const ValueKey('sync_issue_remote_delete_blocked:root-1:object-1'),
+      ),
+      240,
+    );
+    expect(find.textContaining('远端删除被本地改动保护'), findsOneWidget);
     expect(find.text('photos/a.jpg'), findsOneWidget);
   });
 
-  testWidgets('sync home marks local sync issue resolved', (tester) async {
+  testWidgets('sync status marks local sync issue resolved', (tester) async {
     final issueStore = FakeSyncIssueStore([
       LocalSyncIssue(
         id: 'remote_delete_blocked:root-1:object-1',
@@ -2901,12 +2981,18 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('远端删除被本地改动保护'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('open_sync_status_button')));
+    await tester.pumpAndSettle();
     await tester.tap(
       find.byKey(
-        const ValueKey(
-          'resolve_sync_issue_remote_delete_blocked:root-1:object-1',
-        ),
+        const ValueKey('sync_issue_remote_delete_blocked:root-1:object-1'),
       ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('resolve_issue_from_detail_button')),
     );
     await tester.pumpAndSettle();
 
@@ -2929,21 +3015,6 @@ void main() {
         createdAt: '2026-07-01T00:00:00Z',
       ),
     ], reloadCompleter.future);
-    final issueStore = FakeSyncIssueStore([
-      LocalSyncIssue(
-        id: 'issue-1',
-        type: 'remote_delete_blocked',
-        syncRootId: 'root-1',
-        objectId: 'object-1',
-        versionId: '',
-        relativePath: 'photos/a.jpg',
-        localPath: '/Users/alice/Photos/a.jpg',
-        message: '远端删除被本地改动保护',
-        status: 'open',
-        createdAt: DateTime.utc(2026, 6, 29),
-      ),
-    ]);
-
     await tester.pumpWidget(
       MaterialApp(
         home: SyncHomeScreen(
@@ -2961,7 +3032,6 @@ void main() {
             ),
           ]),
           uploadTasks: FakeUploadTaskStore(),
-          syncIssues: issueStore,
           syncRoots: syncRoots,
         ),
       ),
@@ -2969,7 +3039,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Photos'), findsWidgets);
-    await tester.tap(find.byKey(const ValueKey('resolve_sync_issue_issue-1')));
+    await tester.tap(find.byKey(const ValueKey('open_sync_status_button')));
+    await tester.pumpAndSettle();
+    await tester.pageBack();
     await tester.pump();
 
     expect(find.text('Photos'), findsWidgets);
@@ -2980,7 +3052,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(LinearProgressIndicator), findsNothing);
-    expect(find.text('远端删除被本地改动保护'), findsNothing);
     expect(find.text('Photos'), findsWidgets);
   });
 
@@ -3933,5 +4004,24 @@ class FakeRemoteMetadataDecrypter implements RemoteMetadataDecrypter {
           updatedAt: object.updatedAt,
           decryptable: false,
         );
+  }
+}
+
+class FakeRemoteFilePreviewGateway implements RemoteFilePreviewGateway {
+  String? token;
+  RemoteBackupEntry? entry;
+
+  @override
+  Future<RemoteFilePreviewData> load({
+    required String token,
+    required RemoteBackupEntry entry,
+  }) async {
+    this.token = token;
+    this.entry = entry;
+    return RemoteFilePreviewData(
+      name: entry.name,
+      kind: RemoteFilePreviewKind.text,
+      bytes: Uint8List.fromList('preview from server'.codeUnits),
+    );
   }
 }

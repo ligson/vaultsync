@@ -10,8 +10,9 @@ import (
 )
 
 var (
-	ErrNotFound       = errors.New("not found")
-	ErrDuplicateEmail = errors.New("duplicate email")
+	ErrNotFound          = errors.New("not found")
+	ErrDuplicateEmail    = errors.New("duplicate email")
+	ErrDuplicateUsername = errors.New("duplicate username")
 )
 
 type AuthRepo struct {
@@ -24,9 +25,9 @@ func NewAuthRepo(db *sql.DB) *AuthRepo {
 
 func (r *AuthRepo) CreateUser(ctx context.Context, user domain.User) (domain.User, error) {
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO users (id, email, password_hash, role, status, quota_bytes, used_bytes, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, user.ID, user.Email, user.PasswordHash, user.Role, user.Status, user.QuotaBytes, user.UsedBytes, user.CreatedAt)
+		INSERT INTO users (id, email, username, nickname, password_hash, role, status, quota_bytes, used_bytes, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, user.ID, user.Email, user.Username, user.Nickname, user.PasswordHash, user.Role, user.Status, user.QuotaBytes, user.UsedBytes, user.CreatedAt)
 	if err != nil {
 		if isDuplicateEmailError(err) {
 			return domain.User{}, ErrDuplicateEmail
@@ -45,10 +46,10 @@ func isDuplicateEmailError(err error) bool {
 func (r *AuthRepo) FindUserByEmail(ctx context.Context, email string) (domain.User, error) {
 	var user domain.User
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, email, password_hash, role, status, quota_bytes, used_bytes, created_at
+		SELECT id, email, username, nickname, password_hash, role, status, quota_bytes, used_bytes, created_at
 		FROM users
 		WHERE email = ?
-	`, email).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Role, &user.Status, &user.QuotaBytes, &user.UsedBytes, &user.CreatedAt)
+	`, email).Scan(&user.ID, &user.Email, &user.Username, &user.Nickname, &user.PasswordHash, &user.Role, &user.Status, &user.QuotaBytes, &user.UsedBytes, &user.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.User{}, ErrNotFound
 	}
@@ -61,10 +62,10 @@ func (r *AuthRepo) FindUserByEmail(ctx context.Context, email string) (domain.Us
 func (r *AuthRepo) FindUserByID(ctx context.Context, id string) (domain.User, error) {
 	var user domain.User
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, email, password_hash, role, status, quota_bytes, used_bytes, created_at
+		SELECT id, email, username, nickname, password_hash, role, status, quota_bytes, used_bytes, created_at
 		FROM users
 		WHERE id = ?
-	`, id).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Role, &user.Status, &user.QuotaBytes, &user.UsedBytes, &user.CreatedAt)
+	`, id).Scan(&user.ID, &user.Email, &user.Username, &user.Nickname, &user.PasswordHash, &user.Role, &user.Status, &user.QuotaBytes, &user.UsedBytes, &user.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.User{}, ErrNotFound
 	}
@@ -72,6 +73,21 @@ func (r *AuthRepo) FindUserByID(ctx context.Context, id string) (domain.User, er
 		return domain.User{}, err
 	}
 	return user, nil
+}
+
+func (r *AuthRepo) UpdateProfile(ctx context.Context, userID, username, nickname string) (domain.User, error) {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE users
+		SET username = ?, nickname = ?
+		WHERE id = ?
+	`, username, nickname, userID)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") && strings.Contains(err.Error(), "users.username") {
+			return domain.User{}, ErrDuplicateUsername
+		}
+		return domain.User{}, err
+	}
+	return r.FindUserByID(ctx, userID)
 }
 
 func (r *AuthRepo) CreateSession(ctx context.Context, tokenID, userID, deviceID, createdAt, expiresAt string) error {

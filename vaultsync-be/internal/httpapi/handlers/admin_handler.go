@@ -183,6 +183,22 @@ func (h *AdminHandler) Downloads(w http.ResponseWriter, r *http.Request) {
 	response.Write(w, http.StatusOK, "", map[string]any{"items": releases})
 }
 
+func (h *AdminHandler) DownloadRelease(w http.ResponseWriter, r *http.Request) {
+	releases, err := h.adminService.Downloads(r.Context())
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	platform := r.PathValue("platform")
+	for _, release := range releases {
+		if release.Platform == platform {
+			response.Write(w, http.StatusOK, "", release)
+			return
+		}
+	}
+	writeError(w, http.StatusNotFound, service.CodeNotFound, "未找到该平台的 App 版本")
+}
+
 func (h *AdminHandler) UpdateDownload(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FileName    string `json:"file_name"`

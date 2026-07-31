@@ -354,6 +354,7 @@ void main() {
 
   testWidgets('scan all only scans current device sync roots', (tester) async {
     final scanner = FakeLocalSyncScanner(const []);
+    final fileAccessPermission = FakeFileAccessPermissionGateway();
 
     await tester.pumpWidget(
       MaterialApp(
@@ -400,6 +401,7 @@ void main() {
             ),
           ]),
           localScanner: scanner,
+          fileAccessPermission: fileAccessPermission,
           autoSyncEnabled: false,
         ),
       ),
@@ -639,6 +641,42 @@ void main() {
     expect(mappings.saved.single.localPath, '/storage/emulated/0/Download');
     expect(find.text('Download'), findsWidgets);
     expect(find.text('/storage/emulated/0/Download'), findsOneWidget);
+    expect(find.textContaining('未绑定目录'), findsNothing);
+  });
+
+  testWidgets('sync home shows other device root without unbound wording', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore(),
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: FakeSyncRootGateway([
+            const SyncRoot(
+              id: 'root-other-1',
+              userId: 'user-1',
+              deviceId: 'device-2',
+              deviceName: 'HUAWEI NOH-AN00',
+              encryptedPath: 'vaultsync-path:v1:unknown',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-30T00:00:00Z',
+            ),
+          ]),
+          devicePlatform: 'android',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('同步目录 root-oth'), findsWidgets);
+    expect(find.text('其他设备目录，仅可查看'), findsOneWidget);
+    expect(find.textContaining('其他设备：HUAWEI NOH-AN00'), findsWidgets);
     expect(find.textContaining('未绑定目录'), findsNothing);
   });
 
@@ -1486,6 +1524,59 @@ void main() {
     expect(uploadTasks.saved, hasLength(2));
     expect(uploadTasks.saved.first.status, 'pending');
     expect(find.text('扫描发现 2 个本地文件，生成 2 个待上传任务'), findsOneWidget);
+  });
+
+  testWidgets('android downloads scan asks for all files access first', (
+    tester,
+  ) async {
+    final scanner = FakeLocalSyncScanner(const []);
+    final uploadTasks = FakeUploadTaskStore();
+    final fileAccessPermission = FakeFileAccessPermissionGateway()
+      ..hasPermission = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore([
+            const LocalSyncRootMapping(
+              syncRootId: 'root-1',
+              localPath: '/storage/emulated/0/Download',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+            ),
+          ]),
+          uploadTasks: uploadTasks,
+          syncRoots: FakeSyncRootGateway([
+            const SyncRoot(
+              id: 'root-1',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-01T00:00:00Z',
+            ),
+          ]),
+          fileAccessPermission: fileAccessPermission,
+          localScanner: scanner,
+          devicePlatform: 'android',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('scan_local_files_button')));
+    await tester.pumpAndSettle();
+
+    expect(fileAccessPermission.openCount, 1);
+    expect(scanner.callCount, 0);
+    expect(uploadTasks.saved, isEmpty);
+    expect(find.textContaining('未获得所有文件访问权限，无法扫描“下载”文件夹'), findsOneWidget);
   });
 
   testWidgets('sync home can scan one sync root from row menu', (tester) async {
@@ -3193,7 +3284,11 @@ class FakeFolderPicker implements FolderPicker {
 }
 
 class FakeFileAccessPermissionGateway implements FileAccessPermissionGateway {
+  var hasPermission = true;
   var openCount = 0;
+
+  @override
+  Future<bool> hasFileAccessPermission() async => hasPermission;
 
   @override
   Future<void> openFileAccessSettings() async {

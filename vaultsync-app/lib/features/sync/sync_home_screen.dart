@@ -23,6 +23,8 @@ import 'sync_models.dart';
 import 'sync_pull_executor.dart';
 import 'sync_service.dart';
 
+const _androidDownloadsPath = '/storage/emulated/0/Download';
+
 class SyncHomeScreen extends StatefulWidget {
   final SessionStore storage;
   final SyncRootMappingStore syncRootMappings;
@@ -82,8 +84,6 @@ class SyncHomeScreen extends StatefulWidget {
 }
 
 class _SyncHomeScreenState extends State<SyncHomeScreen> {
-  static const _androidDownloadsPath = '/storage/emulated/0/Download';
-
   late Future<_SyncHomeData> _homeFuture;
   Timer? _initialAutoSyncTimer;
   Timer? _autoSyncTimer;
@@ -383,6 +383,11 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       final actionSyncRootIds = await _resolveCurrentDeviceActionSyncRootIds(
         syncRootId: syncRootId,
       );
+      await _ensureAndroidFileAccessPermission(
+        syncRootId,
+        allowedSyncRootIds: actionSyncRootIds,
+        openSettingsOnDenied: true,
+      );
       await _ensureAndroidSharedMediaDirectoryPermission(
         syncRootId,
         allowedSyncRootIds: actionSyncRootIds,
@@ -608,6 +613,41 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     return parts.any(
       (part) => part == 'dcim' || part == 'pictures' || part == 'movies',
     );
+  }
+
+  Future<void> _ensureAndroidFileAccessPermission(
+    String? syncRootId, {
+    Set<String>? allowedSyncRootIds,
+    bool openSettingsOnDenied = false,
+  }) async {
+    final platform = widget.devicePlatform ?? DeviceProfile.current().platform;
+    if (platform != 'android') {
+      return;
+    }
+    final mappings = await widget.syncRootMappings.loadSyncRootMappings();
+    final needsFileAccess = mappings.any((mapping) {
+      if (syncRootId != null && mapping.syncRootId != syncRootId) {
+        return false;
+      }
+      if (allowedSyncRootIds != null &&
+          !allowedSyncRootIds.contains(mapping.syncRootId)) {
+        return false;
+      }
+      if (_isMediaBackupEncryptedPath(mapping.encryptedPath)) {
+        return false;
+      }
+      return _isAndroidDownloadsPath(mapping.localPath);
+    });
+    if (!needsFileAccess) {
+      return;
+    }
+    if (await widget.fileAccessPermission.hasFileAccessPermission()) {
+      return;
+    }
+    if (openSettingsOnDenied) {
+      await widget.fileAccessPermission.openFileAccessSettings();
+    }
+    throw Exception('未获得所有文件访问权限，无法扫描“下载”文件夹。请在系统授权页允许 VaultSync 访问所有文件后返回重试。');
   }
 
   Future<void> _retryFailedUploads({String? syncRootId}) async {
@@ -895,6 +935,10 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         currentStage = '扫描本地目录';
         final actionSyncRootIds =
             await _resolveCurrentDeviceActionSyncRootIds();
+        await _ensureAndroidFileAccessPermission(
+          null,
+          allowedSyncRootIds: actionSyncRootIds,
+        );
         final scanner =
             widget.localScanner ??
             LocalSyncScanner(mappings: widget.syncRootMappings);
@@ -3887,12 +3931,19 @@ class _SyncRootViewData {
       return '相册备份';
     }
     final localPath = mapping?.localPath.trim() ?? '';
-    if (localPath.isEmpty) {
-      return '未绑定目录 $shortRootId';
+    if (localPath.isNotEmpty) {
+      final normalized = localPath.replaceAll('\\', '/');
+      final segments = normalized.split('/').where((part) => part.isNotEmpty);
+      return segments.isEmpty ? localPath : segments.last;
     }
-    final normalized = localPath.replaceAll('\\', '/');
-    final segments = normalized.split('/').where((part) => part.isNotEmpty);
-    return segments.isEmpty ? localPath : segments.last;
+    final knownName = _knownDirectoryNameForEncryptedPath(root.encryptedPath);
+    if (knownName != null) {
+      return knownName;
+    }
+    if (!isCurrentDeviceRoot) {
+      return '同步目录 $shortRootId';
+    }
+    return '未绑定目录 $shortRootId';
   }
 
   String get shortRootId {
@@ -3944,7 +3995,13 @@ class _SyncRootViewData {
     if (isMediaBackupRoot) {
       return '手机相册照片和视频';
     }
-    return isUnbound ? '本机未绑定路径，可在目录操作中重新绑定' : mapping!.localPath;
+    if (!isUnbound) {
+      return mapping!.localPath;
+    }
+    if (!isCurrentDeviceRoot) {
+      return '其他设备目录，仅可查看';
+    }
+    return '本机未绑定路径，可在目录操作中重新绑定';
   }
 
   int get backedUpDeletedLocalCount {
@@ -4094,6 +4151,22 @@ String _cleanupPolicyLabel(String policy) {
     'archive' => '上传后归档',
     _ => policy,
   };
+}
+
+bool _isAndroidDownloadsPath(String localPath) {
+  final normalized = localPath.trim().replaceAll('\\', '/').toLowerCase();
+  return normalized == '/storage/emulated/0/download' ||
+      normalized == '/sdcard/download';
+}
+
+String? _knownDirectoryNameForEncryptedPath(String encryptedPath) {
+  if (encryptedPath ==
+      const Sha256LocalPathProtector().protectLocalPath(
+        _androidDownloadsPath,
+      )) {
+    return 'Download';
+  }
+  return null;
 }
 
 String _syncIssueTypeLabel(String type) {

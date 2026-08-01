@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:crypto/crypto.dart';
 import 'package:vaultsync_app/core/storage/app_storage.dart';
@@ -6,6 +8,8 @@ import 'package:vaultsync_app/features/download/download_service.dart';
 import 'package:vaultsync_app/features/sync/encrypted_download_payload_decrypter.dart';
 import 'package:vaultsync_app/features/sync/local_download_writer.dart';
 import 'package:vaultsync_app/features/sync/local_remote_delete_handler.dart';
+import 'package:vaultsync_app/features/sync/local_upload_executor.dart';
+import 'package:vaultsync_app/features/sync/remote_metadata_decrypter.dart';
 import 'package:vaultsync_app/features/sync/sync_models.dart';
 import 'package:vaultsync_app/features/sync/sync_pull_executor.dart';
 import 'package:vaultsync_app/features/sync/sync_service.dart';
@@ -48,6 +52,9 @@ void main() {
       ),
     );
     final downloads = FakeDownloadGateway();
+    final progress = DownloadProgressChannel();
+    final progressEvents = <DownloadProgress>[];
+    progress.addListener(() => progressEvents.add(progress.value));
     final decrypter = FakeDownloadPayloadDecrypter();
     final writer = FakeRemoteObjectWriter();
     final deleteHandler = FakeRemoteDeleteHandler();
@@ -62,6 +69,7 @@ void main() {
       decrypter: decrypter,
       writer: writer,
       deleteHandler: deleteHandler,
+      progress: progress,
     );
 
     final result = await executor.pullRemoteChanges();
@@ -79,6 +87,19 @@ void main() {
     expect(result.deleteCount, 1);
     expect(result.nextCursor, 9);
     expect(cursorStore.savedCursor, 9);
+    expect(progress.value.phase, DownloadProgressPhase.completed);
+    expect(progress.value.downloadedCount, 1);
+    expect(progress.value.totalBytes, 3);
+    expect(
+      progressEvents.map((event) => event.phase),
+      containsAllInOrder([
+        DownloadProgressPhase.connecting,
+        DownloadProgressPhase.downloading,
+        DownloadProgressPhase.processing,
+        DownloadProgressPhase.completing,
+        DownloadProgressPhase.completed,
+      ]),
+    );
   });
 
   test(
@@ -178,6 +199,185 @@ void main() {
     expect(result.blockedDeleteCount, 1);
     expect(cursorStore.savedCursor, 8);
   });
+
+  test('pullRemoteChanges skips a version already recorded locally', () async {
+    final cursorStore = FakeSyncCursorStore(cursor: 7);
+    final downloads = FakeDownloadGateway();
+    final remoteVersions = FakeRemoteVersionIndexStore([
+      const LocalRemoteVersionIndex(
+        syncRootId: 'root-1',
+        objectId: 'object-1',
+        versionId: 'version-1',
+        relativePath: 'photos/a.jpg',
+        localPath: '/local/photos/a.jpg',
+        contentHash: 'plain-hash',
+      ),
+    ]);
+    final executor = _skipExecutor(
+      cursorStore: cursorStore,
+      downloads: downloads,
+      remoteVersions: remoteVersions,
+    );
+
+    final result = await executor.pullRemoteChanges();
+
+    expect(downloads.downloadedVersionIds, isEmpty);
+    expect(result.downloadedCount, 0);
+    expect(result.skippedDownloadCount, 1);
+    expect(cursorStore.savedCursor, 8);
+  });
+
+  test('pullRemoteChanges treats delete cleanup as one-way backup', () async {
+    final cursorStore = FakeSyncCursorStore(cursor: 7);
+    final downloads = FakeDownloadGateway();
+    final executor = _skipExecutor(
+      cursorStore: cursorStore,
+      downloads: downloads,
+      mappings: const FakeSyncRootMappingStore([
+        LocalSyncRootMapping(
+          syncRootId: 'root-1',
+          localPath: '/local/photos',
+          encryptedPath: 'photos',
+          cleanupPolicy: 'delete',
+          archivePath: '',
+        ),
+      ]),
+    );
+
+    final result = await executor.pullRemoteChanges();
+
+    expect(downloads.downloadedVersionIds, isEmpty);
+    expect(result.skippedDownloadCount, 1);
+    expect(cursorStore.savedCursor, 8);
+  });
+
+  test('pullRemoteChanges recognizes a stable completed upload task', () async {
+    final task = LocalUploadTask(
+      id: 'root-1:photos/a.jpg',
+      syncRootId: 'root-1',
+      localPath: '/missing/photos/a.jpg',
+      relativePath: 'photos/a.jpg',
+      sizeBytes: 3,
+      modifiedAt: DateTime.utc(2026, 6, 27, 9),
+      status: 'uploaded',
+      attempts: 0,
+      createdAt: DateTime.utc(2026, 6, 27, 10),
+    );
+    final downloads = FakeDownloadGateway();
+    final executor = _skipExecutor(
+      cursorStore: FakeSyncCursorStore(cursor: 7),
+      downloads: downloads,
+      page: _singleUpsertPage(
+        objectId: objectIdForUploadTask(task),
+        versionId: versionIdForUploadTask(task),
+      ),
+      uploadTasks: FakeUploadTaskStore([task]),
+    );
+
+    final result = await executor.pullRemoteChanges();
+
+    expect(downloads.downloadedVersionIds, isEmpty);
+    expect(result.skippedDownloadCount, 1);
+  });
+
+  test(
+    'pullRemoteChanges compares plaintext hash before downloading',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('vaultsync_pull_hash_');
+      addTearDown(() => dir.delete(recursive: true));
+      final file = File('${dir.path}/photos/a.jpg');
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(const [9, 8, 7]);
+      final plainHash = sha256.convert(const [9, 8, 7]).toString();
+      final downloads = FakeDownloadGateway();
+      final remoteVersions = FakeRemoteVersionIndexStore();
+      final executor = _skipExecutor(
+        cursorStore: FakeSyncCursorStore(cursor: 7),
+        downloads: downloads,
+        mappings: FakeSyncRootMappingStore([
+          LocalSyncRootMapping(
+            syncRootId: 'root-1',
+            localPath: dir.path,
+            encryptedPath: 'photos',
+            cleanupPolicy: 'keep',
+            archivePath: '',
+          ),
+        ]),
+        remoteVersions: remoteVersions,
+        metadataDecrypter: FakeRemoteMetadataDecrypter(
+          RemoteBackupEntry(
+            syncRootId: 'root-1',
+            objectId: 'object-1',
+            versionId: 'version-1',
+            name: 'a.jpg',
+            relativePath: 'photos/a.jpg',
+            sizeBytes: 3,
+            updatedAt: '2026-06-27T01:00:00Z',
+            clientContentHash: plainHash,
+          ),
+        ),
+      );
+
+      final result = await executor.pullRemoteChanges();
+
+      expect(downloads.downloadedVersionIds, isEmpty);
+      expect(result.skippedDownloadCount, 1);
+      expect(remoteVersions.entries.single.versionId, 'version-1');
+      expect(remoteVersions.entries.single.contentHash, plainHash);
+    },
+  );
+}
+
+SyncPullExecutor _skipExecutor({
+  required FakeSyncCursorStore cursorStore,
+  required FakeDownloadGateway downloads,
+  SyncChangePage? page,
+  SyncRootMappingStore? mappings,
+  RemoteVersionIndexStore? remoteVersions,
+  UploadTaskStore? uploadTasks,
+  RemoteMetadataDecrypter? metadataDecrypter,
+}) {
+  return SyncPullExecutor(
+    sessionStore: const FakeSessionStore(
+      token: 'server-token',
+      deviceId: 'device-1',
+    ),
+    cursorStore: cursorStore,
+    changes: FakeSyncChangeGateway(page: page ?? _singleUpsertPage()),
+    downloads: downloads,
+    decrypter: FakeDownloadPayloadDecrypter(),
+    writer: FakeRemoteObjectWriter(),
+    deleteHandler: FakeRemoteDeleteHandler(),
+    mappings: mappings,
+    remoteVersions: remoteVersions,
+    uploadTasks: uploadTasks,
+    metadataDecrypter: metadataDecrypter,
+  );
+}
+
+SyncChangePage _singleUpsertPage({
+  String objectId = 'object-1',
+  String versionId = 'version-1',
+}) {
+  return SyncChangePage(
+    items: [
+      SyncChangeItem(
+        id: versionId,
+        changeType: 'upsert',
+        versionId: versionId,
+        objectId: objectId,
+        syncRootId: 'root-1',
+        cursorValue: 8,
+        encryptedName: 'vaultsync-name:v1:name',
+        contentHash: sha256.convert(const [1, 2, 3]).toString(),
+        sizeBytes: 3,
+        metadataJson: '{"nonce":"abc"}',
+        createdAt: '2026-06-27T01:00:00Z',
+      ),
+    ],
+    nextCursor: 8,
+    hasMore: false,
+  );
 }
 
 class FakeDownloadPayloadDecrypter implements DownloadPayloadDecrypter {
@@ -321,4 +521,73 @@ class FakeDownloadGateway implements DownloadGateway {
       bytes: const [1, 2, 3],
     );
   }
+}
+
+class FakeSyncRootMappingStore implements SyncRootMappingStore {
+  final List<LocalSyncRootMapping> mappings;
+
+  const FakeSyncRootMappingStore(this.mappings);
+
+  @override
+  Future<List<LocalSyncRootMapping>> loadSyncRootMappings() async => mappings;
+
+  @override
+  Future<void> saveSyncRootMapping(LocalSyncRootMapping mapping) async {}
+
+  @override
+  Future<void> saveSyncRootMappings(
+    List<LocalSyncRootMapping> mappings,
+  ) async {}
+}
+
+class FakeRemoteVersionIndexStore implements RemoteVersionIndexStore {
+  final List<LocalRemoteVersionIndex> entries;
+
+  FakeRemoteVersionIndexStore([List<LocalRemoteVersionIndex>? entries])
+    : entries = entries ?? [];
+
+  @override
+  Future<List<LocalRemoteVersionIndex>> loadRemoteVersionIndexes() async =>
+      entries;
+
+  @override
+  Future<void> saveRemoteVersionIndex(LocalRemoteVersionIndex entry) async {
+    entries.removeWhere(
+      (existing) =>
+          existing.syncRootId == entry.syncRootId &&
+          existing.objectId == entry.objectId,
+    );
+    entries.add(entry);
+  }
+
+  @override
+  Future<void> removeRemoteVersionIndex({
+    required String syncRootId,
+    required String objectId,
+  }) async {
+    entries.removeWhere(
+      (entry) => entry.syncRootId == syncRootId && entry.objectId == objectId,
+    );
+  }
+}
+
+class FakeUploadTaskStore implements UploadTaskStore {
+  final List<LocalUploadTask> tasks;
+
+  const FakeUploadTaskStore(this.tasks);
+
+  @override
+  Future<List<LocalUploadTask>> loadUploadTasks() async => tasks;
+
+  @override
+  Future<void> saveUploadTasks(List<LocalUploadTask> tasks) async {}
+}
+
+class FakeRemoteMetadataDecrypter implements RemoteMetadataDecrypter {
+  final RemoteBackupEntry entry;
+
+  const FakeRemoteMetadataDecrypter(this.entry);
+
+  @override
+  Future<RemoteBackupEntry> decrypt(RemoteBackupObject object) async => entry;
 }

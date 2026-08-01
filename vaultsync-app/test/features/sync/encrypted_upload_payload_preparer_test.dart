@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vaultsync_app/features/sync/encrypted_upload_payload_preparer.dart';
 import 'package:vaultsync_app/features/sync/sync_models.dart';
@@ -41,6 +42,11 @@ void main() {
     expect(payload.encryptedName, startsWith('vaultsync-name:v1:'));
     expect(payload.encryptedName, isNot(contains('a.jpg')));
     expect(payload.metadataJson, isNot(contains('a.jpg')));
+    expect(payload.metadataJson, isNot(contains(payload.sourceContentHash)));
+    expect(
+      payload.sourceContentHash,
+      sha256.convert(utf8.encode('plain photo bytes')).toString(),
+    );
 
     final metadata = jsonDecode(payload.metadataJson) as Map<String, Object?>;
     expect(metadata['format'], 'vaultsync-metadata-v1');
@@ -52,6 +58,7 @@ void main() {
     expect(decryptedMetadata['name'], 'a.jpg');
     expect(decryptedMetadata['relative_path'], 'a.jpg');
     expect(decryptedMetadata['client_size'], 17);
+    expect(decryptedMetadata['client_content_hash'], payload.sourceContentHash);
     final decryptedName = await _decryptName(payload.encryptedName);
     expect(decryptedName, 'a.jpg');
   });
@@ -130,6 +137,35 @@ void main() {
     );
 
     expect(payload.bytes.take(8), 'VSENC001'.codeUnits);
+  });
+
+  test('prepare stores plaintext hash in plain metadata', () async {
+    final preparer = PlainUploadPayloadPreparer(
+      contentReader: FakeUploadContentReader(const [1, 2, 3]),
+    );
+    final payload = await preparer.prepare(
+      LocalUploadTask(
+        id: 'root-1:a.jpg',
+        syncRootId: 'root-1',
+        localPath: '/local/a.jpg',
+        relativePath: 'photos/a.jpg',
+        sizeBytes: 3,
+        modifiedAt: DateTime.utc(2026, 6, 27, 9),
+        status: 'pending',
+        attempts: 0,
+        createdAt: DateTime.utc(2026, 6, 27, 10),
+        encryptionEnabled: false,
+      ),
+      objectId: 'object-1',
+      versionId: 'version-1',
+    );
+
+    final metadata = jsonDecode(payload.metadataJson) as Map<String, Object?>;
+    expect(metadata['client_content_hash'], payload.sourceContentHash);
+    expect(
+      payload.sourceContentHash,
+      sha256.convert(const [1, 2, 3]).toString(),
+    );
   });
 }
 

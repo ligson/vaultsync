@@ -23,12 +23,14 @@ void main() {
       ]);
       final uploads = FakeUploadGateway();
       final cleaner = FakePostUploadCleaner();
+      final remoteVersions = FakeRemoteVersionIndexStore();
       final executor = LocalUploadExecutor(
         sessionStore: FakeSessionStore(
           token: 'server-token',
           deviceId: 'device-1',
         ),
         uploadTasks: uploadTasks,
+        remoteVersions: remoteVersions,
         uploads: uploads,
         payloadPreparer: const FakeUploadPayloadPreparer(),
         postUploadCleaner: cleaner,
@@ -45,6 +47,10 @@ void main() {
         [1, 2, 3],
       ]);
       expect(uploadTasks.saved.single.status, 'uploaded');
+      expect(remoteVersions.saved.single.objectId, 'object-1');
+      expect(remoteVersions.saved.single.versionId, 'version-1');
+      expect(remoteVersions.saved.single.relativePath, 'a.jpg');
+      expect(remoteVersions.saved.single.contentHash, 'plain-content-hash');
       expect(cleaner.callCount, 1);
     },
   );
@@ -92,6 +98,63 @@ void main() {
       ]);
     },
   );
+
+  test('executePendingUploads reports live upload phases and bytes', () async {
+    final uploadTasks = FakeUploadTaskStore([
+      LocalUploadTask(
+        id: 'root-1:a.jpg',
+        syncRootId: 'root-1',
+        localPath: '/Users/alice/Photos/a.jpg',
+        relativePath: 'photos/a.jpg',
+        sizeBytes: 7,
+        modifiedAt: DateTime.utc(2026, 6, 27, 9),
+        status: 'pending',
+        attempts: 0,
+        createdAt: DateTime.utc(2026, 6, 27, 10),
+      ),
+    ]);
+    final progress = UploadProgressChannel();
+    final events = <UploadProgress>[];
+    progress.addListener(() => events.add(progress.value));
+    final executor = LocalUploadExecutor(
+      sessionStore: FakeSessionStore(
+        token: 'server-token',
+        deviceId: 'device-1',
+      ),
+      uploadTasks: uploadTasks,
+      uploads: FakeUploadGateway(),
+      payloadPreparer: const FakeUploadPayloadPreparer(
+        bytes: [1, 2, 3, 4, 5, 6, 7],
+      ),
+      objectIdForTask: (_) => 'object-1',
+      versionIdForTask: (_) => 'version-1',
+      chunkSize: 3,
+      progress: progress,
+    );
+
+    await executor.executePendingUploads();
+
+    expect(
+      events.map((event) => event.phase),
+      containsAllInOrder([
+        UploadProgressPhase.preparing,
+        UploadProgressPhase.connecting,
+        UploadProgressPhase.uploading,
+        UploadProgressPhase.completing,
+        UploadProgressPhase.completed,
+      ]),
+    );
+    expect(
+      events
+          .where((event) => event.phase == UploadProgressPhase.uploading)
+          .map((event) => event.uploadedBytes),
+      containsAllInOrder([0, 3, 6, 7]),
+    );
+    expect(progress.value.taskCount, 1);
+    expect(progress.value.uploadedCount, 1);
+    expect(progress.value.failedCount, 0);
+    expect(progress.value.currentPath, 'photos/a.jpg');
+  });
 
   test('executePendingUploads resumes existing upload session', () async {
     final uploadTasks = FakeUploadTaskStore([
@@ -461,8 +524,12 @@ class FakeUploadTaskStore implements UploadTaskStore {
 
 class FakeUploadPayloadPreparer implements UploadPayloadPreparer {
   final List<int> bytes;
+  final String sourceContentHash;
 
-  const FakeUploadPayloadPreparer({this.bytes = const [1, 2, 3]});
+  const FakeUploadPayloadPreparer({
+    this.bytes = const [1, 2, 3],
+    this.sourceContentHash = 'plain-content-hash',
+  });
 
   @override
   Future<PreparedUploadPayload> prepare(
@@ -476,8 +543,28 @@ class FakeUploadPayloadPreparer implements UploadPayloadPreparer {
       bytes: bytes,
       encryptedName: 'enc:a.jpg',
       metadataJson: '{"relative_path":"a.jpg"}',
+      sourceContentHash: sourceContentHash,
     );
   }
+}
+
+class FakeRemoteVersionIndexStore implements RemoteVersionIndexStore {
+  final List<LocalRemoteVersionIndex> saved = [];
+
+  @override
+  Future<List<LocalRemoteVersionIndex>> loadRemoteVersionIndexes() async =>
+      saved;
+
+  @override
+  Future<void> saveRemoteVersionIndex(LocalRemoteVersionIndex entry) async {
+    saved.add(entry);
+  }
+
+  @override
+  Future<void> removeRemoteVersionIndex({
+    required String syncRootId,
+    required String objectId,
+  }) async {}
 }
 
 class RecordingUploadPayloadPreparer implements UploadPayloadPreparer {

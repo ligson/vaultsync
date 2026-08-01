@@ -548,6 +548,7 @@ class RemoteBackupEntry {
   final bool decryptable;
   final String encryptedName;
   final String metadataJson;
+  final String clientContentHash;
 
   const RemoteBackupEntry({
     required this.syncRootId,
@@ -560,6 +561,7 @@ class RemoteBackupEntry {
     this.decryptable = true,
     this.encryptedName = '',
     this.metadataJson = '',
+    this.clientContentHash = '',
   });
 
   RemoteBackupEntry withPayloadMetadata({
@@ -577,6 +579,7 @@ class RemoteBackupEntry {
       decryptable: decryptable,
       encryptedName: encryptedName,
       metadataJson: metadataJson,
+      clientContentHash: clientContentHash,
     );
   }
 }

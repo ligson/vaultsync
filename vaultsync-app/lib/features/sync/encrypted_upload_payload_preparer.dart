@@ -82,8 +82,10 @@ class PlainUploadPayloadPreparer implements UploadPayloadPreparer {
   }) async {
     final bytes = await contentReader.read(task);
     final name = _fileName(task.relativePath);
+    final sourceContentHash = crypto.sha256.convert(bytes).toString();
     return PreparedUploadPayload(
       bytes: bytes,
+      sourceContentHash: sourceContentHash,
       encryptedName: 'vaultsync-name:plain-v1:${_base64(utf8.encode(name))}',
       metadataJson: jsonEncode({
         'format': 'vaultsync-metadata-plain-v1',
@@ -92,6 +94,7 @@ class PlainUploadPayloadPreparer implements UploadPayloadPreparer {
         'kind': 'file',
         'mtime_unix_ms': task.modifiedAt.millisecondsSinceEpoch,
         'client_size': task.sizeBytes,
+        'client_content_hash': sourceContentHash,
         'object_id': objectId,
         'version_id': versionId,
       }),
@@ -141,6 +144,7 @@ class EncryptedUploadPayloadPreparer implements UploadPayloadPreparer {
     required String versionId,
   }) async {
     final plainBytes = await contentReader.read(task);
+    final sourceContentHash = crypto.sha256.convert(plainBytes).toString();
     final contentAad = _contentAad(task, objectId, versionId);
     final contentBox = await _encrypt(
       plainBytes,
@@ -152,10 +156,16 @@ class EncryptedUploadPayloadPreparer implements UploadPayloadPreparer {
       ),
       aad: contentAad,
     );
-    final metadata = await _metadataJson(task, objectId, versionId);
+    final metadata = await _metadataJson(
+      task,
+      objectId,
+      versionId,
+      sourceContentHash,
+    );
     final encryptedName = await _encryptedName(task, objectId, versionId);
     return PreparedUploadPayload(
       bytes: _contentPayload(contentBox),
+      sourceContentHash: sourceContentHash,
       encryptedName: encryptedName,
       metadataJson: metadata,
     );
@@ -165,6 +175,7 @@ class EncryptedUploadPayloadPreparer implements UploadPayloadPreparer {
     LocalUploadTask task,
     String objectId,
     String versionId,
+    String sourceContentHash,
   ) async {
     final metadataAad = _metadataAad(task, objectId, versionId);
     final plainMetadata = jsonEncode({
@@ -173,6 +184,7 @@ class EncryptedUploadPayloadPreparer implements UploadPayloadPreparer {
       'kind': 'file',
       'mtime_unix_ms': task.modifiedAt.millisecondsSinceEpoch,
       'client_size': task.sizeBytes,
+      'client_content_hash': sourceContentHash,
     });
     final box = await _encrypt(
       utf8.encode(plainMetadata),

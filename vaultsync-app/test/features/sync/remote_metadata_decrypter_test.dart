@@ -55,6 +55,7 @@ void main() {
     expect(entry.name, 'a.jpg');
     expect(entry.relativePath, 'photos/a.jpg');
     expect(entry.sizeBytes, payload.bytes.length);
+    expect(entry.clientContentHash, payload.sourceContentHash);
   });
 
   test('decrypt returns placeholder for invalid metadata', () async {

@@ -218,6 +218,8 @@ class VaultSyncApp extends StatefulWidget {
 class _VaultSyncAppState extends State<VaultSyncApp> {
   late Uri _apiBaseUrl;
   late DeviceProfile _deviceProfile;
+  final UploadProgressChannel _uploadProgress = UploadProgressChannel();
+  final DownloadProgressChannel _downloadProgress = DownloadProgressChannel();
   bool _serverSettingsLoaded = false;
 
   @override
@@ -227,6 +229,13 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
     _deviceProfile = DeviceProfile.current();
     _loadDeviceProfile();
     _loadServerSettings();
+  }
+
+  @override
+  void dispose() {
+    _uploadProgress.dispose();
+    _downloadProgress.dispose();
+    super.dispose();
   }
 
   @override
@@ -262,6 +271,9 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
     final resolvedDownloadDecrypter = StoredEncryptedDownloadPayloadDecrypter(
       keyStore: widget.uploadKeys,
     );
+    final resolvedRemoteMetadataDecrypter = StoredRemoteMetadataDecrypter(
+      keyStore: widget.uploadKeys,
+    );
     final resolvedFilePreviews = RemoteFilePreviewLoader(
       downloads: resolvedDownloads,
       decrypter: resolvedDownloadDecrypter,
@@ -274,6 +286,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
           sessionStore: widget.storage,
           syncRootMappings: widget.syncRootMappings,
           uploadTasks: widget.uploadTasks,
+          remoteVersions: widget.remoteVersions,
           uploads: resolvedUploads,
           payloadPreparer: StoredEncryptedUploadPayloadPreparer(
             keyStore: widget.uploadKeys,
@@ -287,6 +300,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
             uploadTasks: widget.uploadTasks,
             mediaCleaner: mediaGateway,
           ),
+          progress: _uploadProgress,
         );
     final resolvedRemotePullExecutor =
         widget.remotePullExecutor ??
@@ -306,6 +320,11 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
             remoteVersions: widget.remoteVersions,
             syncIssues: widget.syncIssues,
           ),
+          mappings: widget.syncRootMappings,
+          remoteVersions: widget.remoteVersions,
+          uploadTasks: widget.uploadTasks,
+          metadataDecrypter: resolvedRemoteMetadataDecrypter,
+          progress: _downloadProgress,
         );
     final profileGateway = auth is UserProfileGateway
         ? auth as UserProfileGateway
@@ -335,12 +354,12 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
           syncHistory: widget.syncHistory,
           syncRoots: resolvedSyncRoots,
           uploadExecutor: resolvedUploadExecutor,
+          uploadProgress: _uploadProgress,
+          downloadProgress: _downloadProgress,
           remotePullExecutor: resolvedRemotePullExecutor,
           remoteBackups: resolvedRemoteBackups,
           remoteObjectDeletes: resolvedRemoteObjectDeletes,
-          remoteMetadataDecrypter: StoredRemoteMetadataDecrypter(
-            keyStore: widget.uploadKeys,
-          ),
+          remoteMetadataDecrypter: resolvedRemoteMetadataDecrypter,
           remoteFilePreviews: resolvedFilePreviews,
           mediaBackupSources: widget.storage is MediaBackupSourceStore
               ? widget.storage as MediaBackupSourceStore
@@ -385,9 +404,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
             remotePullExecutor: resolvedRemotePullExecutor,
             remoteBackups: resolvedRemoteBackups,
             remoteObjectDeletes: resolvedRemoteObjectDeletes,
-            remoteMetadataDecrypter: StoredRemoteMetadataDecrypter(
-              keyStore: widget.uploadKeys,
-            ),
+            remoteMetadataDecrypter: resolvedRemoteMetadataDecrypter,
             remoteFilePreviews: resolvedFilePreviews,
             mediaBackupSources: widget.storage is MediaBackupSourceStore
                 ? widget.storage as MediaBackupSourceStore

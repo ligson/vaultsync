@@ -2085,6 +2085,82 @@ void main() {
     expect(find.text('已上传 1 个任务'), findsOneWidget);
   });
 
+  testWidgets('sync status page shows clear live progress on narrow screens', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final progress = UploadProgressChannel();
+    final downloadProgress = DownloadProgressChannel();
+    progress.report(
+      const UploadProgress(
+        phase: UploadProgressPhase.uploading,
+        taskIndex: 2,
+        taskCount: 5,
+        currentPath: '相册/一张文件名很长很长的照片.jpg',
+        uploadedBytes: 3,
+        totalBytes: 7,
+        uploadedCount: 1,
+        speedBytesPerSecond: 1024,
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore(),
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: FakeSyncRootGateway(const []),
+          uploadProgress: progress,
+          downloadProgress: downloadProgress,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('upload_progress_panel')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('open_sync_status_button')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('upload_progress_panel')), findsOneWidget);
+    expect(find.text('正在上传 2 / 5'), findsOneWidget);
+    expect(find.text('一张文件名很长很长的照片.jpg'), findsOneWidget);
+    expect(find.text('3 B / 7 B'), findsOneWidget);
+    expect(find.text('速度 1.0 KB/秒'), findsOneWidget);
+    expect(find.text('已完成 1'), findsOneWidget);
+    expect(find.text('失败 0'), findsOneWidget);
+    expect(find.text('剩余 4'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    downloadProgress.report(
+      const DownloadProgress(
+        phase: DownloadProgressPhase.downloading,
+        taskIndex: 1,
+        taskCount: 2,
+        currentPath: '远端相册/remote.jpg',
+        downloadedBytes: 2048,
+        totalBytes: 4096,
+        speedBytesPerSecond: 1024,
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('upload_progress_panel')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('download_progress_panel')),
+      findsOneWidget,
+    );
+    expect(find.text('正在下载 1 / 2'), findsOneWidget);
+    expect(find.text('速度 1.0 KB/秒'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('sync status page shows cleanup pending tasks and retries them', (
     tester,
   ) async {
@@ -2808,7 +2884,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(pullExecutor.callCount, 1);
-    expect(find.text('已下载 2 个远端更新，处理 1 个删除，其中 1 个被本地改动保护'), findsOneWidget);
+    expect(
+      find.text('已下载 2 个远端更新，无需下载 0 个，处理 1 个删除，其中 1 个被本地改动保护'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('sync home runs startup auto pull silently', (tester) async {

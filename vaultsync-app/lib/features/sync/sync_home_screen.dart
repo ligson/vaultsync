@@ -17,6 +17,7 @@ import 'folder_picker.dart';
 import 'local_cleanup_executor.dart';
 import 'local_path_protector.dart';
 import 'local_sync_issue_resolver.dart';
+import 'local_sync_monitor.dart';
 import 'local_sync_scanner.dart';
 import 'local_upload_executor.dart';
 import 'local_upload_planner.dart';
@@ -56,6 +57,8 @@ class SyncHomeScreen extends StatefulWidget {
   final LocalPathProtector pathProtector;
   final LocalSyncScanGateway? localScanner;
   final LocalUploadExecutionGateway? uploadExecutor;
+  final UploadProgressChannel? uploadProgress;
+  final DownloadProgressChannel? downloadProgress;
   final RemoteSyncPullGateway? remotePullExecutor;
   final RemoteBackupGateway? remoteBackups;
   final RemoteObjectDeleteGateway? remoteObjectDeletes;
@@ -86,6 +89,8 @@ class SyncHomeScreen extends StatefulWidget {
     this.pathProtector = const Sha256LocalPathProtector(),
     this.localScanner,
     this.uploadExecutor,
+    this.uploadProgress,
+    this.downloadProgress,
     this.remotePullExecutor,
     this.remoteBackups,
     this.remoteObjectDeletes,
@@ -113,6 +118,9 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
   String _selectedDeviceFilterId = _DeviceFilterOption.currentId;
   Timer? _initialAutoSyncTimer;
   Timer? _autoSyncTimer;
+  LocalSyncMonitor? _localSyncMonitor;
+  final Set<String> _pendingMonitorRootIds = {};
+  var _autoSyncRequestedWhileRunning = false;
   var _isScanning = false;
   var _isUploading = false;
   var _isPulling = false;
@@ -129,6 +137,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
   void dispose() {
     _initialAutoSyncTimer?.cancel();
     _autoSyncTimer?.cancel();
+    unawaited(_localSyncMonitor?.stop());
     super.dispose();
   }
 
@@ -144,6 +153,27 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       widget.autoSyncInterval,
       (_) => _runAutoSync(scanAndUpload: true),
     );
+    _startLocalSyncMonitor();
+  }
+
+  Future<void> _startLocalSyncMonitor() async {
+    final monitor = LocalSyncMonitor(
+      mappings: widget.syncRootMappings,
+      onChanged: _onLocalSyncChanged,
+    );
+    _localSyncMonitor = monitor;
+    await monitor.start();
+  }
+
+  void _onLocalSyncChanged(Set<String> syncRootIds) {
+    _pendingMonitorRootIds.addAll(syncRootIds);
+    if (_isAutoSyncing) {
+      _autoSyncRequestedWhileRunning = true;
+      return;
+    }
+    final pending = Set<String>.from(_pendingMonitorRootIds);
+    _pendingMonitorRootIds.clear();
+    unawaited(_runAutoSync(scanAndUpload: true, syncRootIds: pending));
   }
 
   Future<_SyncHomeData> _loadHomeData() async {
@@ -405,6 +435,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     setState(() {
       _homeFuture = _loadAndCacheHomeData();
     });
+    unawaited(_localSyncMonitor?.refresh());
   }
 
   Future<void> _signOut() async {
@@ -980,7 +1011,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         result: 'success',
         title: '拉取远端变更',
         message:
-            '下载 ${result.downloadedCount} 个更新，处理 ${result.deleteCount} 个删除，保护 ${result.blockedDeleteCount} 个本地改动',
+            '下载 ${result.downloadedCount} 个更新，无需下载 ${result.skippedDownloadCount} 个，处理 ${result.deleteCount} 个删除，保护 ${result.blockedDeleteCount} 个本地改动',
       );
       if (!mounted) {
         return;
@@ -992,7 +1023,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '已下载 ${result.downloadedCount} 个远端更新，处理 ${result.deleteCount} 个删除$blockedSuffix',
+            '已下载 ${result.downloadedCount} 个远端更新，无需下载 ${result.skippedDownloadCount} 个，处理 ${result.deleteCount} 个删除$blockedSuffix',
           ),
         ),
       );
@@ -1018,8 +1049,20 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     }
   }
 
-  Future<void> _runAutoSync({required bool scanAndUpload}) async {
-    if (!mounted || _isAutoSyncing) {
+  Future<void> _runAutoSync({
+    required bool scanAndUpload,
+    Set<String>? syncRootIds,
+  }) async {
+    if (!mounted) {
+      return;
+    }
+    if (_isAutoSyncing) {
+      if (scanAndUpload) {
+        _autoSyncRequestedWhileRunning = true;
+        if (syncRootIds != null) {
+          _pendingMonitorRootIds.addAll(syncRootIds);
+        }
+      }
       return;
     }
     final statusStore = widget.autoSyncStatus;
@@ -1031,6 +1074,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     var remoteDeleteCount = 0;
     var blockedDeleteCount = 0;
     String? currentStage;
+    _localSyncMonitor?.pause();
     setState(() {
       _isAutoSyncing = true;
     });
@@ -1043,23 +1087,27 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         currentStage = '扫描本地目录';
         final actionSyncRootIds =
             await _resolveCurrentDeviceActionSyncRootIds();
+        final requestedRootIds = syncRootIds;
+        final scanRootIds = requestedRootIds == null
+            ? actionSyncRootIds
+            : actionSyncRootIds.intersection(requestedRootIds);
         await _ensureAndroidFileAccessPermission(
           null,
-          allowedSyncRootIds: actionSyncRootIds,
+          allowedSyncRootIds: scanRootIds,
         );
         final scanner =
             widget.localScanner ??
             LocalSyncScanner(mappings: widget.syncRootMappings);
         final files = await _scanMappedRootsForSyncRootIds(
           scanner: scanner,
-          syncRootIds: actionSyncRootIds,
+          syncRootIds: scanRootIds,
         );
         scannedCount = files.length;
         final planner = LocalUploadPlanner(uploadTasks: widget.uploadTasks);
         await planner.enqueueScannedFiles(files);
         currentStage = '扫描相册备份';
         final mediaResult = await _scanMediaBackupSources(
-          allowedSyncRootIds: actionSyncRootIds,
+          allowedSyncRootIds: scanRootIds,
         );
         scannedCount += mediaResult.scannedCount;
         if (mounted) {
@@ -1152,6 +1200,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         message: message,
       );
     } finally {
+      _localSyncMonitor?.resume();
       if (mounted) {
         setState(() {
           _isScanning = false;
@@ -1160,6 +1209,14 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
           _isAutoSyncing = false;
           _homeFuture = _loadAndCacheHomeData();
         });
+      }
+      if (_autoSyncRequestedWhileRunning && mounted) {
+        _autoSyncRequestedWhileRunning = false;
+        final pending = Set<String>.from(_pendingMonitorRootIds);
+        _pendingMonitorRootIds.clear();
+        if (pending.isNotEmpty) {
+          unawaited(_runAutoSync(scanAndUpload: true, syncRootIds: pending));
+        }
       }
     }
   }
@@ -1277,6 +1334,8 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
             resolveIssue: _markIssueResolved,
             retryEnabled: widget.uploadExecutor != null,
             autoSyncEnabled: widget.autoSyncEnabled,
+            uploadProgress: widget.uploadProgress,
+            downloadProgress: widget.downloadProgress,
           ),
         ),
       );
@@ -2349,6 +2408,8 @@ class _SyncStatusPage extends StatefulWidget {
   final Future<void> Function(String issueId) resolveIssue;
   final bool retryEnabled;
   final bool autoSyncEnabled;
+  final UploadProgressChannel? uploadProgress;
+  final DownloadProgressChannel? downloadProgress;
 
   const _SyncStatusPage({
     required this.initialData,
@@ -2363,6 +2424,8 @@ class _SyncStatusPage extends StatefulWidget {
     required this.resolveIssue,
     required this.retryEnabled,
     required this.autoSyncEnabled,
+    this.uploadProgress,
+    this.downloadProgress,
   });
 
   @override
@@ -2386,11 +2449,61 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
   var _isRetrying = false;
   var _isRefreshing = false;
   String _refreshError = '';
+  UploadProgressPhase _lastUploadPhase = UploadProgressPhase.idle;
+  DownloadProgressPhase _lastDownloadPhase = DownloadProgressPhase.idle;
 
   @override
   void initState() {
     super.initState();
     _data = widget.initialData;
+    _lastUploadPhase =
+        widget.uploadProgress?.value.phase ?? UploadProgressPhase.idle;
+    _lastDownloadPhase =
+        widget.downloadProgress?.value.phase ?? DownloadProgressPhase.idle;
+    widget.uploadProgress?.addListener(_handleUploadProgress);
+    widget.downloadProgress?.addListener(_handleDownloadProgress);
+  }
+
+  @override
+  void didUpdateWidget(covariant _SyncStatusPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.uploadProgress == widget.uploadProgress &&
+        oldWidget.downloadProgress == widget.downloadProgress) {
+      return;
+    }
+    oldWidget.uploadProgress?.removeListener(_handleUploadProgress);
+    oldWidget.downloadProgress?.removeListener(_handleDownloadProgress);
+    _lastUploadPhase =
+        widget.uploadProgress?.value.phase ?? UploadProgressPhase.idle;
+    _lastDownloadPhase =
+        widget.downloadProgress?.value.phase ?? DownloadProgressPhase.idle;
+    widget.uploadProgress?.addListener(_handleUploadProgress);
+    widget.downloadProgress?.addListener(_handleDownloadProgress);
+  }
+
+  @override
+  void dispose() {
+    widget.uploadProgress?.removeListener(_handleUploadProgress);
+    widget.downloadProgress?.removeListener(_handleDownloadProgress);
+    super.dispose();
+  }
+
+  void _handleUploadProgress() {
+    final nextPhase = widget.uploadProgress?.value.phase;
+    if (nextPhase == UploadProgressPhase.completed &&
+        _lastUploadPhase != UploadProgressPhase.completed) {
+      unawaited(_refresh());
+    }
+    _lastUploadPhase = nextPhase ?? UploadProgressPhase.idle;
+  }
+
+  void _handleDownloadProgress() {
+    final nextPhase = widget.downloadProgress?.value.phase;
+    if (nextPhase == DownloadProgressPhase.completed &&
+        _lastDownloadPhase != DownloadProgressPhase.completed) {
+      unawaited(_refresh());
+    }
+    _lastDownloadPhase = nextPhase ?? DownloadProgressPhase.idle;
   }
 
   Future<void> _refresh() async {
@@ -2696,6 +2809,12 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
           ListView(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
             children: [
+              if (widget.uploadProgress != null ||
+                  widget.downloadProgress != null)
+                _SyncTransferProgressPanel(
+                  uploadProgress: widget.uploadProgress,
+                  downloadProgress: widget.downloadProgress,
+                ),
               if (_refreshError.isNotEmpty) ...[
                 _InlineSyncError(message: _refreshError),
                 const SizedBox(height: 12),
@@ -2745,6 +2864,428 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
       ),
     );
   }
+}
+
+class _SyncTransferProgressPanel extends StatefulWidget {
+  final UploadProgressChannel? uploadProgress;
+  final DownloadProgressChannel? downloadProgress;
+
+  const _SyncTransferProgressPanel({
+    this.uploadProgress,
+    this.downloadProgress,
+  });
+
+  @override
+  State<_SyncTransferProgressPanel> createState() =>
+      _SyncTransferProgressPanelState();
+}
+
+class _SyncTransferProgressPanelState
+    extends State<_SyncTransferProgressPanel> {
+  late bool _showDownload;
+
+  @override
+  void initState() {
+    super.initState();
+    _showDownload = widget.downloadProgress?.value.isActive == true;
+    widget.uploadProgress?.addListener(_handleUploadProgress);
+    widget.downloadProgress?.addListener(_handleDownloadProgress);
+  }
+
+  @override
+  void dispose() {
+    widget.uploadProgress?.removeListener(_handleUploadProgress);
+    widget.downloadProgress?.removeListener(_handleDownloadProgress);
+    super.dispose();
+  }
+
+  void _handleUploadProgress() {
+    if (widget.uploadProgress?.value.phase == UploadProgressPhase.idle) {
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _showDownload = false;
+      });
+    }
+  }
+
+  void _handleDownloadProgress() {
+    if (widget.downloadProgress?.value.phase == DownloadProgressPhase.idle) {
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _showDownload = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_showDownload && widget.downloadProgress != null) {
+      return _DownloadProgressPanel(progress: widget.downloadProgress!);
+    }
+    final uploadProgress = widget.uploadProgress;
+    if (uploadProgress != null) {
+      return _UploadProgressPanel(progress: uploadProgress);
+    }
+    return const SizedBox.shrink();
+  }
+}
+
+class _UploadProgressPanel extends StatelessWidget {
+  final UploadProgressChannel progress;
+
+  const _UploadProgressPanel({required this.progress});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: progress,
+      builder: (context, _) {
+        final value = progress.value;
+        if (value.phase == UploadProgressPhase.idle) {
+          return const SizedBox.shrink();
+        }
+        final colorScheme = Theme.of(context).colorScheme;
+        final fileName = _uploadProgressFileName(value.currentPath);
+        final completedTasks = value.uploadedCount + value.failedCount;
+        final remainingTasks = value.taskCount > completedTasks
+            ? value.taskCount - completedTasks
+            : 0;
+        final fileProgress = _uploadFileProgress(value);
+        return Container(
+          key: const ValueKey('upload_progress_panel'),
+          margin: const EdgeInsets.fromLTRB(4, 2, 4, 12),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: colorScheme.surfaceContainerLow,
+            border: Border.all(color: colorScheme.outlineVariant),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    _uploadProgressIcon(value.phase),
+                    size: 20,
+                    color: _uploadProgressColor(colorScheme, value.phase),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _uploadProgressTitle(value),
+                      key: const ValueKey('upload_progress_title'),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ),
+                ],
+              ),
+              if (fileName.isNotEmpty &&
+                  value.phase != UploadProgressPhase.completed) ...[
+                const SizedBox(height: 10),
+                Text(
+                  fileName,
+                  key: const ValueKey('upload_progress_file_name'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ],
+              if (value.phase != UploadProgressPhase.completed) ...[
+                const SizedBox(height: 8),
+                LinearProgressIndicator(
+                  key: const ValueKey('upload_file_progress_bar'),
+                  value: fileProgress,
+                  minHeight: 6,
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _uploadProgressDetail(value),
+                  key: const ValueKey('upload_progress_detail'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                if (value.speedBytesPerSecond > 0) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    '速度 ${_formatSpeed(value.speedBytesPerSecond)}',
+                    key: const ValueKey('upload_speed'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ],
+              if (value.errorMessage.isNotEmpty &&
+                  value.phase == UploadProgressPhase.failed) ...[
+                const SizedBox(height: 6),
+                Text(
+                  value.errorMessage,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: colorScheme.error),
+                ),
+              ],
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 14,
+                runSpacing: 6,
+                children: [
+                  Text('已完成 ${value.uploadedCount}'),
+                  Text('失败 ${value.failedCount}'),
+                  Text('剩余 $remainingTasks'),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _DownloadProgressPanel extends StatelessWidget {
+  final DownloadProgressChannel progress;
+
+  const _DownloadProgressPanel({required this.progress});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: progress,
+      builder: (context, _) {
+        final value = progress.value;
+        if (value.phase == DownloadProgressPhase.idle) {
+          return const SizedBox.shrink();
+        }
+        final colorScheme = Theme.of(context).colorScheme;
+        final completedTasks =
+            value.downloadedCount + value.failedCount + value.skippedCount;
+        final remainingTasks = value.taskCount > completedTasks
+            ? value.taskCount - completedTasks
+            : 0;
+        final fileProgress = value.totalBytes <= 0
+            ? null
+            : (value.downloadedBytes / value.totalBytes).clamp(0.0, 1.0);
+        return Container(
+          key: const ValueKey('download_progress_panel'),
+          margin: const EdgeInsets.fromLTRB(4, 2, 4, 12),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: colorScheme.surfaceContainerLow,
+            border: Border.all(color: colorScheme.outlineVariant),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    _downloadProgressIcon(value.phase),
+                    size: 20,
+                    color: value.phase == DownloadProgressPhase.failed
+                        ? colorScheme.error
+                        : colorScheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _downloadProgressTitle(value),
+                      key: const ValueKey('download_progress_title'),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ),
+                ],
+              ),
+              if (value.currentPath.isNotEmpty &&
+                  value.phase != DownloadProgressPhase.completed) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _uploadProgressFileName(value.currentPath),
+                  key: const ValueKey('download_progress_file_name'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+              if (value.phase != DownloadProgressPhase.completed) ...[
+                const SizedBox(height: 8),
+                LinearProgressIndicator(
+                  key: const ValueKey('download_file_progress_bar'),
+                  value: fileProgress,
+                  minHeight: 6,
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _downloadProgressDetail(value),
+                  key: const ValueKey('download_progress_detail'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+              if (value.errorMessage.isNotEmpty &&
+                  value.phase == DownloadProgressPhase.failed)
+                Text(
+                  value.errorMessage,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: colorScheme.error),
+                ),
+              if (value.speedBytesPerSecond > 0) ...[
+                const SizedBox(height: 4),
+                Text(
+                  '速度 ${_formatSpeed(value.speedBytesPerSecond)}',
+                  key: const ValueKey('download_speed'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 14,
+                runSpacing: 6,
+                children: [
+                  Text('已完成 ${value.downloadedCount}'),
+                  Text('无需下载 ${value.skippedCount}'),
+                  Text('失败 ${value.failedCount}'),
+                  Text('剩余 $remainingTasks'),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+String _downloadProgressTitle(DownloadProgress progress) {
+  if (progress.phase == DownloadProgressPhase.completed) {
+    return progress.taskCount == 0 ? '没有待下载任务' : '本轮下载完成';
+  }
+  final count = progress.taskCount > 0
+      ? ' ${progress.taskIndex} / ${progress.taskCount}'
+      : '';
+  return '${_downloadProgressPhaseLabel(progress.phase)}$count';
+}
+
+String _downloadProgressPhaseLabel(DownloadProgressPhase phase) {
+  return switch (phase) {
+    DownloadProgressPhase.connecting => '正在连接服务器',
+    DownloadProgressPhase.downloading => '正在下载',
+    DownloadProgressPhase.processing => '正在处理下载内容',
+    DownloadProgressPhase.completing => '正在写入本地文件',
+    DownloadProgressPhase.failed => '当前文件下载失败',
+    DownloadProgressPhase.completed => '下载完成',
+    DownloadProgressPhase.idle => '等待下载',
+  };
+}
+
+String _downloadProgressDetail(DownloadProgress progress) {
+  if (progress.phase == DownloadProgressPhase.connecting) {
+    return '正在请求远端文件';
+  }
+  if (progress.totalBytes > 0) {
+    return '${_formatBytes(progress.downloadedBytes)} / ${_formatBytes(progress.totalBytes)}';
+  }
+  return _downloadProgressPhaseLabel(progress.phase);
+}
+
+IconData _downloadProgressIcon(DownloadProgressPhase phase) {
+  return switch (phase) {
+    DownloadProgressPhase.failed => Icons.error_outline,
+    DownloadProgressPhase.completed => Icons.check_circle_outline,
+    DownloadProgressPhase.connecting => Icons.cloud_sync_outlined,
+    DownloadProgressPhase.downloading => Icons.cloud_download_outlined,
+    DownloadProgressPhase.processing ||
+    DownloadProgressPhase.completing => Icons.save_alt_outlined,
+    DownloadProgressPhase.idle => Icons.cloud_queue_outlined,
+  };
+}
+
+String _formatSpeed(int bytesPerSecond) {
+  return '${_formatBytes(bytesPerSecond)}/秒';
+}
+
+String _uploadProgressTitle(UploadProgress progress) {
+  if (progress.phase == UploadProgressPhase.completed) {
+    if (progress.taskCount == 0) {
+      return '没有待上传任务';
+    }
+    return progress.failedCount > 0 ? '本轮上传结束' : '本轮上传完成';
+  }
+  final count = progress.taskCount > 0
+      ? ' ${progress.taskIndex} / ${progress.taskCount}'
+      : '';
+  return '${_uploadProgressPhaseLabel(progress.phase)}$count';
+}
+
+String _uploadProgressPhaseLabel(UploadProgressPhase phase) {
+  return switch (phase) {
+    UploadProgressPhase.preparing => '正在读取并处理',
+    UploadProgressPhase.connecting => '正在连接服务器',
+    UploadProgressPhase.uploading => '正在上传',
+    UploadProgressPhase.completing => '正在确认上传',
+    UploadProgressPhase.failed => '当前文件上传失败，继续处理',
+    UploadProgressPhase.completed => '上传完成',
+    UploadProgressPhase.idle => '等待上传',
+  };
+}
+
+String _uploadProgressDetail(UploadProgress progress) {
+  if (progress.phase == UploadProgressPhase.preparing) {
+    return '正在读取文件并生成上传内容';
+  }
+  if (progress.phase == UploadProgressPhase.connecting) {
+    return '正在创建或恢复上传会话';
+  }
+  if (progress.totalBytes > 0) {
+    return '${_formatBytes(progress.uploadedBytes)} / ${_formatBytes(progress.totalBytes)}';
+  }
+  return _uploadProgressPhaseLabel(progress.phase);
+}
+
+double? _uploadFileProgress(UploadProgress progress) {
+  if (progress.phase == UploadProgressPhase.preparing ||
+      progress.phase == UploadProgressPhase.connecting ||
+      progress.totalBytes <= 0) {
+    return null;
+  }
+  return (progress.uploadedBytes / progress.totalBytes).clamp(0.0, 1.0);
+}
+
+String _uploadProgressFileName(String path) {
+  final parts = _pathParts(path);
+  return parts.isEmpty ? path.trim() : parts.last;
+}
+
+IconData _uploadProgressIcon(UploadProgressPhase phase) {
+  return switch (phase) {
+    UploadProgressPhase.failed => Icons.error_outline,
+    UploadProgressPhase.completed => Icons.check_circle_outline,
+    UploadProgressPhase.preparing => Icons.lock_outline,
+    UploadProgressPhase.connecting => Icons.cloud_sync_outlined,
+    UploadProgressPhase.uploading ||
+    UploadProgressPhase.completing => Icons.cloud_upload_outlined,
+    UploadProgressPhase.idle => Icons.cloud_queue_outlined,
+  };
+}
+
+Color _uploadProgressColor(ColorScheme colorScheme, UploadProgressPhase phase) {
+  return switch (phase) {
+    UploadProgressPhase.failed => colorScheme.error,
+    UploadProgressPhase.completed => colorScheme.primary,
+    _ => colorScheme.primary,
+  };
 }
 
 class _InlineSyncError extends StatelessWidget {

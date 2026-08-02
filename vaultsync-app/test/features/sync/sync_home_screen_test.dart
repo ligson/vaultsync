@@ -2124,6 +2124,13 @@ void main() {
 
     expect(find.text('同步状态'), findsWidgets);
     expect(find.byKey(const ValueKey('sync_status_center')), findsOneWidget);
+    expect(find.text('同步概览'), findsOneWidget);
+    expect(find.text('设备与同步目录'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('sync_status_device_device-1')),
+      findsOneWidget,
+    );
+    expect(find.text('设备与目录'), findsNothing);
     expect(find.text('上传失败：1'), findsWidgets);
     expect(find.text('重试 1 个失败任务'), findsOneWidget);
     expect(find.text('上传失败：1'), findsWidgets);
@@ -3347,11 +3354,21 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('open_sync_status_button')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(
-      find.byKey(
-        const ValueKey('sync_issue_download_conflict:root-1:object-1'),
-      ),
+    final issueTile = find.byKey(
+      const ValueKey('sync_issue_download_conflict:root-1:object-1'),
     );
+    final statusScrollable = find.ancestor(
+      of: issueTile,
+      matching: find.byType(Scrollable),
+    );
+    await tester.scrollUntilVisible(
+      issueTile,
+      160,
+      scrollable: statusScrollable,
+    );
+    await tester.drag(statusScrollable, const Offset(0, -80));
+    await tester.pump();
+    await tester.tap(issueTile);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
 

@@ -98,12 +98,41 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('storage_usage_tile')));
     await tester.pumpAndSettle();
 
+    expect(find.text('设备与空间'), findsWidgets);
+    expect(find.text('2 台'), findsOneWidget);
     expect(find.text('Alice Phone'), findsOneWidget);
     expect(find.text('2.0 GB'), findsWidgets);
     await tester.tap(find.text('Alice Phone'));
     await tester.pumpAndSettle();
     expect(find.text('同步目录 root-123'), findsOneWidget);
     expect(find.text('12 个文件'), findsOneWidget);
+    expect(find.text('当前'), findsOneWidget);
+  });
+
+  testWidgets('device storage can remove a confirmed unused device', (
+    tester,
+  ) async {
+    final gateway = FakeProfileGateway();
+    await tester.pumpWidget(_profileApp(gateway: gateway));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('storage_usage_tile')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Old Phone'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('remove_device_device-old')));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('不会删除服务器文件'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('confirm_remove_device_button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(gateway.removedDeviceId, 'device-old');
+    expect(gateway.removedCurrentDeviceId, 'device-1');
+    expect(find.text('Old Phone'), findsNothing);
+    expect(find.text('1 台'), findsOneWidget);
   });
 
   testWidgets(
@@ -123,17 +152,14 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-    await tester.scrollUntilVisible(
-      find.byKey(const ValueKey('app_update_tile')),
-      200,
-      scrollable: find.byType(Scrollable),
-    );
-    await tester.drag(
-      find.byType(Scrollable),
-      const Offset(0, -160),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('app_update_tile')));
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('app_update_tile')),
+        200,
+        scrollable: find.byType(Scrollable),
+      );
+      await tester.drag(find.byType(Scrollable), const Offset(0, -160));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('app_update_tile')));
       await tester.pumpAndSettle();
 
       expect(releaseGateway.requestedPlatform, 'android');
@@ -343,6 +369,30 @@ class FakeProfileGateway implements UserProfileGateway, StorageUsageGateway {
   String? updatedUsername;
   String? updatedNickname;
   String? changedPassword;
+  String? removedDeviceId;
+  String? removedCurrentDeviceId;
+  final List<DeviceStorageUsage> devices = [
+    const DeviceStorageUsage(
+      deviceId: 'device-1',
+      deviceName: 'Alice Phone',
+      platform: 'android',
+      usedBytes: 2 * 1024 * 1024 * 1024,
+      syncRoots: [
+        SyncRootStorageUsage(
+          syncRootId: 'root-123456789',
+          encryptedPath: 'vaultsync-path:v1:root',
+          usedBytes: 2 * 1024 * 1024 * 1024,
+          fileCount: 12,
+        ),
+      ],
+    ),
+    const DeviceStorageUsage(
+      deviceId: 'device-old',
+      deviceName: 'Old Phone',
+      platform: 'android',
+      usedBytes: 0,
+    ),
+  ];
 
   @override
   Future<UserProfile> loadProfile(String token) async {
@@ -352,26 +402,22 @@ class FakeProfileGateway implements UserProfileGateway, StorageUsageGateway {
 
   @override
   Future<StorageUsage> loadStorageUsage(String token) async {
-    return const StorageUsage(
+    return StorageUsage(
       quotaBytes: 10 * 1024 * 1024 * 1024,
       usedBytes: 2 * 1024 * 1024 * 1024,
-      devices: [
-        DeviceStorageUsage(
-          deviceId: 'device-1',
-          deviceName: 'Alice Phone',
-          platform: 'android',
-          usedBytes: 2 * 1024 * 1024 * 1024,
-          syncRoots: [
-            SyncRootStorageUsage(
-              syncRootId: 'root-123456789',
-              encryptedPath: 'vaultsync-path:v1:root',
-              usedBytes: 2 * 1024 * 1024 * 1024,
-              fileCount: 12,
-            ),
-          ],
-        ),
-      ],
+      devices: List.unmodifiable(devices),
     );
+  }
+
+  @override
+  Future<void> removeDevice({
+    required String token,
+    required String deviceId,
+    required String currentDeviceId,
+  }) async {
+    removedDeviceId = deviceId;
+    removedCurrentDeviceId = currentDeviceId;
+    devices.removeWhere((device) => device.deviceId == deviceId);
   }
 
   @override

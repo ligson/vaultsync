@@ -12,6 +12,7 @@ import '../auth/auth_service.dart';
 import 'app_permission_gateway.dart';
 import 'app_permissions_screen.dart';
 import 'avatar_store.dart';
+import 'device_storage_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   final SessionStore storage;
@@ -146,13 +147,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 _SectionLabel('存储与服务'),
                 ListTile(
                   key: const ValueKey('storage_usage_tile'),
-                  leading: const Icon(Icons.pie_chart_outline),
-                  title: const Text('使用空间'),
-                  subtitle: Text(
-                    '${_formatBytes(profile.usedBytes)} / ${_formatBytes(profile.quotaBytes)}',
-                  ),
+                  leading: const Icon(Icons.devices_outlined),
+                  title: const Text('设备与空间'),
+                  subtitle: const Text('查看设备、同步目录和空间占用'),
                   trailing: const Icon(Icons.chevron_right),
-                  onTap: () => _showStorageDetails(profile),
+                  onTap: _openDeviceStorage,
                 ),
                 ListTile(
                   key: const ValueKey('server_settings_tile'),
@@ -667,99 +666,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
-  Future<void> _showStorageDetails(UserProfile profile) async {
+  Future<void> _openDeviceStorage() async {
     final gateway = widget.profileGateway;
     final StorageUsageGateway? storageGateway = gateway is StorageUsageGateway
         ? gateway as StorageUsageGateway
         : null;
     if (storageGateway == null) {
-      _openStorageDetails(
-        StorageUsage(
-          quotaBytes: profile.quotaBytes,
-          usedBytes: profile.usedBytes,
-        ),
-      );
+      _showMessage('当前服务暂不支持设备与空间管理');
       return;
     }
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator()),
-    );
-    try {
-      final usage = await storageGateway.loadStorageUsage(await _token());
-      if (!mounted) {
-        return;
-      }
-      Navigator.of(context, rootNavigator: true).pop();
-      _openStorageDetails(usage);
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      Navigator.of(context, rootNavigator: true).pop();
-      _showMessage(userReadableErrorMessage(error));
-    }
-  }
-
-  void _openStorageDetails(StorageUsage usage) {
-    final remaining = (usage.quotaBytes - usage.usedBytes).clamp(
-      0,
-      usage.quotaBytes,
-    );
-    showDialog<void>(
-      context: context,
-      builder: (context) {
-        final screenSize = MediaQuery.sizeOf(context);
-        final contentWidth = (screenSize.width - 80).clamp(240.0, 520.0);
-        final contentHeight = (screenSize.height - 220).clamp(180.0, 560.0);
-        return AlertDialog(
-          title: const Text('使用空间'),
-          content: SizedBox(
-            width: contentWidth,
-            height: contentHeight,
-            child: ListView(
-              children: [
-                _ValueRow(label: '已使用', value: _formatBytes(usage.usedBytes)),
-                _ValueRow(label: '可用', value: _formatBytes(remaining)),
-                _ValueRow(label: '总容量', value: _formatBytes(usage.quotaBytes)),
-                if (usage.devices.isNotEmpty) const Divider(height: 24),
-                for (final device in usage.devices)
-                  ExpansionTile(
-                    tilePadding: EdgeInsets.zero,
-                    childrenPadding: const EdgeInsets.only(left: 16),
-                    leading: Icon(_platformIcon(device.platform)),
-                    title: Text(
-                      device.deviceName.isEmpty ? '设备' : device.deviceName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(_formatBytes(device.usedBytes)),
-                    children: [
-                      if (device.syncRoots.isEmpty)
-                        const ListTile(dense: true, title: Text('暂无同步目录'))
-                      else
-                        for (final root in device.syncRoots)
-                          ListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            title: Text('同步目录 ${_shortId(root.syncRootId)}'),
-                            subtitle: Text('${root.fileCount} 个文件'),
-                            trailing: Text(_formatBytes(root.usedBytes)),
-                          ),
-                    ],
-                  ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('关闭'),
-            ),
-          ],
-        );
-      },
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => DeviceStorageScreen(
+          storage: widget.storage,
+          gateway: storageGateway,
+        ),
+      ),
     );
   }
 
@@ -830,26 +752,6 @@ class _SectionLabel extends StatelessWidget {
   }
 }
 
-class _ValueRow extends StatelessWidget {
-  final String label;
-  final String value;
-
-  const _ValueRow({required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        children: [
-          Expanded(child: Text(label)),
-          Text(value, style: Theme.of(context).textTheme.labelLarge),
-        ],
-      ),
-    );
-  }
-}
-
 class _ProfileErrorView extends StatelessWidget {
   final String message;
   final Future<void> Function() onRetry;
@@ -891,21 +793,6 @@ String _formatBytes(num value) {
   }
   final digits = unit == 0 || amount >= 100 ? 0 : 1;
   return '${amount.toStringAsFixed(digits)} ${units[unit]}';
-}
-
-String _shortId(String value) {
-  if (value.length <= 8) {
-    return value;
-  }
-  return value.substring(0, 8);
-}
-
-IconData _platformIcon(String platform) {
-  return switch (platform) {
-    'android' || 'ios' => Icons.phone_android,
-    'macos' || 'windows' || 'linux' => Icons.computer,
-    _ => Icons.devices_other,
-  };
 }
 
 int _compareVersions(String left, String right) {

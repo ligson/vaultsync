@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"testing"
@@ -35,6 +36,72 @@ func TestRegisterDeviceReusesExistingClientKey(t *testing.T) {
 	if secondID != firstID {
 		t.Fatalf("expected same physical device to reuse id %q, got %q", firstID, secondID)
 	}
+}
+
+func TestRegisterDeviceWithoutClientKeyReusesLatestMatchingDevice(t *testing.T) {
+	app, token := testutil.NewAuthenticatedServer(t)
+
+	body := `{"name":"VaultSync android","platform":"android"}`
+	first := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/devices", body, token)
+	testutil.AssertStatus(t, first, http.StatusCreated)
+	firstID := testutil.MustReadJSONField(t, first, "id")
+
+	second := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/devices", body, token)
+	testutil.AssertStatus(t, second, http.StatusCreated)
+	secondID := testutil.MustReadJSONField(t, second, "id")
+
+	if secondID != firstID {
+		t.Fatalf("expected legacy client registration to reuse id %q, got %q", firstID, secondID)
+	}
+}
+
+func TestRemoveUnusedDevice(t *testing.T) {
+	app, token := testutil.NewAuthenticatedServer(t)
+
+	device := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/devices", `{"name":"Old Phone","platform":"android"}`, token)
+	testutil.AssertStatus(t, device, http.StatusCreated)
+	deviceID := testutil.MustReadJSONField(t, device, "id")
+
+	path := fmt.Sprintf("/api/v1/devices/%s?current_device_id=current-device", deviceID)
+	removed := testutil.JSONRequest(t, app, http.MethodDelete, path, "", token)
+	testutil.AssertStatus(t, removed, http.StatusOK)
+
+	usage := testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/auth/storage-usage", "", token)
+	testutil.AssertStatus(t, usage, http.StatusOK)
+	envelope := testutil.DecodeJSONEnvelope(t, usage)
+	var payload struct {
+		Devices []struct {
+			DeviceID string `json:"device_id"`
+		} `json:"devices"`
+	}
+	if err := json.Unmarshal(envelope.Data, &payload); err != nil {
+		t.Fatalf("decode storage usage: %v", err)
+	}
+	for _, item := range payload.Devices {
+		if item.DeviceID == deviceID {
+			t.Fatalf("expected removed device %q to be absent from storage usage", deviceID)
+		}
+	}
+}
+
+func TestRemoveDeviceRejectsCurrentOrDeviceWithSyncRoot(t *testing.T) {
+	app, token := testutil.NewAuthenticatedServer(t)
+
+	device := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/devices", `{"name":"Phone","platform":"android","client_key":"phone-key"}`, token)
+	testutil.AssertStatus(t, device, http.StatusCreated)
+	deviceID := testutil.MustReadJSONField(t, device, "id")
+
+	currentPath := fmt.Sprintf("/api/v1/devices/%s?current_device_id=%s", deviceID, deviceID)
+	current := testutil.JSONRequest(t, app, http.MethodDelete, currentPath, "", token)
+	testutil.AssertStatus(t, current, http.StatusBadRequest)
+
+	rootBody := fmt.Sprintf(`{"device_id":"%s","encrypted_path":"base64:path","cleanup_policy":"keep","archive_path":""}`, deviceID)
+	root := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/sync-roots", rootBody, token)
+	testutil.AssertStatus(t, root, http.StatusCreated)
+
+	usedPath := fmt.Sprintf("/api/v1/devices/%s?current_device_id=another-device", deviceID)
+	used := testutil.JSONRequest(t, app, http.MethodDelete, usedPath, "", token)
+	testutil.AssertStatus(t, used, http.StatusBadRequest)
 }
 
 func TestRegisterDeviceClaimsSingleLegacyDevice(t *testing.T) {

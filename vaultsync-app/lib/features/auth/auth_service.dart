@@ -29,6 +29,12 @@ abstract interface class UserProfileGateway {
 
 abstract interface class StorageUsageGateway {
   Future<StorageUsage> loadStorageUsage(String token);
+
+  Future<void> removeDevice({
+    required String token,
+    required String deviceId,
+    required String currentDeviceId,
+  });
 }
 
 abstract interface class AppReleaseGateway {
@@ -91,6 +97,20 @@ class AuthService
       token: token,
     );
     return StorageUsage.fromJson(data);
+  }
+
+  @override
+  Future<void> removeDevice({
+    required String token,
+    required String deviceId,
+    required String currentDeviceId,
+  }) async {
+    final encodedDeviceId = Uri.encodeComponent(deviceId);
+    final encodedCurrentDeviceId = Uri.encodeQueryComponent(currentDeviceId);
+    await apiClient.delete(
+      '/api/v1/devices/$encodedDeviceId?current_device_id=$encodedCurrentDeviceId',
+      token: token,
+    );
   }
 
   @override

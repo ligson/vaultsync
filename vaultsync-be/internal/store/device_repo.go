@@ -9,6 +9,8 @@ import (
 	"github.com/ligson/vaultsync/internal/domain"
 )
 
+var ErrDeviceInUse = errors.New("device is in use")
+
 type DeviceRepo struct {
 	db *sql.DB
 }
@@ -72,6 +74,24 @@ func (r *DeviceRepo) FindSingleUnclaimedByNamePlatform(ctx context.Context, user
 		return domain.Device{}, false, nil
 	}
 	return devices[0], true, nil
+}
+
+func (r *DeviceRepo) FindLatestUnclaimedByNamePlatform(ctx context.Context, userID, name, platform string) (domain.Device, bool, error) {
+	var device domain.Device
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, user_id, name, platform, client_key, created_at
+		FROM devices
+		WHERE user_id = ? AND name = ? AND platform = ? AND client_key = ''
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, userID, name, platform).Scan(&device.ID, &device.UserID, &device.Name, &device.Platform, &device.ClientKey, &device.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.Device{}, false, nil
+	}
+	if err != nil {
+		return domain.Device{}, false, err
+	}
+	return device, true, nil
 }
 
 func (r *DeviceRepo) FindSingleUnclaimedWithSyncRoots(ctx context.Context, userID, platform string) (domain.Device, bool, error) {
@@ -145,4 +165,50 @@ func (r *DeviceRepo) ExistsForUser(ctx context.Context, userID, deviceID string)
 		return false, err
 	}
 	return true, nil
+}
+
+func (r *DeviceRepo) RemoveUnused(ctx context.Context, userID, deviceID string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var syncRootCount, uploadSessionCount, tombstoneCount int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM sync_roots WHERE user_id = d.user_id AND device_id = d.id),
+			(SELECT COUNT(*) FROM upload_sessions WHERE user_id = d.user_id AND device_id = d.id),
+			(SELECT COUNT(*) FROM file_tombstones WHERE user_id = d.user_id AND device_id = d.id)
+		FROM devices d
+		WHERE d.user_id = ? AND d.id = ?
+	`, userID, deviceID).Scan(&syncRootCount, &uploadSessionCount, &tombstoneCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if syncRootCount > 0 || uploadSessionCount > 0 || tombstoneCount > 0 {
+		return ErrDeviceInUse
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ? AND device_id = ?`, userID, deviceID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sync_cursors WHERE user_id = ? AND device_id = ?`, userID, deviceID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM devices WHERE user_id = ? AND id = ?`, userID, deviceID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return ErrNotFound
+	}
+	return tx.Commit()
 }

@@ -36,3 +36,17 @@ func (h *DeviceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	response.Write(w, http.StatusCreated, "", device)
 }
+
+func (h *DeviceHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.MustUserID(r.Context())
+	deviceID := r.PathValue("deviceID")
+	currentDeviceID := r.URL.Query().Get("current_device_id")
+	if err := h.service.Remove(r.Context(), userID, deviceID, currentDeviceID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	response.Write(w, http.StatusOK, "设备已移除", map[string]any{
+		"device_id": deviceID,
+		"removed":   true,
+	})
+}

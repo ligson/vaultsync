@@ -3054,8 +3054,6 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
                 onResolveAllConflicts: () =>
                     _resolveAllConflicts(_data.openIssues),
               ),
-              const SizedBox(height: 12),
-              _DeviceSyncStatusList(data: _data),
             ],
           ),
           if (_isRefreshing)
@@ -3630,34 +3628,6 @@ class _DeviceFilterBar extends StatelessWidget {
   }
 }
 
-class _DeviceSyncStatusList extends StatelessWidget {
-  final _SyncHomeData data;
-
-  const _DeviceSyncStatusList({required this.data});
-
-  @override
-  Widget build(BuildContext context) {
-    final groups = <String, List<_SyncRootViewData>>{};
-    for (final root in data.rootViews) {
-      groups.putIfAbsent(root.root.deviceId, () => []).add(root);
-    }
-    if (groups.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('设备与目录', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        for (final entry in groups.entries) ...[
-          _DeviceSyncStatusGroup(roots: entry.value),
-          if (entry.key != groups.keys.last) const Divider(height: 20),
-        ],
-      ],
-    );
-  }
-}
-
 class _DeviceSyncStatusGroup extends StatelessWidget {
   final List<_SyncRootViewData> roots;
 
@@ -3669,6 +3639,7 @@ class _DeviceSyncStatusGroup extends StatelessWidget {
     return Column(
       children: [
         ListTile(
+          key: ValueKey('sync_status_device_${first.root.deviceId}'),
           contentPadding: EdgeInsets.zero,
           leading: const Icon(Icons.devices_outlined),
           title: Row(
@@ -3687,7 +3658,7 @@ class _DeviceSyncStatusGroup extends StatelessWidget {
         ),
         for (final root in roots)
           Padding(
-            padding: const EdgeInsets.only(left: 16, bottom: 8),
+            padding: const EdgeInsets.only(left: 16, bottom: 10),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -3704,9 +3675,16 @@ class _DeviceSyncStatusGroup extends StatelessWidget {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        _rootOperationSummary(root),
+                        '待上传 ${root.pendingTaskCount} · 失败 ${root.failedTaskCount} · 问题 ${root.issues.length}',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
+                      if (root.operations.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          _rootOperationSummary(root),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -3719,9 +3697,6 @@ class _DeviceSyncStatusGroup extends StatelessWidget {
 }
 
 String _rootOperationSummary(_SyncRootViewData root) {
-  if (root.operations.isEmpty) {
-    return '待上传 ${root.pendingTaskCount}，失败 ${root.failedTaskCount}';
-  }
   final sorted = [...root.operations]
     ..sort((left, right) => right.startedAt.compareTo(left.startedAt));
   return sorted
@@ -3758,6 +3733,21 @@ class _SyncStatusCenter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final groups = <String, List<_SyncRootViewData>>{};
+    for (final root in data.rootViews) {
+      groups.putIfAbsent(root.root.deviceId, () => []).add(root);
+    }
+    final groupedRoots = groups.values.toList()
+      ..sort((left, right) {
+        final leftCurrent = left.first.isCurrentDeviceRoot;
+        final rightCurrent = right.first.isCurrentDeviceRoot;
+        if (leftCurrent != rightCurrent) {
+          return leftCurrent ? -1 : 1;
+        }
+        return left.first.deviceDisplayName.compareTo(
+          right.first.deviceDisplayName,
+        );
+      });
     return Container(
       key: const ValueKey('sync_status_center'),
       margin: const EdgeInsets.fromLTRB(4, 2, 4, 10),
@@ -3773,7 +3763,7 @@ class _SyncStatusCenter extends StatelessWidget {
             children: [
               Icon(Icons.sync, size: 18, color: colorScheme.primary),
               const SizedBox(width: 6),
-              Text('同步状态', style: Theme.of(context).textTheme.titleSmall),
+              Text('同步概览', style: Theme.of(context).textTheme.titleSmall),
               const Spacer(),
               Text(
                 _overallStatusLabel(data),
@@ -3823,16 +3813,20 @@ class _SyncStatusCenter extends StatelessWidget {
                 ),
             ],
           ),
-          if (data.rootViews.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            for (final rootView in data.rootViews)
-              _RootStatusLine(rootView: rootView),
-          ],
           const SizedBox(height: 10),
           _AutoSyncStatusLine(
             status: data.autoSyncStatus,
             enabled: autoSyncEnabled,
           ),
+          if (groupedRoots.isNotEmpty) ...[
+            const Divider(height: 24),
+            Text('设备与同步目录', style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 4),
+            for (var index = 0; index < groupedRoots.length; index += 1) ...[
+              _DeviceSyncStatusGroup(roots: groupedRoots[index]),
+              if (index != groupedRoots.length - 1) const Divider(height: 20),
+            ],
+          ],
         ],
       ),
     );
@@ -4740,38 +4734,6 @@ class _StatusMetric extends StatelessWidget {
           Icon(icon, size: 16),
           const SizedBox(width: 5),
           Text('$label：$value'),
-        ],
-      ),
-    );
-  }
-}
-
-class _RootStatusLine extends StatelessWidget {
-  final _SyncRootViewData rootView;
-
-  const _RootStatusLine({required this.rootView});
-
-  @override
-  Widget build(BuildContext context) {
-    final style = Theme.of(context).textTheme.bodySmall;
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Row(
-        children: [
-          const Icon(Icons.folder_outlined, size: 16),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              rootView.displayName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: style,
-            ),
-          ),
-          Text(
-            '待上传 ${rootView.pendingTaskCount} · 失败 ${rootView.failedTaskCount} · 问题 ${rootView.issues.length}',
-            style: style,
-          ),
         ],
       ),
     );

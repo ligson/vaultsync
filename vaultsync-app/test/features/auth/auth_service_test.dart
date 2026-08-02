@@ -130,4 +130,39 @@ void main() {
 
     await service.ping();
   });
+
+  test('remove device sends current device guard', () async {
+    late http.Request capturedRequest;
+    final service = AuthService(
+      ApiClient(
+        baseUrl: Uri.parse('http://127.0.0.1:8080'),
+        httpClient: MockClient((request) async {
+          capturedRequest = request;
+          return http.Response(
+            jsonEncode({
+              'success': true,
+              'message': '',
+              'httpCode': 200,
+              'data': {'device_id': 'old-device', 'removed': true},
+            }),
+            200,
+          );
+        }),
+      ),
+    );
+
+    await service.removeDevice(
+      token: 'server-token',
+      deviceId: 'old-device',
+      currentDeviceId: 'device-1',
+    );
+
+    expect(capturedRequest.method, 'DELETE');
+    expect(capturedRequest.url.path, '/api/v1/devices/old-device');
+    expect(
+      capturedRequest.url.queryParameters['current_device_id'],
+      'device-1',
+    );
+    expect(capturedRequest.headers['authorization'], 'Bearer server-token');
+  });
 }

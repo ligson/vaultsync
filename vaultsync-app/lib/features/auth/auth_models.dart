@@ -78,6 +78,89 @@ class UserProfile {
   }
 }
 
+class StorageUsage {
+  final int quotaBytes;
+  final int usedBytes;
+  final List<DeviceStorageUsage> devices;
+
+  const StorageUsage({
+    required this.quotaBytes,
+    required this.usedBytes,
+    this.devices = const [],
+  });
+
+  factory StorageUsage.fromJson(Map<String, Object?> json) {
+    final devices = json['devices'] as List? ?? const [];
+    return StorageUsage(
+      quotaBytes: (json['quota_bytes'] as num?)?.toInt() ?? 0,
+      usedBytes: (json['used_bytes'] as num?)?.toInt() ?? 0,
+      devices: devices
+          .map(
+            (item) => DeviceStorageUsage.fromJson(
+              Map<String, Object?>.from(item as Map),
+            ),
+          )
+          .toList(),
+    );
+  }
+}
+
+class DeviceStorageUsage {
+  final String deviceId;
+  final String deviceName;
+  final String platform;
+  final int usedBytes;
+  final List<SyncRootStorageUsage> syncRoots;
+
+  const DeviceStorageUsage({
+    required this.deviceId,
+    required this.deviceName,
+    required this.platform,
+    required this.usedBytes,
+    this.syncRoots = const [],
+  });
+
+  factory DeviceStorageUsage.fromJson(Map<String, Object?> json) {
+    final roots = json['sync_roots'] as List? ?? const [];
+    return DeviceStorageUsage(
+      deviceId: json['device_id'] as String? ?? '',
+      deviceName: json['device_name'] as String? ?? '',
+      platform: json['platform'] as String? ?? '',
+      usedBytes: (json['used_bytes'] as num?)?.toInt() ?? 0,
+      syncRoots: roots
+          .map(
+            (item) => SyncRootStorageUsage.fromJson(
+              Map<String, Object?>.from(item as Map),
+            ),
+          )
+          .toList(),
+    );
+  }
+}
+
+class SyncRootStorageUsage {
+  final String syncRootId;
+  final String encryptedPath;
+  final int usedBytes;
+  final int fileCount;
+
+  const SyncRootStorageUsage({
+    required this.syncRootId,
+    required this.encryptedPath,
+    required this.usedBytes,
+    required this.fileCount,
+  });
+
+  factory SyncRootStorageUsage.fromJson(Map<String, Object?> json) {
+    return SyncRootStorageUsage(
+      syncRootId: json['sync_root_id'] as String? ?? '',
+      encryptedPath: json['encrypted_path'] as String? ?? '',
+      usedBytes: (json['used_bytes'] as num?)?.toInt() ?? 0,
+      fileCount: (json['file_count'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
 class AppRelease {
   final String platform;
   final String version;

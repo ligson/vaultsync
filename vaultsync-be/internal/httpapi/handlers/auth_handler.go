@@ -72,6 +72,15 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	response.Write(w, http.StatusOK, "", user)
 }
 
+func (h *AuthHandler) StorageUsage(w http.ResponseWriter, r *http.Request) {
+	usage, err := h.service.StorageUsage(r.Context(), middleware.MustUserID(r.Context()))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	response.Write(w, http.StatusOK, "", usage)
+}
+
 func (h *AuthHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`

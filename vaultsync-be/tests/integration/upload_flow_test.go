@@ -38,6 +38,61 @@ func TestUploadCiphertextAndCompleteVersion(t *testing.T) {
 	testutil.AssertStatus(t, resp, http.StatusCreated)
 }
 
+func TestStorageUsageGroupsLatestObjectsByDeviceAndSyncRoot(t *testing.T) {
+	app, token, deviceID, rootID := testutil.NewUploadReadyServer(t)
+	sessionID := createUploadSession(t, app, token, deviceID, rootID, "obj-usage", "ver-usage-1", 5)
+	resp := testutil.BinaryRequest(t, app, http.MethodPut, "/api/v1/upload-sessions/"+sessionID+"/parts/0", []byte("hello"), token)
+	testutil.AssertStatus(t, resp, http.StatusNoContent)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions/"+sessionID+"/complete", `{}`, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+
+	sessionID = createUploadSession(t, app, token, deviceID, rootID, "obj-usage", "ver-usage-2", 2)
+	resp = testutil.BinaryRequest(t, app, http.MethodPut, "/api/v1/upload-sessions/"+sessionID+"/parts/0", []byte("hi"), token)
+	testutil.AssertStatus(t, resp, http.StatusNoContent)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/upload-sessions/"+sessionID+"/complete", `{}`, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+
+	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/auth/me", "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	testutil.AssertJSONContains(t, resp, `"used_bytes":2`)
+
+	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/auth/storage-usage", "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	payload := testutil.DecodeJSONEnvelope(t, resp)
+	var usage struct {
+		UsedBytes int64 `json:"used_bytes"`
+		Devices   []struct {
+			DeviceID string `json:"device_id"`
+			Roots    []struct {
+				SyncRootID string `json:"sync_root_id"`
+				FileCount  int64  `json:"file_count"`
+			} `json:"sync_roots"`
+		} `json:"devices"`
+	}
+	if err := json.Unmarshal(payload.Data, &usage); err != nil {
+		t.Fatalf("decode storage usage: %v", err)
+	}
+	if usage.UsedBytes != 2 || len(usage.Devices) != 1 ||
+		usage.Devices[0].DeviceID != deviceID || len(usage.Devices[0].Roots) != 1 ||
+		usage.Devices[0].Roots[0].SyncRootID != rootID || usage.Devices[0].Roots[0].FileCount != 1 {
+		t.Fatalf("unexpected storage usage: %+v", usage)
+	}
+
+	deletePath := fmt.Sprintf("/api/v1/objects/obj-usage?sync_root_id=%s&device_id=%s", rootID, deviceID)
+	resp = testutil.JSONRequest(t, app, http.MethodDelete, deletePath, "", token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+
+	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/auth/storage-usage", "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	payload = testutil.DecodeJSONEnvelope(t, resp)
+	if err := json.Unmarshal(payload.Data, &usage); err != nil {
+		t.Fatalf("decode storage usage after delete: %v", err)
+	}
+	if usage.UsedBytes != 0 || usage.Devices[0].Roots[0].FileCount != 0 {
+		t.Fatalf("deleted object still counted in storage usage: %+v", usage)
+	}
+}
+
 func TestPlainSyncRootStoresPlainObject(t *testing.T) {
 	instance, app := testutil.NewTestAppAndServer(t)
 	token := registerAndLogin(t, app, "plain@example.com")

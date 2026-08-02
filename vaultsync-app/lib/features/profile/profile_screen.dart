@@ -24,6 +24,7 @@ class ProfileScreen extends StatefulWidget {
   final Future<void> Function()? onConfigureServer;
   final Future<void> Function()? onSignOut;
   final Future<String> Function()? appVersionLoader;
+  final Future<bool> Function(Uri uri)? launchExternalUrl;
 
   const ProfileScreen({
     super.key,
@@ -37,6 +38,7 @@ class ProfileScreen extends StatefulWidget {
     this.onConfigureServer,
     this.onSignOut,
     this.appVersionLoader,
+    this.launchExternalUrl,
   });
 
   @override
@@ -559,64 +561,205 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _showRelease(AppRelease release) async {
     final updateAvailable = _compareVersions(release.version, _appVersion) > 0;
+    var openingDownload = false;
+    String downloadStatus = '';
     await showDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(updateAvailable ? '发现新版本' : '已是最新版本'),
-        content: Text(
-          updateAvailable
-              ? '最新版本 ${release.version}\n安装包 ${_formatBytes(release.sizeBytes)}'
-              : '当前版本 $_appVersion\n服务器版本 ${release.version}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('关闭'),
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(updateAvailable ? '发现新版本' : '已是最新版本'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                updateAvailable
+                    ? '最新版本 ${release.version}\n安装包 ${_formatBytes(release.sizeBytes)}'
+                    : '当前版本 $_appVersion\n服务器版本 ${release.version}',
+              ),
+              if (downloadStatus.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    if (openingDownload) ...[
+                      const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      const SizedBox(width: 10),
+                    ],
+                    Expanded(child: Text(downloadStatus)),
+                  ],
+                ),
+              ],
+            ],
           ),
-          if (updateAvailable && release.downloadUrl.isNotEmpty)
-            FilledButton.icon(
-              onPressed: () async {
-                final uri = Uri.tryParse(release.downloadUrl);
-                if (uri == null ||
-                    !await launchUrl(
-                      uri,
-                      mode: LaunchMode.externalApplication,
-                    )) {
-                  _showMessage('无法打开下载地址');
-                }
-              },
-              icon: const Icon(Icons.download),
-              label: const Text('下载'),
+          actions: [
+            TextButton(
+              onPressed: openingDownload
+                  ? null
+                  : () => Navigator.pop(dialogContext),
+              child: const Text('关闭'),
             ),
-        ],
+            if (updateAvailable && release.downloadUrl.isNotEmpty)
+              FilledButton.icon(
+                key: const ValueKey('start_update_download_button'),
+                onPressed: openingDownload
+                    ? null
+                    : () async {
+                        setDialogState(() {
+                          openingDownload = true;
+                          downloadStatus = '正在打开系统下载，请稍候';
+                        });
+                        final uri = _resolveDownloadUri(release.downloadUrl);
+                        var opened = false;
+                        try {
+                          if (uri != null) {
+                            opened = await _launchExternalUrl(uri);
+                          }
+                        } catch (_) {
+                          opened = false;
+                        }
+                        if (!dialogContext.mounted) {
+                          return;
+                        }
+                        if (opened) {
+                          Navigator.pop(dialogContext);
+                          _showMessage('已交给系统下载，可在浏览器或通知栏查看进度');
+                          return;
+                        }
+                        setDialogState(() {
+                          openingDownload = false;
+                          downloadStatus = '无法打开下载地址，请检查浏览器和服务器地址';
+                        });
+                      },
+                icon: openingDownload
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.download),
+                label: Text(openingDownload ? '正在打开' : '下载'),
+              ),
+          ],
+        ),
       ),
     );
   }
 
-  void _showStorageDetails(UserProfile profile) {
-    final remaining = (profile.quotaBytes - profile.usedBytes).clamp(
+  Uri? _resolveDownloadUri(String value) {
+    final uri = Uri.tryParse(value.trim());
+    if (uri == null) {
+      return null;
+    }
+    if (uri.hasScheme) {
+      return uri;
+    }
+    final server = Uri.tryParse(widget.serverAddress.trim());
+    return server?.resolveUri(uri);
+  }
+
+  Future<bool> _launchExternalUrl(Uri uri) {
+    final launcher = widget.launchExternalUrl;
+    if (launcher != null) {
+      return launcher(uri);
+    }
+    return launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  Future<void> _showStorageDetails(UserProfile profile) async {
+    final gateway = widget.profileGateway;
+    final StorageUsageGateway? storageGateway = gateway is StorageUsageGateway
+        ? gateway as StorageUsageGateway
+        : null;
+    if (storageGateway == null) {
+      _openStorageDetails(
+        StorageUsage(
+          quotaBytes: profile.quotaBytes,
+          usedBytes: profile.usedBytes,
+        ),
+      );
+      return;
+    }
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+    try {
+      final usage = await storageGateway.loadStorageUsage(await _token());
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context, rootNavigator: true).pop();
+      _openStorageDetails(usage);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context, rootNavigator: true).pop();
+      _showMessage(userReadableErrorMessage(error));
+    }
+  }
+
+  void _openStorageDetails(StorageUsage usage) {
+    final remaining = (usage.quotaBytes - usage.usedBytes).clamp(
       0,
-      profile.quotaBytes,
+      usage.quotaBytes,
     );
     showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('使用空间'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _ValueRow(label: '已使用', value: _formatBytes(profile.usedBytes)),
-            _ValueRow(label: '可用', value: _formatBytes(remaining)),
-            _ValueRow(label: '总容量', value: _formatBytes(profile.quotaBytes)),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('关闭'),
+      builder: (context) {
+        final screenSize = MediaQuery.sizeOf(context);
+        final contentWidth = (screenSize.width - 80).clamp(240.0, 520.0);
+        final contentHeight = (screenSize.height - 220).clamp(180.0, 560.0);
+        return AlertDialog(
+          title: const Text('使用空间'),
+          content: SizedBox(
+            width: contentWidth,
+            height: contentHeight,
+            child: ListView(
+              children: [
+                _ValueRow(label: '已使用', value: _formatBytes(usage.usedBytes)),
+                _ValueRow(label: '可用', value: _formatBytes(remaining)),
+                _ValueRow(label: '总容量', value: _formatBytes(usage.quotaBytes)),
+                if (usage.devices.isNotEmpty) const Divider(height: 24),
+                for (final device in usage.devices)
+                  ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    childrenPadding: const EdgeInsets.only(left: 16),
+                    leading: Icon(_platformIcon(device.platform)),
+                    title: Text(
+                      device.deviceName.isEmpty ? '设备' : device.deviceName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text(_formatBytes(device.usedBytes)),
+                    children: [
+                      if (device.syncRoots.isEmpty)
+                        const ListTile(dense: true, title: Text('暂无同步目录'))
+                      else
+                        for (final root in device.syncRoots)
+                          ListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            title: Text('同步目录 ${_shortId(root.syncRootId)}'),
+                            subtitle: Text('${root.fileCount} 个文件'),
+                            trailing: Text(_formatBytes(root.usedBytes)),
+                          ),
+                    ],
+                  ),
+              ],
+            ),
           ),
-        ],
-      ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('关闭'),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -748,6 +891,21 @@ String _formatBytes(num value) {
   }
   final digits = unit == 0 || amount >= 100 ? 0 : 1;
   return '${amount.toStringAsFixed(digits)} ${units[unit]}';
+}
+
+String _shortId(String value) {
+  if (value.length <= 8) {
+    return value;
+  }
+  return value.substring(0, 8);
+}
+
+IconData _platformIcon(String platform) {
+  return switch (platform) {
+    'android' || 'ios' => Icons.phone_android,
+    'macos' || 'windows' || 'linux' => Icons.computer,
+    _ => Icons.devices_other,
+  };
 }
 
 int _compareVersions(String left, String right) {

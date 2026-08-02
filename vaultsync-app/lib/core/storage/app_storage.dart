@@ -86,6 +86,12 @@ abstract interface class AutoSyncStatusStore {
   Future<void> saveAutoSyncStatus(AutoSyncStatus status);
 }
 
+abstract interface class SyncOperationStatusStore {
+  Future<List<LocalSyncOperationStatus>> loadSyncOperationStatuses();
+
+  Future<void> saveSyncOperationStatus(LocalSyncOperationStatus status);
+}
+
 abstract interface class SyncHistoryStore {
   Future<List<LocalSyncHistoryEntry>> loadSyncHistory();
 
@@ -107,6 +113,7 @@ class AppStorage
         SyncIssueStore,
         UploadKeyStore,
         AutoSyncStatusStore,
+        SyncOperationStatusStore,
         SyncHistoryStore,
         LocalSessionCleaner {
   final PasswordUploadKeyDeriver uploadKeyDeriver;
@@ -130,6 +137,7 @@ class AppStorage
   static const _uploadContentKey = 'vaultsync.crypto.upload.content_key';
   static const _uploadMetadataKey = 'vaultsync.crypto.upload.metadata_key';
   static const _autoSyncStatusKey = 'vaultsync.sync.auto_status';
+  static const _syncOperationStatusesKey = 'vaultsync.sync.operation_statuses';
   static const _syncHistoryKey = 'vaultsync.sync.history';
   static const _maxSyncHistoryItems = 200;
 
@@ -403,6 +411,31 @@ class AppStorage
   Future<void> saveAutoSyncStatus(AutoSyncStatus status) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_autoSyncStatusKey, jsonEncode(status.toJson()));
+  }
+
+  @override
+  Future<List<LocalSyncOperationStatus>> loadSyncOperationStatuses() async {
+    final prefs = await SharedPreferences.getInstance();
+    final rawItems = prefs.getStringList(_syncOperationStatusesKey) ?? const [];
+    return rawItems
+        .map((raw) => jsonDecode(raw) as Map<String, Object?>)
+        .map(LocalSyncOperationStatus.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<void> saveSyncOperationStatus(LocalSyncOperationStatus status) async {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = await loadSyncOperationStatuses();
+    final next = [
+      for (final item in existing)
+        if (item.id != status.id) item,
+      status,
+    ]..sort((left, right) => left.id.compareTo(right.id));
+    await prefs.setStringList(
+      _syncOperationStatusesKey,
+      next.map((item) => jsonEncode(item.toJson())).toList(),
+    );
   }
 
   @override

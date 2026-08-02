@@ -368,6 +368,40 @@ void main() {
     expect(status.lastSuccessAt, DateTime.utc(2026, 7, 1, 9, 1));
   });
 
+  test(
+    'AppStorage upserts sync operation status by root and operation',
+    () async {
+      const storage = AppStorage();
+      final startedAt = DateTime.utc(2026, 8, 2, 1);
+      await storage.saveSyncOperationStatus(
+        LocalSyncOperationStatus(
+          syncRootId: 'root-1',
+          operation: 'scan',
+          source: 'manual',
+          status: 'running',
+          startedAt: startedAt,
+        ),
+      );
+      await storage.saveSyncOperationStatus(
+        LocalSyncOperationStatus(
+          syncRootId: 'root-1',
+          operation: 'scan',
+          source: 'manual',
+          status: 'success',
+          itemCount: 12,
+          startedAt: startedAt,
+          finishedAt: startedAt.add(const Duration(seconds: 2)),
+        ),
+      );
+
+      final statuses = await storage.loadSyncOperationStatuses();
+
+      expect(statuses, hasLength(1));
+      expect(statuses.single.status, 'success');
+      expect(statuses.single.itemCount, 12);
+    },
+  );
+
   test('AppStorage saves remote version index entries', () async {
     SharedPreferences.setMockInitialValues({});
     const storage = AppStorage();

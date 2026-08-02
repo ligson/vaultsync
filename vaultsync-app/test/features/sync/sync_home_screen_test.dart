@@ -794,12 +794,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('当前设备暂无同步目录，可切换到“全部设备”查看其他设备目录'), findsOneWidget);
-    expect(find.text('HUAWEI NOH-AN00 1'), findsOneWidget);
     expect(find.text('同步目录 root-oth'), findsNothing);
 
-    await tester.tap(
-      find.byKey(const ValueKey('device_filter_device:device-2')),
-    );
+    await tester.tap(find.byKey(const ValueKey('device_filter_dropdown')));
+    await tester.pumpAndSettle();
+    expect(find.text('HUAWEI NOH-AN00（1）'), findsOneWidget);
+    await tester.tap(find.text('HUAWEI NOH-AN00（1）'));
     await tester.pumpAndSettle();
 
     expect(find.text('同步目录 root-oth'), findsWidgets);
@@ -881,14 +881,16 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('当前设备 2'), findsOneWidget);
-    expect(find.text('全部设备 4'), findsOneWidget);
-    expect(find.text('HUAWEI NOH-AN00 2'), findsOneWidget);
+    expect(find.text('当前设备（2）'), findsOneWidget);
     expect(find.text('Download'), findsOneWidget);
     expect(find.text('相册备份'), findsOneWidget);
     expect(find.textContaining('其他设备：HUAWEI NOH-AN00'), findsNothing);
 
-    await tester.tap(find.byKey(const ValueKey('device_filter__all')));
+    await tester.tap(find.byKey(const ValueKey('device_filter_dropdown')));
+    await tester.pumpAndSettle();
+    expect(find.text('全部设备（4）'), findsOneWidget);
+    expect(find.text('HUAWEI NOH-AN00（2）'), findsOneWidget);
+    await tester.tap(find.text('全部设备（4）'));
     await tester.pumpAndSettle();
 
     expect(find.text('Download'), findsOneWidget);
@@ -1463,12 +1465,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('当前设备暂无同步目录，可切换到“全部设备”查看其他设备目录'), findsOneWidget);
-    expect(find.text('Alice MacBook 1'), findsOneWidget);
     expect(find.text('其他设备：Alice MacBook'), findsNothing);
 
-    await tester.tap(
-      find.byKey(const ValueKey('device_filter_device:device-remote')),
-    );
+    await tester.tap(find.byKey(const ValueKey('device_filter_dropdown')));
+    await tester.pumpAndSettle();
+    expect(find.text('Alice MacBook（1）'), findsOneWidget);
+    await tester.tap(find.text('Alice MacBook（1）'));
     await tester.pumpAndSettle();
 
     expect(find.text('其他设备：Alice MacBook'), findsWidgets);
@@ -1973,6 +1975,57 @@ void main() {
     expect(history.entries.single.message, '发现 1 个本地文件，生成 1 个待上传任务');
     expect(history.entries.single.syncRootId, 'root-2');
     expect(find.text('扫描此目录发现 1 个本地文件，生成 1 个待上传任务'), findsOneWidget);
+  });
+
+  testWidgets('repeated scan reports the active directory task', (
+    tester,
+  ) async {
+    final scanner = BlockingLocalSyncScanner();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore(),
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: FakeSyncRootGateway(const [
+            SyncRoot(
+              id: 'root-1',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-01T00:00:00Z',
+            ),
+          ]),
+          localScanner: scanner,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey('sync_root_quick_actions_root-1')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('扫描此目录'));
+    await tester.pump();
+
+    await tester.tap(
+      find.byKey(const ValueKey('sync_root_quick_actions_root-1')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('扫描此目录'));
+    await tester.pump();
+
+    expect(scanner.callCount, 1);
+    expect(find.text('已有目录正在扫描，请等待当前任务完成'), findsOneWidget);
+
+    scanner.complete();
+    await tester.pumpAndSettle();
   });
 
   testWidgets('sync home executes pending uploads', (tester) async {
@@ -2851,6 +2904,57 @@ void main() {
     expect(uploadExecutor.callCount, 1);
     expect(uploadExecutor.syncRootId, 'root-1');
     expect(find.text('已上传此目录 1 个任务'), findsOneWidget);
+  });
+
+  testWidgets('repeated upload reports the active directory task', (
+    tester,
+  ) async {
+    final uploadExecutor = BlockingUploadExecutor();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore(),
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: FakeSyncRootGateway([
+            const SyncRoot(
+              id: 'root-1',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'base64:path-1',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-01T00:00:00Z',
+            ),
+          ]),
+          uploadExecutor: uploadExecutor,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey('sync_root_quick_actions_root-1')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('上传此目录'));
+    await tester.pump();
+
+    await tester.tap(
+      find.byKey(const ValueKey('sync_root_quick_actions_root-1')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('上传此目录'));
+    await tester.pump();
+
+    expect(uploadExecutor.callCount, 1);
+    expect(find.text('已有目录正在上传，请等待当前任务完成'), findsOneWidget);
+
+    uploadExecutor.complete();
+    await tester.pumpAndSettle();
   });
 
   testWidgets('sync home pulls remote changes', (tester) async {
@@ -4029,6 +4133,23 @@ class FakeLocalSyncScanner implements LocalSyncScanGateway {
   }
 }
 
+class BlockingLocalSyncScanner implements LocalSyncScanGateway {
+  final Completer<List<LocalSyncFile>> _result = Completer();
+  int callCount = 0;
+
+  @override
+  Future<List<LocalSyncFile>> scanMappedRoots({String? syncRootId}) {
+    callCount += 1;
+    return _result.future;
+  }
+
+  void complete() {
+    if (!_result.isCompleted) {
+      _result.complete(const []);
+    }
+  }
+}
+
 class FakeUploadExecutor implements LocalUploadExecutionGateway {
   final int uploadedCount;
   final int failedCount;
@@ -4047,6 +4168,23 @@ class FakeUploadExecutor implements LocalUploadExecutionGateway {
       uploadedCount: uploadedCount,
       failedCount: failedCount,
     );
+  }
+}
+
+class BlockingUploadExecutor implements LocalUploadExecutionGateway {
+  final Completer<UploadExecutionResult> _result = Completer();
+  int callCount = 0;
+
+  @override
+  Future<UploadExecutionResult> executePendingUploads({String? syncRootId}) {
+    callCount += 1;
+    return _result.future;
+  }
+
+  void complete() {
+    if (!_result.isCompleted) {
+      _result.complete(const UploadExecutionResult(uploadedCount: 0));
+    }
   }
 }
 

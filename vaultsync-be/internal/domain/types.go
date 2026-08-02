@@ -13,6 +13,27 @@ type User struct {
 	CreatedAt    string `json:"created_at"`
 }
 
+type StorageUsage struct {
+	QuotaBytes int64                `json:"quota_bytes"`
+	UsedBytes  int64                `json:"used_bytes"`
+	Devices    []DeviceStorageUsage `json:"devices"`
+}
+
+type DeviceStorageUsage struct {
+	DeviceID   string                 `json:"device_id"`
+	DeviceName string                 `json:"device_name"`
+	Platform   string                 `json:"platform"`
+	UsedBytes  int64                  `json:"used_bytes"`
+	SyncRoots  []SyncRootStorageUsage `json:"sync_roots"`
+}
+
+type SyncRootStorageUsage struct {
+	SyncRootID    string `json:"sync_root_id"`
+	EncryptedPath string `json:"encrypted_path"`
+	UsedBytes     int64  `json:"used_bytes"`
+	FileCount     int64  `json:"file_count"`
+}
+
 type SessionToken struct {
 	Token     string `json:"token"`
 	TokenID   string `json:"token_id"`

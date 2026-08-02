@@ -27,12 +27,20 @@ abstract interface class UserProfileGateway {
   });
 }
 
+abstract interface class StorageUsageGateway {
+  Future<StorageUsage> loadStorageUsage(String token);
+}
+
 abstract interface class AppReleaseGateway {
   Future<AppRelease> loadRelease(String platform);
 }
 
 class AuthService
-    implements AuthGateway, UserProfileGateway, AppReleaseGateway {
+    implements
+        AuthGateway,
+        UserProfileGateway,
+        StorageUsageGateway,
+        AppReleaseGateway {
   final ApiClient apiClient;
 
   const AuthService(this.apiClient);
@@ -74,6 +82,15 @@ class AuthService
   Future<UserProfile> loadProfile(String token) async {
     final data = await apiClient.get('/api/v1/auth/me', token: token);
     return UserProfile.fromJson(data);
+  }
+
+  @override
+  Future<StorageUsage> loadStorageUsage(String token) async {
+    final data = await apiClient.get(
+      '/api/v1/auth/storage-usage',
+      token: token,
+    );
+    return StorageUsage.fromJson(data);
   }
 
   @override

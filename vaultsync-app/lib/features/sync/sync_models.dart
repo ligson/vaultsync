@@ -246,6 +246,58 @@ class AutoSyncStatus {
   }
 }
 
+class LocalSyncOperationStatus {
+  final String syncRootId;
+  final String operation;
+  final String source;
+  final String status;
+  final String message;
+  final int itemCount;
+  final DateTime startedAt;
+  final DateTime? finishedAt;
+
+  const LocalSyncOperationStatus({
+    required this.syncRootId,
+    required this.operation,
+    required this.source,
+    required this.status,
+    this.message = '',
+    this.itemCount = 0,
+    required this.startedAt,
+    this.finishedAt,
+  });
+
+  String get id => '$syncRootId:$operation';
+
+  bool get isRunning => status == 'running';
+
+  factory LocalSyncOperationStatus.fromJson(Map<String, Object?> json) {
+    return LocalSyncOperationStatus(
+      syncRootId: json['sync_root_id'] as String,
+      operation: json['operation'] as String,
+      source: json['source'] as String? ?? 'manual',
+      status: json['status'] as String? ?? 'idle',
+      message: json['message'] as String? ?? '',
+      itemCount: json['item_count'] as int? ?? 0,
+      startedAt: DateTime.parse(json['started_at'] as String),
+      finishedAt: _optionalDateTime(json['finished_at']),
+    );
+  }
+
+  Map<String, Object?> toJson() {
+    return {
+      'sync_root_id': syncRootId,
+      'operation': operation,
+      'source': source,
+      'status': status,
+      'message': message,
+      'item_count': itemCount,
+      'started_at': startedAt.toIso8601String(),
+      'finished_at': finishedAt?.toIso8601String(),
+    };
+  }
+}
+
 class LocalSyncHistoryEntry {
   final String id;
   final String type;

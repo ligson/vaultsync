@@ -159,7 +159,18 @@ func (s *AuthService) UpdateProfile(ctx context.Context, userID, username, nickn
 	if err == store.ErrNotFound {
 		return domain.User{}, Unauthorized("登录用户不存在，请重新登录")
 	}
-	return user, err
+	if err != nil {
+		return domain.User{}, err
+	}
+	return s.UserByID(ctx, user.ID)
+}
+
+func (s *AuthService) StorageUsage(ctx context.Context, userID string) (domain.StorageUsage, error) {
+	usage, err := s.repo.StorageUsage(ctx, userID)
+	if err == store.ErrNotFound {
+		return domain.StorageUsage{}, Unauthorized("登录用户不存在，请重新登录")
+	}
+	return usage, err
 }
 
 func (s *AuthService) Login(ctx context.Context, email, password string) (domain.SessionToken, error) {
@@ -225,6 +236,11 @@ func (s *AuthService) UserByID(ctx context.Context, id string) (domain.User, err
 	if err != nil {
 		return domain.User{}, Unauthorized("登录用户不存在，请重新登录")
 	}
+	usage, err := s.repo.StorageUsage(ctx, id)
+	if err != nil {
+		return domain.User{}, err
+	}
+	user.UsedBytes = usage.UsedBytes
 	return user, nil
 }
 

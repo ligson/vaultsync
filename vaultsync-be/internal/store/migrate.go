@@ -142,6 +142,12 @@ CREATE TABLE IF NOT EXISTS download_releases (
     updated_at TEXT NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_file_versions_usage
+ON file_versions(user_id, sync_root_id, object_id);
+
+CREATE INDEX IF NOT EXISTS idx_file_tombstones_usage
+ON file_tombstones(user_id, sync_root_id, object_id);
+
 `
 
 func migrate(db *sql.DB) error {

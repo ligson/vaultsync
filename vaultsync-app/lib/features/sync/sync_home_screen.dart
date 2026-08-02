@@ -12,6 +12,7 @@ import '../media_backup/media_backup_gateway.dart';
 import '../media_backup/media_backup_scanner.dart';
 import '../preview/file_preview_screen.dart';
 import '../preview/remote_file_preview.dart';
+import 'android_sync_keep_alive.dart';
 import 'file_access_permission.dart';
 import 'folder_picker.dart';
 import 'local_cleanup_executor.dart';
@@ -113,6 +114,7 @@ class SyncHomeScreen extends StatefulWidget {
 }
 
 class _SyncHomeScreenState extends State<SyncHomeScreen> {
+  static const _androidSyncKeepAlive = AndroidSyncKeepAlive();
   late Future<_SyncHomeData> _homeFuture;
   _SyncHomeData? _cachedHomeData;
   String _selectedDeviceFilterId = _DeviceFilterOption.currentId;
@@ -120,6 +122,8 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
   Timer? _autoSyncTimer;
   LocalSyncMonitor? _localSyncMonitor;
   final Set<String> _pendingMonitorRootIds = {};
+  final Set<String> _activeScanRootIds = {};
+  final Set<String> _activeUploadRootIds = {};
   var _autoSyncRequestedWhileRunning = false;
   var _isScanning = false;
   var _isUploading = false;
@@ -138,6 +142,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     _initialAutoSyncTimer?.cancel();
     _autoSyncTimer?.cancel();
     unawaited(_localSyncMonitor?.stop());
+    unawaited(_androidSyncKeepAlive.stop(_devicePlatform));
     super.dispose();
   }
 
@@ -154,7 +159,11 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       (_) => _runAutoSync(scanAndUpload: true),
     );
     _startLocalSyncMonitor();
+    unawaited(_androidSyncKeepAlive.start(_devicePlatform));
   }
+
+  String get _devicePlatform =>
+      widget.devicePlatform ?? DeviceProfile.current().platform;
 
   Future<void> _startLocalSyncMonitor() async {
     final monitor = LocalSyncMonitor(
@@ -196,6 +205,11 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     final autoSyncStatus =
         await widget.autoSyncStatus?.loadAutoSyncStatus() ??
         const AutoSyncStatus();
+    final operationStore = widget.storage is SyncOperationStatusStore
+        ? widget.storage as SyncOperationStatusStore
+        : null;
+    final operationStatuses =
+        await operationStore?.loadSyncOperationStatuses() ?? const [];
     final prunedState = await _pruneLocalStateForCurrentRoots(
       roots: roots,
       mappings: mappings,
@@ -210,6 +224,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       issues: issues,
       remoteBackupEntries: remoteBackupEntries,
       autoSyncStatus: autoSyncStatus,
+      operationStatuses: operationStatuses,
       currentDeviceId: currentDeviceId ?? '',
       currentDeviceName: currentDeviceDisplayName ?? '',
     );
@@ -219,6 +234,53 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     final data = await _loadHomeData();
     _cachedHomeData = data;
     return data;
+  }
+
+  SyncOperationStatusStore? get _operationStatusStore {
+    final storage = widget.storage;
+    return storage is SyncOperationStatusStore
+        ? storage as SyncOperationStatusStore
+        : null;
+  }
+
+  Future<void> _saveOperationStatuses({
+    required Set<String> syncRootIds,
+    required String operation,
+    required String source,
+    required String status,
+    required DateTime startedAt,
+    String message = '',
+    int itemCount = 0,
+  }) async {
+    final store = _operationStatusStore;
+    if (store == null) {
+      return;
+    }
+    final finishedAt = status == 'running' ? null : DateTime.now().toUtc();
+    for (final syncRootId in syncRootIds) {
+      await store.saveSyncOperationStatus(
+        LocalSyncOperationStatus(
+          syncRootId: syncRootId,
+          operation: operation,
+          source: source,
+          status: status,
+          message: message,
+          itemCount: itemCount,
+          startedAt: startedAt,
+          finishedAt: finishedAt,
+        ),
+      );
+    }
+  }
+
+  void _showBusyMessage(String operation) {
+    if (!mounted) {
+      return;
+    }
+    final label = operation == 'scan' ? '扫描' : '上传';
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('已有目录正在$label，请等待当前任务完成')));
   }
 
   Future<_PrunedLocalSyncState> _pruneLocalStateForCurrentRoots({
@@ -511,14 +573,30 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
 
   Future<void> _scanLocalFiles({String? syncRootId}) async {
     if (_isScanning) {
+      _showBusyMessage('scan');
       return;
     }
+    Set<String> actionSyncRootIds = const {};
+    final startedAt = DateTime.now().toUtc();
     setState(() {
       _isScanning = true;
     });
     try {
-      final actionSyncRootIds = await _resolveCurrentDeviceActionSyncRootIds(
+      actionSyncRootIds = await _resolveCurrentDeviceActionSyncRootIds(
         syncRootId: syncRootId,
+      );
+      if (actionSyncRootIds.any(_activeScanRootIds.contains)) {
+        _showBusyMessage('scan');
+        return;
+      }
+      _activeScanRootIds.addAll(actionSyncRootIds);
+      await _saveOperationStatuses(
+        syncRootIds: actionSyncRootIds,
+        operation: 'scan',
+        source: 'manual',
+        status: 'running',
+        startedAt: startedAt,
+        message: '正在扫描本地目录',
       );
       await _ensureAndroidFileAccessPermission(
         syncRootId,
@@ -545,6 +623,15 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       );
       final scannedCount = files.length + mediaResult.scannedCount;
       final createdTaskCount = tasks.length + mediaResult.createdTaskCount;
+      await _saveOperationStatuses(
+        syncRootIds: actionSyncRootIds,
+        operation: 'scan',
+        source: 'manual',
+        status: 'success',
+        startedAt: startedAt,
+        itemCount: scannedCount,
+        message: '扫描完成，发现 $scannedCount 个文件',
+      );
       await _addHistory(
         type: 'scan',
         result: 'success',
@@ -565,6 +652,14 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         ),
       );
     } catch (error) {
+      await _saveOperationStatuses(
+        syncRootIds: actionSyncRootIds,
+        operation: 'scan',
+        source: 'manual',
+        status: 'failed',
+        startedAt: startedAt,
+        message: userReadableErrorMessage(error),
+      );
       await _addHistory(
         type: 'scan',
         result: 'failed',
@@ -579,6 +674,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         context,
       ).showSnackBar(SnackBar(content: Text(userReadableErrorMessage(error))));
     } finally {
+      _activeScanRootIds.removeAll(actionSyncRootIds);
       if (mounted) {
         setState(() {
           _isScanning = false;
@@ -589,17 +685,49 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
 
   Future<void> _executePendingUploads({String? syncRootId}) async {
     final executor = widget.uploadExecutor;
-    if (executor == null || _isUploading) {
+    if (executor == null) {
       return;
     }
+    if (_isUploading) {
+      _showBusyMessage('upload');
+      return;
+    }
+    Set<String> actionSyncRootIds = const {};
+    final startedAt = DateTime.now().toUtc();
     setState(() {
       _isUploading = true;
     });
     try {
       await _homeFuture;
+      actionSyncRootIds = await _resolveCurrentDeviceActionSyncRootIds(
+        syncRootId: syncRootId,
+      );
+      if (actionSyncRootIds.any(_activeUploadRootIds.contains)) {
+        _showBusyMessage('upload');
+        return;
+      }
+      _activeUploadRootIds.addAll(actionSyncRootIds);
+      unawaited(_androidSyncKeepAlive.start(_devicePlatform));
+      await _saveOperationStatuses(
+        syncRootIds: actionSyncRootIds,
+        operation: 'upload',
+        source: 'manual',
+        status: 'running',
+        startedAt: startedAt,
+        message: '正在上传待处理任务',
+      );
       final result = syncRootId == null
           ? await _executeCurrentDevicePendingUploads(executor)
           : await executor.executePendingUploads(syncRootId: syncRootId);
+      await _saveOperationStatuses(
+        syncRootIds: actionSyncRootIds,
+        operation: 'upload',
+        source: 'manual',
+        status: result.failedCount > 0 ? 'failed' : 'success',
+        startedAt: startedAt,
+        itemCount: result.uploadedCount,
+        message: '上传 ${result.uploadedCount} 个，失败 ${result.failedCount} 个',
+      );
       await _addHistory(
         type: 'upload',
         result: result.failedCount > 0 ? 'failed' : 'success',
@@ -621,6 +749,14 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         ),
       );
     } catch (error) {
+      await _saveOperationStatuses(
+        syncRootIds: actionSyncRootIds,
+        operation: 'upload',
+        source: 'manual',
+        status: 'failed',
+        startedAt: startedAt,
+        message: userReadableErrorMessage(error),
+      );
       await _addHistory(
         type: 'upload',
         result: 'failed',
@@ -635,6 +771,10 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         context,
       ).showSnackBar(SnackBar(content: Text(userReadableErrorMessage(error))));
     } finally {
+      _activeUploadRootIds.removeAll(actionSyncRootIds);
+      if (!widget.autoSyncEnabled) {
+        unawaited(_androidSyncKeepAlive.stop(_devicePlatform));
+      }
       if (mounted) {
         setState(() {
           _isUploading = false;
@@ -1073,6 +1213,8 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     var downloadedCount = 0;
     var remoteDeleteCount = 0;
     var blockedDeleteCount = 0;
+    var autoScanRootIds = <String>{};
+    var autoUploadRootIds = <String>{};
     String? currentStage;
     _localSyncMonitor?.pause();
     setState(() {
@@ -1091,25 +1233,45 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         final scanRootIds = requestedRootIds == null
             ? actionSyncRootIds
             : actionSyncRootIds.intersection(requestedRootIds);
+        autoScanRootIds = scanRootIds.difference(_activeScanRootIds);
+        _activeScanRootIds.addAll(autoScanRootIds);
+        await _saveOperationStatuses(
+          syncRootIds: autoScanRootIds,
+          operation: 'scan',
+          source: 'auto',
+          status: 'running',
+          startedAt: startedAt,
+          message: '自动扫描正在运行',
+        );
         await _ensureAndroidFileAccessPermission(
           null,
-          allowedSyncRootIds: scanRootIds,
+          allowedSyncRootIds: autoScanRootIds,
         );
         final scanner =
             widget.localScanner ??
             LocalSyncScanner(mappings: widget.syncRootMappings);
         final files = await _scanMappedRootsForSyncRootIds(
           scanner: scanner,
-          syncRootIds: scanRootIds,
+          syncRootIds: autoScanRootIds,
         );
         scannedCount = files.length;
         final planner = LocalUploadPlanner(uploadTasks: widget.uploadTasks);
         await planner.enqueueScannedFiles(files);
         currentStage = '扫描相册备份';
         final mediaResult = await _scanMediaBackupSources(
-          allowedSyncRootIds: scanRootIds,
+          allowedSyncRootIds: autoScanRootIds,
         );
         scannedCount += mediaResult.scannedCount;
+        await _saveOperationStatuses(
+          syncRootIds: autoScanRootIds,
+          operation: 'scan',
+          source: 'auto',
+          status: 'success',
+          startedAt: startedAt,
+          itemCount: scannedCount,
+          message: '自动扫描完成，发现 $scannedCount 个文件',
+        );
+        _activeScanRootIds.removeAll(autoScanRootIds);
         if (mounted) {
           setState(() {
             _isScanning = false;
@@ -1123,11 +1285,32 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
           _isUploading = true;
         });
         currentStage = '上传待处理任务';
+        autoUploadRootIds = (await _resolveCurrentDeviceActionSyncRootIds())
+            .difference(_activeUploadRootIds);
+        _activeUploadRootIds.addAll(autoUploadRootIds);
+        await _saveOperationStatuses(
+          syncRootIds: autoUploadRootIds,
+          operation: 'upload',
+          source: 'auto',
+          status: 'running',
+          startedAt: startedAt,
+          message: '自动上传正在运行',
+        );
         final result = await _executeCurrentDevicePendingUploads(
           uploadExecutor,
         );
         uploadedCount = result.uploadedCount;
         failedCount = result.failedCount;
+        await _saveOperationStatuses(
+          syncRootIds: autoUploadRootIds,
+          operation: 'upload',
+          source: 'auto',
+          status: result.failedCount > 0 ? 'failed' : 'success',
+          startedAt: startedAt,
+          itemCount: uploadedCount,
+          message: '自动上传 $uploadedCount 个，失败 $failedCount 个',
+        );
+        _activeUploadRootIds.removeAll(autoUploadRootIds);
         if (mounted) {
           setState(() {
             _isUploading = false;
@@ -1179,6 +1362,22 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       debugPrint('VaultSync auto sync failed [$currentStage]: $error');
       debugPrintStack(stackTrace: stackTrace);
       final message = _syncStageErrorMessage(currentStage, error);
+      await _saveOperationStatuses(
+        syncRootIds: _activeScanRootIds.intersection(autoScanRootIds),
+        operation: 'scan',
+        source: 'auto',
+        status: 'failed',
+        startedAt: startedAt,
+        message: message,
+      );
+      await _saveOperationStatuses(
+        syncRootIds: _activeUploadRootIds.intersection(autoUploadRootIds),
+        operation: 'upload',
+        source: 'auto',
+        status: 'failed',
+        startedAt: startedAt,
+        message: message,
+      );
       await statusStore?.saveAutoSyncStatus(
         AutoSyncStatus(
           lastStartedAt: startedAt,
@@ -1200,6 +1399,8 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         message: message,
       );
     } finally {
+      _activeScanRootIds.removeAll(autoScanRootIds);
+      _activeUploadRootIds.removeAll(autoUploadRootIds);
       _localSyncMonitor?.resume();
       if (mounted) {
         setState(() {
@@ -1494,7 +1695,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
               PopupMenuItem(
                 key: const ValueKey('execute_uploads_button'),
                 value: _HomeAction.upload,
-                enabled: widget.uploadExecutor != null && !_isUploading,
+                enabled: widget.uploadExecutor != null,
                 child: const _HomeActionLabel(
                   icon: Icons.cloud_upload_outlined,
                   label: '上传待处理任务',
@@ -1633,15 +1834,11 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
             onBind: rootView.isCurrentDeviceRoot
                 ? () => _bindLocalFolder(rootView)
                 : null,
-            onUpload:
-                widget.uploadExecutor == null ||
-                    _isUploading ||
-                    !rootView.canRunLocalSync
+            onUpload: widget.uploadExecutor == null || !rootView.canRunLocalSync
                 ? null
                 : () => _executePendingUploads(syncRootId: rootView.root.id),
             onRetryFailed:
                 widget.uploadExecutor == null ||
-                    _isUploading ||
                     rootView.failedTaskCount == 0 ||
                     !rootView.isCurrentDeviceRoot
                 ? null
@@ -2210,6 +2407,7 @@ class _SyncHomeData {
   final List<LocalSyncIssue> issues;
   final Map<String, List<RemoteBackupEntry>> remoteBackupEntries;
   final AutoSyncStatus autoSyncStatus;
+  final List<LocalSyncOperationStatus> operationStatuses;
   final String currentDeviceId;
   final String currentDeviceName;
 
@@ -2220,6 +2418,7 @@ class _SyncHomeData {
     this.issues = const [],
     this.remoteBackupEntries = const {},
     this.autoSyncStatus = const AutoSyncStatus(),
+    this.operationStatuses = const [],
     this.currentDeviceId = '',
     this.currentDeviceName = '',
   });
@@ -2246,6 +2445,10 @@ class _SyncHomeData {
               if (issue.syncRootId == root.id) issue,
           ],
           remoteBackups: remoteBackupEntries[root.id] ?? const [],
+          operations: [
+            for (final operation in operationStatuses)
+              if (operation.syncRootId == root.id) operation,
+          ],
           currentDeviceId: currentDeviceId,
           currentDeviceName: currentDeviceName,
         ),
@@ -2851,6 +3054,8 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
                 onResolveAllConflicts: () =>
                     _resolveAllConflicts(_data.openIssues),
               ),
+              const SizedBox(height: 12),
+              _DeviceSyncStatusList(data: _data),
             ],
           ),
           if (_isRefreshing)
@@ -3395,23 +3600,144 @@ class _DeviceFilterBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          for (var index = 0; index < options.length; index += 1) ...[
-            ChoiceChip(
-              key: ValueKey('device_filter_${options[index].id}'),
-              selected: options[index].id == selectedId,
-              onSelected: (_) => onChanged(options[index].id),
-              label: Text('${options[index].label} ${options[index].count}'),
-            ),
-            if (index != options.length - 1) const SizedBox(width: 8),
-          ],
-        ],
+    return DropdownButtonFormField<String>(
+      key: const ValueKey('device_filter_dropdown'),
+      initialValue: selectedId,
+      isExpanded: true,
+      decoration: const InputDecoration(
+        labelText: '设备',
+        prefixIcon: Icon(Icons.devices_outlined),
+        border: OutlineInputBorder(),
       ),
+      items: [
+        for (final option in options)
+          DropdownMenuItem(
+            key: ValueKey('device_filter_${option.id}'),
+            value: option.id,
+            child: Text(
+              '${option.label}（${option.count}）',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+      ],
+      onChanged: (value) {
+        if (value != null) {
+          onChanged(value);
+        }
+      },
     );
   }
+}
+
+class _DeviceSyncStatusList extends StatelessWidget {
+  final _SyncHomeData data;
+
+  const _DeviceSyncStatusList({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final groups = <String, List<_SyncRootViewData>>{};
+    for (final root in data.rootViews) {
+      groups.putIfAbsent(root.root.deviceId, () => []).add(root);
+    }
+    if (groups.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('设备与目录', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        for (final entry in groups.entries) ...[
+          _DeviceSyncStatusGroup(roots: entry.value),
+          if (entry.key != groups.keys.last) const Divider(height: 20),
+        ],
+      ],
+    );
+  }
+}
+
+class _DeviceSyncStatusGroup extends StatelessWidget {
+  final List<_SyncRootViewData> roots;
+
+  const _DeviceSyncStatusGroup({required this.roots});
+
+  @override
+  Widget build(BuildContext context) {
+    final first = roots.first;
+    return Column(
+      children: [
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.devices_outlined),
+          title: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  first.deviceDisplayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (first.isCurrentDeviceRoot) const _StatusBadge(label: '当前设备'),
+            ],
+          ),
+          subtitle: Text('${roots.length} 个同步目录'),
+        ),
+        for (final root in roots)
+          Padding(
+            padding: const EdgeInsets.only(left: 16, bottom: 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.folder_outlined, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        root.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _rootOperationSummary(root),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+String _rootOperationSummary(_SyncRootViewData root) {
+  if (root.operations.isEmpty) {
+    return '待上传 ${root.pendingTaskCount}，失败 ${root.failedTaskCount}';
+  }
+  final sorted = [...root.operations]
+    ..sort((left, right) => right.startedAt.compareTo(left.startedAt));
+  return sorted
+      .take(2)
+      .map((item) {
+        final operation = item.operation == 'scan' ? '扫描' : '上传';
+        final source = item.source == 'auto' ? '自动' : '手动';
+        final status = switch (item.status) {
+          'running' => '进行中',
+          'success' => '完成',
+          'failed' => '失败',
+          _ => item.status,
+        };
+        return '$source$operation$status';
+      })
+      .join(' · ');
 }
 
 class _SyncStatusCenter extends StatelessWidget {
@@ -5169,6 +5495,7 @@ class _SyncRootViewData {
   final List<LocalUploadTask> tasks;
   final List<LocalSyncIssue> issues;
   final List<RemoteBackupEntry> remoteBackups;
+  final List<LocalSyncOperationStatus> operations;
   final String currentDeviceId;
   final String currentDeviceName;
 
@@ -5178,6 +5505,7 @@ class _SyncRootViewData {
     required this.tasks,
     required this.issues,
     required this.remoteBackups,
+    this.operations = const [],
     required this.currentDeviceId,
     required this.currentDeviceName,
   });

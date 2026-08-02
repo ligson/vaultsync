@@ -88,6 +88,69 @@ void main() {
     expect(find.text('Alice Updated'), findsOneWidget);
   });
 
+  testWidgets('storage details group usage by device and sync root', (
+    tester,
+  ) async {
+    final gateway = FakeProfileGateway();
+    await tester.pumpWidget(_profileApp(gateway: gateway));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('storage_usage_tile')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Alice Phone'), findsOneWidget);
+    expect(find.text('2.0 GB'), findsWidgets);
+    await tester.tap(find.text('Alice Phone'));
+    await tester.pumpAndSettle();
+    expect(find.text('同步目录 root-123'), findsOneWidget);
+    expect(find.text('12 个文件'), findsOneWidget);
+  });
+
+  testWidgets(
+    'app update resolves relative download URL and reports platform',
+    (tester) async {
+      final releaseGateway = FakeAppReleaseGateway();
+      Uri? launchedUri;
+      await tester.pumpWidget(
+        _profileApp(
+          gateway: FakeProfileGateway(),
+          releaseGateway: releaseGateway,
+          launchExternalUrl: (uri) async {
+            launchedUri = uri;
+            return true;
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('app_update_tile')),
+      200,
+      scrollable: find.byType(Scrollable),
+    );
+    await tester.drag(
+      find.byType(Scrollable),
+      const Offset(0, -160),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('app_update_tile')));
+      await tester.pumpAndSettle();
+
+      expect(releaseGateway.requestedPlatform, 'android');
+      expect(find.text('发现新版本'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('start_update_download_button')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        launchedUri,
+        Uri.parse('https://files.example.com/downloads/vaultsync.apk'),
+      );
+      expect(find.textContaining('已交给系统下载'), findsOneWidget);
+    },
+  );
+
   testWidgets('password dialog validates confirmation before request', (
     tester,
   ) async {
@@ -211,19 +274,39 @@ Widget _profileApp({
   required FakeProfileGateway gateway,
   Future<void> Function()? onSignOut,
   AppPermissionGateway? permissionGateway,
+  AppReleaseGateway? releaseGateway,
+  Future<bool> Function(Uri uri)? launchExternalUrl,
 }) {
   return MaterialApp(
     home: ProfileScreen(
       storage: FakeSessionStore(),
       profileGateway: gateway,
+      releaseGateway: releaseGateway,
       avatarStore: MemoryAvatarStore(),
       permissionGateway: permissionGateway,
       platform: 'android',
       serverAddress: 'https://files.example.com',
       onSignOut: onSignOut,
       appVersionLoader: () async => '1.0.0+1',
+      launchExternalUrl: launchExternalUrl,
     ),
   );
+}
+
+class FakeAppReleaseGateway implements AppReleaseGateway {
+  String? requestedPlatform;
+
+  @override
+  Future<AppRelease> loadRelease(String platform) async {
+    requestedPlatform = platform;
+    return const AppRelease(
+      platform: 'android',
+      version: '1.1.0',
+      downloadUrl: '/downloads/vaultsync.apk',
+      sizeBytes: 1024,
+      updatedAt: '2026-08-02T00:00:00Z',
+    );
+  }
 }
 
 class FakeAppPermissionGateway implements AppPermissionGateway {
@@ -247,7 +330,7 @@ class FakeAppPermissionGateway implements AppPermissionGateway {
   Future<void> requestMediaPermission() async {}
 }
 
-class FakeProfileGateway implements UserProfileGateway {
+class FakeProfileGateway implements UserProfileGateway, StorageUsageGateway {
   UserProfile profile = const UserProfile(
     id: 'user-1',
     email: 'alice@example.com',
@@ -265,6 +348,30 @@ class FakeProfileGateway implements UserProfileGateway {
   Future<UserProfile> loadProfile(String token) async {
     loadCount += 1;
     return profile;
+  }
+
+  @override
+  Future<StorageUsage> loadStorageUsage(String token) async {
+    return const StorageUsage(
+      quotaBytes: 10 * 1024 * 1024 * 1024,
+      usedBytes: 2 * 1024 * 1024 * 1024,
+      devices: [
+        DeviceStorageUsage(
+          deviceId: 'device-1',
+          deviceName: 'Alice Phone',
+          platform: 'android',
+          usedBytes: 2 * 1024 * 1024 * 1024,
+          syncRoots: [
+            SyncRootStorageUsage(
+              syncRootId: 'root-123456789',
+              encryptedPath: 'vaultsync-path:v1:root',
+              usedBytes: 2 * 1024 * 1024 * 1024,
+              fileCount: 12,
+            ),
+          ],
+        ),
+      ],
+    );
   }
 
   @override

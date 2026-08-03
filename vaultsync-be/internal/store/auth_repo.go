@@ -174,12 +174,62 @@ func (r *AuthRepo) UpdateProfile(ctx context.Context, userID, username, nickname
 	return r.FindUserByID(ctx, userID)
 }
 
-func (r *AuthRepo) CreateSession(ctx context.Context, tokenID, userID, deviceID, createdAt, expiresAt string) error {
+func (r *AuthRepo) CreateSession(
+	ctx context.Context,
+	tokenID, userID, deviceID, createdAt, expiresAt, refreshTokenHash, refreshExpiresAt string,
+) error {
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO sessions (token_id, user_id, device_id, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, tokenID, userID, deviceID, createdAt, expiresAt)
+		INSERT INTO sessions (
+			token_id, user_id, device_id, created_at, expires_at,
+			refresh_token_hash, refresh_expires_at, revoked_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, '')
+	`, tokenID, userID, deviceID, createdAt, expiresAt, refreshTokenHash, refreshExpiresAt)
 	return err
+}
+
+func (r *AuthRepo) FindSessionByRefreshTokenHash(ctx context.Context, refreshTokenHash string) (domain.RefreshSession, error) {
+	var session domain.RefreshSession
+	err := r.db.QueryRowContext(ctx, `
+		SELECT token_id, user_id, COALESCE(device_id, ''), refresh_expires_at, revoked_at
+		FROM sessions
+		WHERE refresh_token_hash = ?
+	`, refreshTokenHash).Scan(
+		&session.TokenID,
+		&session.UserID,
+		&session.DeviceID,
+		&session.RefreshExpiresAt,
+		&session.RevokedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.RefreshSession{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.RefreshSession{}, err
+	}
+	return session, nil
+}
+
+func (r *AuthRepo) RotateRefreshToken(
+	ctx context.Context,
+	tokenID, oldRefreshTokenHash, newRefreshTokenHash, accessExpiresAt string,
+) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE sessions
+		SET refresh_token_hash = ?, expires_at = ?
+		WHERE token_id = ? AND refresh_token_hash = ? AND revoked_at = ''
+	`, newRefreshTokenHash, accessExpiresAt, tokenID, oldRefreshTokenHash)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (r *AuthRepo) UpdatePasswordHash(ctx context.Context, userID, passwordHash string) error {

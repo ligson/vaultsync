@@ -80,7 +80,7 @@ void main() {
     expect(find.text('同步'), findsOneWidget);
     expect(find.text('Photos'), findsWidgets);
     expect(find.text('/Users/alice/Photos'), findsOneWidget);
-    expect(find.text('1 个文件'), findsWidgets);
+    expect(find.textContaining('1 个文件'), findsWidgets);
     expect(find.text('待上传'), findsWidgets);
 
     expect(find.text('2026'), findsOneWidget);
@@ -88,7 +88,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('a.jpg'), findsOneWidget);
-    expect(find.textContaining('2026/a.jpg'), findsOneWidget);
+    expect(find.textContaining('2026/a.jpg'), findsNothing);
     expect(find.textContaining('2.0 KB · 2026-06-27 17:30'), findsOneWidget);
     expect(find.text('清理策略：上传后删除'), findsOneWidget);
   });
@@ -1252,9 +1252,90 @@ void main() {
     await tester.tap(find.text('2026'));
     await tester.pumpAndSettle();
     expect(find.text('a.jpg'), findsOneWidget);
-    expect(find.textContaining('2026/a.jpg · 4.0 KB'), findsOneWidget);
+    expect(find.textContaining('4.0 KB'), findsOneWidget);
     expect(find.text('服务器已备份，本地已删除'), findsOneWidget);
   });
+
+  testWidgets(
+    'sync file tree keeps deep long names readable on narrow screens',
+    (tester) async {
+      tester.view.physicalSize = const Size(360, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      const longName = 'PXL_20240428_130556656_super_long_camera_file_name.jpg';
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SyncHomeScreen(
+            storage: FakeSessionStore(
+              token: 'server-token',
+              deviceId: 'device-1',
+            ),
+            syncRootMappings: FakeSyncRootMappingStore([
+              const LocalSyncRootMapping(
+                syncRootId: 'root-1',
+                localPath: '/storage/emulated/0/DCIM/Camera',
+                encryptedPath: 'base64:path',
+                cleanupPolicy: 'keep',
+                archivePath: '',
+              ),
+            ]),
+            uploadTasks: FakeUploadTaskStore(),
+            syncRoots: FakeSyncRootGateway(const [
+              SyncRoot(
+                id: 'root-1',
+                userId: 'user-1',
+                deviceId: 'device-1',
+                encryptedPath: 'base64:path',
+                cleanupPolicy: 'keep',
+                archivePath: '',
+                createdAt: '2026-08-03T00:00:00Z',
+              ),
+            ]),
+            remoteBackups: FakeRemoteBackupGateway(const [
+              RemoteBackupObject(
+                cursorValue: 1,
+                syncRootId: 'root-1',
+                objectId: 'object-long-name',
+                versionId: 'version-long-name',
+                encryptedName: 'encrypted-long-name',
+                contentHash: 'sha256:long-name',
+                sizeBytes: 4096,
+                metadataJson: '{}',
+                updatedAt: '2026-08-03T01:00:00Z',
+              ),
+            ]),
+            remoteMetadataDecrypter: const FakeRemoteMetadataDecrypter({
+              'object-long-name': RemoteBackupEntry(
+                syncRootId: 'root-1',
+                objectId: 'object-long-name',
+                versionId: 'version-long-name',
+                name: longName,
+                relativePath: 'Camera/2024/04/$longName',
+                sizeBytes: 4096,
+                updatedAt: '2026-08-03T01:00:00Z',
+              ),
+            }),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      for (final folder in ['Camera', '2024', '04']) {
+        await tester.tap(find.text(folder).last);
+        await tester.pumpAndSettle();
+      }
+
+      final fileName = find.text(longName);
+      expect(fileName, findsOneWidget);
+      final fileNameText = tester.widget<Text>(fileName);
+      expect(fileNameText.maxLines, 1);
+      expect(fileNameText.overflow, TextOverflow.ellipsis);
+      expect(find.text('服务器已备份'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('sync home opens a supported server backup preview', (
     tester,

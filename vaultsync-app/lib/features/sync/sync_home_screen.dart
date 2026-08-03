@@ -4900,7 +4900,7 @@ class _SyncRootPanel extends StatelessWidget {
               ),
           ],
         ),
-        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
         children: [
           _RootMetaRow(rootView: rootView),
           if (!rootView.isCurrentDeviceRoot) ...[
@@ -4943,12 +4943,6 @@ class _RootMetaRow extends StatelessWidget {
       runSpacing: 6,
       children: [
         _MetaChip(
-          icon: rootView.isCurrentDeviceRoot
-              ? Icons.phone_android_outlined
-              : Icons.devices_other_outlined,
-          label: rootView.deviceLine,
-        ),
-        _MetaChip(
           icon: rootView.root.encryptionEnabled
               ? Icons.lock_outline
               : Icons.lock_open_outlined,
@@ -4962,10 +4956,11 @@ class _RootMetaRow extends StatelessWidget {
           icon: Icons.insert_drive_file_outlined,
           label: '文件：${rootView.fileEntries.length}',
         ),
-        _MetaChip(
-          icon: Icons.cloud_upload_outlined,
-          label: '待上传：${rootView.pendingTaskCount}',
-        ),
+        if (rootView.pendingTaskCount > 0)
+          _MetaChip(
+            icon: Icons.cloud_upload_outlined,
+            label: '待上传：${rootView.pendingTaskCount}',
+          ),
         if (rootView.failedTaskCount > 0)
           _MetaChip(
             icon: Icons.error_outline,
@@ -4976,10 +4971,11 @@ class _RootMetaRow extends StatelessWidget {
             icon: Icons.cloud_done_outlined,
             label: '本地已清理：${rootView.backedUpDeletedLocalCount}',
           ),
-        _MetaChip(
-          icon: Icons.error_outline,
-          label: '问题：${rootView.issues.length}',
-        ),
+        if (rootView.issues.isNotEmpty)
+          _MetaChip(
+            icon: Icons.error_outline,
+            label: '问题：${rootView.issues.length}',
+          ),
       ],
     );
   }
@@ -5262,34 +5258,45 @@ class _UnifiedFolderRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final showStatus =
+        summary.statusLabel != '已同步' && summary.statusLabel != '已备份';
     return ListTile(
       dense: true,
-      minLeadingWidth: 52,
-      contentPadding: EdgeInsets.only(left: entry.depth * 20.0),
+      minLeadingWidth: 44,
+      horizontalTitleGap: 8,
+      contentPadding: EdgeInsets.only(left: _treeIndent(entry.depth)),
       leading: SizedBox(
-        width: 52,
+        width: 44,
         child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Icon(
               expanded ? Icons.expand_more : Icons.chevron_right,
-              color: Theme.of(context).colorScheme.primary,
+              size: 20,
+              color: colorScheme.primary,
             ),
-            Icon(
-              Icons.folder_outlined,
-              color: Theme.of(context).colorScheme.primary,
-            ),
+            Icon(Icons.folder_outlined, size: 22, color: colorScheme.primary),
           ],
         ),
       ),
       onTap: onToggle,
-      title: Text(entry.name),
-      subtitle: Text('${summary.fileCount} 个文件'),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _StatusBadge(label: summary.statusLabel),
-          if (onDelete != null)
-            PopupMenuButton<_FolderTreeAction>(
+      title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text(
+        showStatus
+            ? '${summary.fileCount} 个文件 · ${summary.statusLabel}'
+            : '${summary.fileCount} 个文件',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: showStatus
+              ? _treeStatusColor(colorScheme, summary.statusLabel)
+              : null,
+        ),
+      ),
+      trailing: onDelete == null
+          ? null
+          : PopupMenuButton<_FolderTreeAction>(
               tooltip: '文件夹操作',
               onSelected: (action) {
                 switch (action) {
@@ -5308,8 +5315,6 @@ class _UnifiedFolderRow extends StatelessWidget {
                 ),
               ],
             ),
-        ],
-      ),
     );
   }
 }
@@ -5330,22 +5335,24 @@ class _UnifiedFileRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final file = entry.file;
+    final details = file.detailsSubtitle;
     return ListTile(
       dense: true,
       minLeadingWidth: 24,
-      contentPadding: EdgeInsets.only(left: entry.depth * 20.0),
+      horizontalTitleGap: 8,
+      contentPadding: EdgeInsets.only(left: _treeIndent(entry.depth)),
       leading: Icon(
         file.decryptable ? _fileIcon(entry.path) : Icons.lock_outline,
+        size: 22,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
       ),
       onTap: onPreview,
-      title: Text(entry.name),
-      subtitle: Text(file.subtitle),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _StatusBadge(label: statusLabel),
-          if (onPreview != null || onDelete != null)
-            PopupMenuButton<_FileTreeAction>(
+      title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: _FileTreeSubtitle(details: details, statusLabel: statusLabel),
+      isThreeLine: details.isNotEmpty,
+      trailing: onPreview == null && onDelete == null
+          ? null
+          : PopupMenuButton<_FileTreeAction>(
               tooltip: '文件操作',
               onSelected: (action) {
                 switch (action) {
@@ -5376,8 +5383,55 @@ class _UnifiedFileRow extends StatelessWidget {
                   ),
               ],
             ),
-        ],
-      ),
+    );
+  }
+}
+
+class _FileTreeSubtitle extends StatelessWidget {
+  final String details;
+  final String statusLabel;
+
+  const _FileTreeSubtitle({required this.details, required this.statusLabel});
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (details.isNotEmpty)
+          Text(
+            details,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: textTheme.bodySmall,
+          ),
+        Tooltip(
+          message: statusLabel,
+          child: Row(
+            children: [
+              Icon(
+                _treeStatusIcon(statusLabel),
+                size: 14,
+                color: _treeStatusColor(colorScheme, statusLabel),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  statusLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: textTheme.bodySmall?.copyWith(
+                    color: _treeStatusColor(colorScheme, statusLabel),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -5676,11 +5730,11 @@ class _UnifiedFileRecord {
         remoteFilePreviewKindFor(remoteBackup.name) != null;
   }
 
-  String get subtitle {
+  String get detailsSubtitle {
     final size = backup?.sizeBytes ?? task?.sizeBytes;
     final updatedAt = backup?.updatedAt;
     final modifiedAt = task?.modifiedAt;
-    final parts = <String>[path];
+    final parts = <String>[];
     if (size != null) {
       parts.add(_formatBytes(size));
     }
@@ -5695,6 +5749,31 @@ class _UnifiedFileRecord {
     }
     return parts.join(' · ');
   }
+}
+
+double _treeIndent(int depth) {
+  return depth.clamp(0, 4).toDouble() * 12;
+}
+
+Color _treeStatusColor(ColorScheme colorScheme, String status) {
+  if (status == '上传失败' || status == '无法解密') {
+    return colorScheme.error;
+  }
+  if (status == '待上传' ||
+      status == '待清理' ||
+      status == '待确认' ||
+      status == '已上传，服务器待确认') {
+    return colorScheme.tertiary;
+  }
+  return colorScheme.primary;
+}
+
+IconData _treeStatusIcon(String status) {
+  return switch (status) {
+    '上传失败' || '无法解密' => Icons.error_outline,
+    '待上传' || '待清理' || '待确认' || '已上传，服务器待确认' => Icons.schedule_outlined,
+    _ => Icons.cloud_done_outlined,
+  };
 }
 
 String _cleanupPolicyLabel(String policy) {

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"regexp"
 	"strings"
@@ -15,7 +16,10 @@ import (
 	"github.com/ligson/vaultsync/internal/token"
 )
 
-const sessionTTL = 24 * time.Hour
+const (
+	accessTokenTTL  = 24 * time.Hour
+	refreshTokenTTL = 30 * 24 * time.Hour
+)
 
 var usernamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{2,31}$`)
 
@@ -210,24 +214,100 @@ func (s *AuthService) Refresh(ctx context.Context, userID string) (domain.Sessio
 	return s.createSession(ctx, user)
 }
 
-func (s *AuthService) createSession(ctx context.Context, user domain.User) (domain.SessionToken, error) {
-	now := s.now()
-	expiresAt := now.Add(sessionTTL)
-	tokenID := newID()
-	deviceID := ""
-	value, err := token.Create(s.tokenSecret, tokenID, user.ID, deviceID, expiresAt)
+func (s *AuthService) RefreshByToken(ctx context.Context, refreshToken string) (domain.SessionToken, error) {
+	refreshToken = strings.TrimSpace(refreshToken)
+	if refreshToken == "" {
+		return domain.SessionToken{}, Unauthorized("刷新令牌无效，请重新登录")
+	}
+
+	refreshTokenHash := hashRefreshToken(refreshToken)
+	session, err := s.repo.FindSessionByRefreshTokenHash(ctx, refreshTokenHash)
+	if err == store.ErrNotFound {
+		return domain.SessionToken{}, Unauthorized("登录状态已失效，请重新登录")
+	}
 	if err != nil {
 		return domain.SessionToken{}, err
 	}
-	if err := s.repo.CreateSession(ctx, tokenID, user.ID, deviceID, now.Format(time.RFC3339), expiresAt.Format(time.RFC3339)); err != nil {
+	if session.RevokedAt != "" {
+		return domain.SessionToken{}, Unauthorized("登录状态已失效，请重新登录")
+	}
+	refreshExpiresAt, err := time.Parse(time.RFC3339, session.RefreshExpiresAt)
+	if err != nil || !s.now().Before(refreshExpiresAt) {
+		return domain.SessionToken{}, Unauthorized("登录状态已失效，请重新登录")
+	}
+
+	user, err := s.repo.FindUserByID(ctx, session.UserID)
+	if err != nil || user.Status != "active" {
+		return domain.SessionToken{}, Unauthorized("登录状态已失效，请重新登录")
+	}
+
+	newRefreshToken, err := newRefreshToken()
+	if err != nil {
+		return domain.SessionToken{}, err
+	}
+	now := s.now()
+	accessExpiresAt := now.Add(accessTokenTTL)
+	value, err := token.Create(s.tokenSecret, session.TokenID, user.ID, session.DeviceID, accessExpiresAt)
+	if err != nil {
+		return domain.SessionToken{}, err
+	}
+	if err := s.repo.RotateRefreshToken(
+		ctx,
+		session.TokenID,
+		refreshTokenHash,
+		hashRefreshToken(newRefreshToken),
+		accessExpiresAt.Format(time.RFC3339),
+	); err != nil {
+		if err == store.ErrNotFound {
+			return domain.SessionToken{}, Unauthorized("登录状态已失效，请重新登录")
+		}
 		return domain.SessionToken{}, err
 	}
 
 	return domain.SessionToken{
-		Token:     value,
-		TokenID:   tokenID,
-		UserID:    user.ID,
-		ExpiresAt: expiresAt.Format(time.RFC3339),
+		Token:            value,
+		TokenID:          session.TokenID,
+		UserID:           user.ID,
+		ExpiresAt:        accessExpiresAt.Format(time.RFC3339),
+		RefreshToken:     newRefreshToken,
+		RefreshExpiresAt: refreshExpiresAt.Format(time.RFC3339),
+	}, nil
+}
+
+func (s *AuthService) createSession(ctx context.Context, user domain.User) (domain.SessionToken, error) {
+	now := s.now()
+	expiresAt := now.Add(accessTokenTTL)
+	refreshExpiresAt := now.Add(refreshTokenTTL)
+	tokenID := newID()
+	deviceID := ""
+	refreshToken, err := newRefreshToken()
+	if err != nil {
+		return domain.SessionToken{}, err
+	}
+	value, err := token.Create(s.tokenSecret, tokenID, user.ID, deviceID, expiresAt)
+	if err != nil {
+		return domain.SessionToken{}, err
+	}
+	if err := s.repo.CreateSession(
+		ctx,
+		tokenID,
+		user.ID,
+		deviceID,
+		now.Format(time.RFC3339),
+		expiresAt.Format(time.RFC3339),
+		hashRefreshToken(refreshToken),
+		refreshExpiresAt.Format(time.RFC3339),
+	); err != nil {
+		return domain.SessionToken{}, err
+	}
+
+	return domain.SessionToken{
+		Token:            value,
+		TokenID:          tokenID,
+		UserID:           user.ID,
+		ExpiresAt:        expiresAt.Format(time.RFC3339),
+		RefreshToken:     refreshToken,
+		RefreshExpiresAt: refreshExpiresAt.Format(time.RFC3339),
 	}, nil
 }
 
@@ -254,4 +334,17 @@ func newID() string {
 		panic(err)
 	}
 	return hex.EncodeToString(bytes[:])
+}
+
+func newRefreshToken() (string, error) {
+	var bytes [32]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes[:]), nil
+}
+
+func hashRefreshToken(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:])
 }

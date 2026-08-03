@@ -126,6 +126,48 @@ void main() {
     expect(find.text('同步主页'), findsNothing);
   });
 
+  testWidgets('VaultSync app refreshes an expired access token', (
+    tester,
+  ) async {
+    final storage = FakeSessionStore(
+      token: 'expired-token',
+      deviceId: 'dev-1',
+      expiresAt: '2000-01-01T00:00:00Z',
+      refreshToken: 'refresh-1',
+      refreshExpiresAt: '2999-01-01T00:00:00Z',
+    );
+    final auth = FakeAuthGateway(
+      refreshed: const AuthSession(
+        token: 'new-token',
+        tokenId: 'token-1',
+        userId: 'user-1',
+        expiresAt: '2999-01-02T00:00:00Z',
+        refreshToken: 'refresh-2',
+        refreshExpiresAt: '2999-01-31T00:00:00Z',
+      ),
+    );
+
+    await tester.pumpWidget(
+      VaultSyncApp(
+        storage: storage,
+        authGateway: auth,
+        syncRootMappings: FakeSyncRootMappingStore(),
+        uploadTasks: FakeUploadTaskStore(),
+        syncIssues: FakeSyncIssueStore(),
+        syncRoots: FakeSyncRootGateway(const []),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(auth.refreshAccessToken, 'expired-token');
+    expect(auth.requestedRefreshToken, 'refresh-1');
+    expect(storage.savedSession?.refreshToken, 'refresh-2');
+    expect(
+      find.descendant(of: find.byType(AppBar), matching: find.text('同步')),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('VaultSync app refreshes local token before opening sync home', (
     tester,
   ) async {
@@ -162,7 +204,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(auth.refreshToken, 'old-token');
+    expect(auth.refreshAccessToken, 'old-token');
     expect(storage.savedSession?.token, 'new-token');
     expect(syncRoots.token, 'new-token');
     expect(
@@ -188,13 +230,21 @@ class FakeServerSettingsStore implements ServerSettingsStore {
   }
 }
 
-class FakeSessionStore implements SessionStore {
+class FakeSessionStore implements SessionStore, RefreshTokenStore {
   final String? token;
   final String? deviceId;
   final String? expiresAt;
+  final String? refreshToken;
+  final String? refreshExpiresAt;
   AuthSession? savedSession;
 
-  FakeSessionStore({this.token, this.deviceId, this.expiresAt});
+  FakeSessionStore({
+    this.token,
+    this.deviceId,
+    this.expiresAt,
+    this.refreshToken,
+    this.refreshExpiresAt,
+  });
 
   @override
   Future<String?> loadAuthToken() async => savedSession?.token ?? token;
@@ -207,6 +257,14 @@ class FakeSessionStore implements SessionStore {
       savedSession?.expiresAt ?? expiresAt;
 
   @override
+  Future<String?> loadRefreshToken() async =>
+      savedSession?.refreshToken ?? refreshToken;
+
+  @override
+  Future<String?> loadRefreshExpiresAt() async =>
+      savedSession?.refreshExpiresAt ?? refreshExpiresAt;
+
+  @override
   Future<void> saveAuthSession(AuthSession session) async {
     savedSession = session;
   }
@@ -217,13 +275,15 @@ class FakeSessionStore implements SessionStore {
 
 class FakeAuthGateway implements AuthGateway {
   final AuthSession refreshed;
-  String? refreshToken;
+  String? refreshAccessToken;
+  String? requestedRefreshToken;
 
   FakeAuthGateway({required this.refreshed});
 
   @override
-  Future<AuthSession> refresh(String token) async {
-    refreshToken = token;
+  Future<AuthSession> refresh(String token, {String refreshToken = ''}) async {
+    refreshAccessToken = token;
+    requestedRefreshToken = refreshToken;
     return refreshed;
   }
 

@@ -381,7 +381,7 @@ class FakeAuthGateway implements AuthGateway {
   }
 
   @override
-  Future<AuthSession> refresh(String token) {
+  Future<AuthSession> refresh(String token, {String refreshToken = ''}) {
     throw UnimplementedError();
   }
 

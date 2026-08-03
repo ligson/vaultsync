@@ -14,6 +14,7 @@ class ApiClient {
   final http.Client httpClient;
   final SessionStore? sessionStore;
   final AuthSessionRefresher? refreshAuthSession;
+  Future<String>? _refreshInFlight;
 
   ApiClient({
     required this.baseUrl,
@@ -222,6 +223,28 @@ class ApiClient {
   }
 
   Future<String> _refreshToken(String token) async {
+    final storedToken = await sessionStore!.loadAuthToken();
+    if (storedToken != null && storedToken.isNotEmpty && storedToken != token) {
+      return storedToken;
+    }
+
+    final inFlight = _refreshInFlight;
+    if (inFlight != null) {
+      return inFlight;
+    }
+
+    final refresh = _performTokenRefresh(token);
+    _refreshInFlight = refresh;
+    try {
+      return await refresh;
+    } finally {
+      if (identical(_refreshInFlight, refresh)) {
+        _refreshInFlight = null;
+      }
+    }
+  }
+
+  Future<String> _performTokenRefresh(String token) async {
     try {
       final session = await refreshAuthSession!(token);
       await sessionStore!.saveAuthSession(session);

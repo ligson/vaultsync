@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -381,6 +382,62 @@ void main() {
 
     expect(data, {'items': <Object>[]});
     expect(requestedTokens, ['Bearer old-token', 'Bearer new-token']);
+    expect(store.savedSession?.token, 'new-token');
+  });
+
+  test('concurrent 401 responses share one token refresh', () async {
+    final refreshCompleter = Completer<AuthSession>();
+    var refreshCount = 0;
+    final store = FakeSessionStore();
+    final client = ApiClient(
+      baseUrl: Uri.parse('http://127.0.0.1:8080'),
+      sessionStore: store,
+      refreshAuthSession: (token) {
+        refreshCount += 1;
+        return refreshCompleter.future;
+      },
+      httpClient: MockClient((request) async {
+        if (request.headers['authorization'] == 'Bearer old-token') {
+          return http.Response(
+            jsonEncode({
+              'success': false,
+              'message': 'expired',
+              'httpCode': 401,
+              'data': {'code': 'unauthorized'},
+            }),
+            401,
+          );
+        }
+        return http.Response(
+          jsonEncode({
+            'success': true,
+            'message': '',
+            'httpCode': 200,
+            'data': {'items': <Object>[]},
+          }),
+          200,
+        );
+      }),
+    );
+
+    final requests = [
+      client.get('/api/v1/sync-roots', token: 'old-token'),
+      client.get('/api/v1/changes', token: 'old-token'),
+    ];
+    await Future<void>.delayed(Duration.zero);
+    expect(refreshCount, 1);
+
+    refreshCompleter.complete(
+      const AuthSession(
+        token: 'new-token',
+        tokenId: 'token-2',
+        userId: 'user-1',
+        expiresAt: '2999-01-01T00:00:00Z',
+      ),
+    );
+    await Future.wait(requests);
+
+    expect(refreshCount, 1);
     expect(store.savedSession?.token, 'new-token');
   });
 }

@@ -25,6 +25,12 @@ abstract interface class CurrentDeviceInfoStore {
   Future<String?> loadDeviceName();
 }
 
+abstract interface class RefreshTokenStore {
+  Future<String?> loadRefreshToken();
+
+  Future<String?> loadRefreshExpiresAt();
+}
+
 abstract interface class ServerSettingsStore {
   Future<String?> loadServerAddress();
 
@@ -104,6 +110,7 @@ class AppStorage
     implements
         ServerSettingsStore,
         SessionStore,
+        RefreshTokenStore,
         CurrentDeviceInfoStore,
         SyncRootMappingStore,
         UploadTaskStore,
@@ -125,6 +132,8 @@ class AppStorage
   static const _tokenIdKey = 'vaultsync.auth.token_id';
   static const _userIdKey = 'vaultsync.auth.user_id';
   static const _expiresAtKey = 'vaultsync.auth.expires_at';
+  static const _refreshTokenKey = 'vaultsync.auth.refresh_token';
+  static const _refreshExpiresAtKey = 'vaultsync.auth.refresh_expires_at';
   static const _deviceIdKey = 'vaultsync.device.id';
   static const _deviceNameKey = 'vaultsync.device.name';
   static const _devicePlatformKey = 'vaultsync.device.platform';
@@ -160,6 +169,12 @@ class AppStorage
     await prefs.setString(_tokenIdKey, session.tokenId);
     await prefs.setString(_userIdKey, session.userId);
     await prefs.setString(_expiresAtKey, session.expiresAt);
+    if (session.refreshToken.isNotEmpty) {
+      await prefs.setString(_refreshTokenKey, session.refreshToken);
+    }
+    if (session.refreshExpiresAt.isNotEmpty) {
+      await prefs.setString(_refreshExpiresAtKey, session.refreshExpiresAt);
+    }
   }
 
   @override
@@ -183,6 +198,18 @@ class AppStorage
   }
 
   @override
+  Future<String?> loadRefreshToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_refreshTokenKey);
+  }
+
+  @override
+  Future<String?> loadRefreshExpiresAt() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_refreshExpiresAtKey);
+  }
+
+  @override
   Future<String?> loadDeviceId() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_deviceIdKey);
@@ -202,6 +229,8 @@ class AppStorage
       _tokenIdKey,
       _userIdKey,
       _expiresAtKey,
+      _refreshTokenKey,
+      _refreshExpiresAtKey,
       _deviceIdKey,
       _deviceNameKey,
       _devicePlatformKey,

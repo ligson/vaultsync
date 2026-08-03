@@ -2,8 +2,12 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+	"strings"
 
+	"github.com/ligson/vaultsync/internal/domain"
 	"github.com/ligson/vaultsync/internal/httpapi/middleware"
 	"github.com/ligson/vaultsync/internal/httpapi/response"
 	"github.com/ligson/vaultsync/internal/service"
@@ -54,8 +58,34 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
-	userID := middleware.MustUserID(r.Context())
-	session, err := h.service.Refresh(r.Context(), userID)
+	var req struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
+		return
+	}
+
+	var (
+		session domain.SessionToken
+		err     error
+	)
+	if strings.TrimSpace(req.RefreshToken) != "" {
+		session, err = h.service.RefreshByToken(r.Context(), req.RefreshToken)
+	} else {
+		header := r.Header.Get("Authorization")
+		tokenValue, ok := strings.CutPrefix(header, "Bearer ")
+		if !ok || tokenValue == "" {
+			writeError(w, http.StatusUnauthorized, service.CodeUnauthorized, "请先登录")
+			return
+		}
+		claims, verifyErr := h.service.VerifyToken(tokenValue)
+		if verifyErr != nil {
+			writeError(w, http.StatusUnauthorized, service.CodeUnauthorized, "登录状态已失效，请重新登录")
+			return
+		}
+		session, err = h.service.Refresh(r.Context(), claims.UserID)
+	}
 	if err != nil {
 		writeServiceError(w, err)
 		return

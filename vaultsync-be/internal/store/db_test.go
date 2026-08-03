@@ -27,7 +27,7 @@ func TestOpenRunsMigrationsAndEnablesWAL(t *testing.T) {
 
 	wantColumns := map[string][]string{
 		"users":             {"id", "email", "password_hash", "role", "status", "quota_bytes", "used_bytes", "created_at", "username", "nickname"},
-		"sessions":          {"token_id", "user_id", "device_id", "created_at", "expires_at"},
+		"sessions":          {"token_id", "user_id", "device_id", "created_at", "expires_at", "refresh_token_hash", "refresh_expires_at", "revoked_at"},
 		"devices":           {"id", "user_id", "name", "platform", "client_key", "created_at"},
 		"sync_roots":        {"id", "user_id", "device_id", "encrypted_path", "encryption_enabled", "cleanup_policy", "archive_path", "created_at"},
 		"upload_sessions":   {"id", "user_id", "device_id", "sync_root_id", "object_id", "version_id", "total_size", "chunk_size", "received_size", "status", "metadata_json", "created_at"},
@@ -82,6 +82,61 @@ func TestOpenRunsMigrationsAndEnablesWAL(t *testing.T) {
 				t.Fatalf("table %s column %d mismatch: got %q want %q (full=%v)", table, i, got[i], column, got)
 			}
 		}
+	}
+}
+
+func TestMigrateAddsRefreshSessionColumnsWithoutChangingExistingSessions(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "legacy-sessions.db"))
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`
+		CREATE TABLE users (
+			id TEXT PRIMARY KEY,
+			email TEXT NOT NULL UNIQUE,
+			password_hash TEXT NOT NULL,
+			role TEXT NOT NULL,
+			status TEXT NOT NULL,
+			quota_bytes INTEGER NOT NULL,
+			used_bytes INTEGER NOT NULL,
+			created_at TEXT NOT NULL
+		);
+		CREATE TABLE sessions (
+			token_id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			device_id TEXT,
+			created_at TEXT NOT NULL,
+			expires_at TEXT NOT NULL
+		);
+		INSERT INTO users VALUES ('user-1', 'alice@example.com', 'hash', 'user', 'active', 1024, 0, '2026-08-01T00:00:00Z');
+		INSERT INTO sessions VALUES ('token-1', 'user-1', 'device-1', '2026-08-01T00:00:00Z', '2026-08-02T00:00:00Z');
+	`); err != nil {
+		t.Fatalf("seed legacy session: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate legacy database: %v", err)
+	}
+
+	var tokenID, userID, deviceID, refreshHash, refreshExpiresAt, revokedAt string
+	if err := db.QueryRow(`
+		SELECT token_id, user_id, device_id, refresh_token_hash, refresh_expires_at, revoked_at
+		FROM sessions WHERE token_id = 'token-1'
+	`).Scan(&tokenID, &userID, &deviceID, &refreshHash, &refreshExpiresAt, &revokedAt); err != nil {
+		t.Fatalf("read migrated session: %v", err)
+	}
+	if tokenID != "token-1" || userID != "user-1" || deviceID != "device-1" ||
+		refreshHash != "" || refreshExpiresAt != "" || revokedAt != "" {
+		t.Fatalf("legacy session changed unexpectedly: token=%q user=%q device=%q hash=%q expires=%q revoked=%q", tokenID, userID, deviceID, refreshHash, refreshExpiresAt, revokedAt)
+	}
+
+	var indexName string
+	if err := db.QueryRow(`
+		SELECT name FROM sqlite_master
+		WHERE type = 'index' AND name = 'idx_sessions_refresh_token_hash'
+	`).Scan(&indexName); err != nil {
+		t.Fatalf("read refresh token index: %v", err)
 	}
 }
 

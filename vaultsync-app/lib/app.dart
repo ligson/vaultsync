@@ -5,6 +5,7 @@ import 'core/device/device_profile.dart';
 import 'core/network/api_client.dart';
 import 'core/network/api_exception.dart';
 import 'core/storage/app_storage.dart';
+import 'features/auth/auth_models.dart';
 import 'features/auth/auth_service.dart';
 import 'features/auth/login_screen.dart';
 import 'features/device/device_service.dart';
@@ -252,7 +253,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
     final apiClient = ApiClient(
       baseUrl: _apiBaseUrl,
       sessionStore: widget.storage,
-      refreshAuthSession: auth.refresh,
+      refreshAuthSession: (token) => _refreshSession(auth, token),
     );
     final devices = DeviceService(apiClient);
     final resolvedSyncRoots = widget.syncRoots ?? SyncService(apiClient);
@@ -450,18 +451,42 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
     }
     final now = DateTime.now().toUtc();
     final expiresAtUtc = expiresAtTime.toUtc();
-    if (!expiresAtUtc.isAfter(now)) {
-      return false;
-    }
-    if (expiresAtUtc.difference(now) <= const Duration(hours: 1)) {
+    final accessTokenExpired = !expiresAtUtc.isAfter(now);
+    if (accessTokenExpired ||
+        expiresAtUtc.difference(now) <= const Duration(hours: 1)) {
+      final refreshStore = widget.storage is RefreshTokenStore
+          ? widget.storage as RefreshTokenStore
+          : null;
+      final refreshToken = await refreshStore?.loadRefreshToken() ?? '';
+      final refreshExpiresAt = DateTime.tryParse(
+        await refreshStore?.loadRefreshExpiresAt() ?? '',
+      );
+      final canRefreshExpiredToken =
+          refreshToken.isNotEmpty &&
+          refreshExpiresAt != null &&
+          refreshExpiresAt.toUtc().isAfter(now);
+      if (accessTokenExpired && !canRefreshExpiredToken) {
+        return false;
+      }
       try {
-        final refreshed = await auth.refresh(token);
+        final refreshed = await auth.refresh(
+          token,
+          refreshToken: canRefreshExpiredToken ? refreshToken : '',
+        );
         await widget.storage.saveAuthSession(refreshed);
       } catch (_) {
         return false;
       }
     }
     return true;
+  }
+
+  Future<AuthSession> _refreshSession(AuthGateway auth, String token) async {
+    final refreshStore = widget.storage is RefreshTokenStore
+        ? widget.storage as RefreshTokenStore
+        : null;
+    final refreshToken = await refreshStore?.loadRefreshToken() ?? '';
+    return auth.refresh(token, refreshToken: refreshToken);
   }
 
   ThemeData _theme() {

@@ -35,10 +35,20 @@ type SyncRootStorageUsage struct {
 }
 
 type SessionToken struct {
-	Token     string `json:"token"`
-	TokenID   string `json:"token_id"`
-	UserID    string `json:"user_id"`
-	ExpiresAt string `json:"expires_at"`
+	Token            string `json:"token"`
+	TokenID          string `json:"token_id"`
+	UserID           string `json:"user_id"`
+	ExpiresAt        string `json:"expires_at"`
+	RefreshToken     string `json:"refresh_token,omitempty"`
+	RefreshExpiresAt string `json:"refresh_expires_at,omitempty"`
+}
+
+type RefreshSession struct {
+	TokenID          string
+	UserID           string
+	DeviceID         string
+	RefreshExpiresAt string
+	RevokedAt        string
 }
 
 type Device struct {

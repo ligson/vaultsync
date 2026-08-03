@@ -17,12 +17,16 @@ class AuthSession {
   final String tokenId;
   final String userId;
   final String expiresAt;
+  final String refreshToken;
+  final String refreshExpiresAt;
 
   const AuthSession({
     required this.token,
     required this.tokenId,
     required this.userId,
     required this.expiresAt,
+    this.refreshToken = '',
+    this.refreshExpiresAt = '',
   });
 
   factory AuthSession.fromJson(Map<String, Object?> json) {
@@ -31,6 +35,8 @@ class AuthSession {
       tokenId: json['token_id'] as String,
       userId: json['user_id'] as String,
       expiresAt: json['expires_at'] as String,
+      refreshToken: json['refresh_token'] as String? ?? '',
+      refreshExpiresAt: json['refresh_expires_at'] as String? ?? '',
     );
   }
 }

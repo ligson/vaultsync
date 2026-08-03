@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     device_id TEXT,
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
+	refresh_token_hash TEXT NOT NULL DEFAULT '',
+	refresh_expires_at TEXT NOT NULL DEFAULT '',
+	revoked_at TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
@@ -178,6 +181,18 @@ func migrate(db *sql.DB) error {
 	if err := ensureColumn(db, "devices", "client_key", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	for _, column := range []struct {
+		name string
+		def  string
+	}{
+		{name: "refresh_token_hash", def: "TEXT NOT NULL DEFAULT ''"},
+		{name: "refresh_expires_at", def: "TEXT NOT NULL DEFAULT ''"},
+		{name: "revoked_at", def: "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := ensureColumn(db, "sessions", column.name, column.def); err != nil {
+			return err
+		}
+	}
 	if _, err := db.Exec(`
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username
 		ON users(username)
@@ -189,6 +204,13 @@ func migrate(db *sql.DB) error {
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_user_client_key
 		ON devices(user_id, client_key)
 		WHERE client_key <> '';
+	`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_refresh_token_hash
+		ON sessions(refresh_token_hash)
+		WHERE refresh_token_hash <> '';
 	`); err != nil {
 		return err
 	}

@@ -72,6 +72,8 @@ void main() {
     expect(session.tokenId, 'token-1');
     expect(session.userId, 'user-1');
     expect(session.expiresAt, '2026-06-28T00:00:00Z');
+    expect(session.refreshToken, isEmpty);
+    expect(session.refreshExpiresAt, isEmpty);
   });
 
   test('refresh posts bearer token and returns renewed auth session', () async {
@@ -106,6 +108,45 @@ void main() {
     expect(session.token, 'new-token');
     expect(session.tokenId, 'token-2');
     expect(session.expiresAt, '2026-06-29T00:00:00Z');
+  });
+
+  test('refresh sends refresh token and parses its rotated value', () async {
+    final service = AuthService(
+      ApiClient(
+        baseUrl: Uri.parse('http://127.0.0.1:8080'),
+        httpClient: MockClient((request) async {
+          expect(request.method, 'POST');
+          expect(request.url.path, '/api/v1/auth/refresh');
+          expect(request.headers['authorization'], 'Bearer expired-token');
+          expect(jsonDecode(request.body), {'refresh_token': 'refresh-1'});
+          return http.Response(
+            jsonEncode({
+              'success': true,
+              'message': '',
+              'httpCode': 200,
+              'data': {
+                'token': 'new-token',
+                'token_id': 'token-1',
+                'user_id': 'user-1',
+                'expires_at': '2026-08-04T00:00:00Z',
+                'refresh_token': 'refresh-2',
+                'refresh_expires_at': '2026-09-02T00:00:00Z',
+              },
+            }),
+            200,
+          );
+        }),
+      ),
+    );
+
+    final session = await service.refresh(
+      'expired-token',
+      refreshToken: 'refresh-1',
+    );
+
+    expect(session.token, 'new-token');
+    expect(session.refreshToken, 'refresh-2');
+    expect(session.refreshExpiresAt, '2026-09-02T00:00:00Z');
   });
 
   test('ping checks backend health endpoint', () async {

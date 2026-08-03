@@ -6,7 +6,7 @@ abstract interface class AuthGateway {
 
   Future<AuthSession> login(String email, String password);
 
-  Future<AuthSession> refresh(String token);
+  Future<AuthSession> refresh(String token, {String refreshToken = ''});
 
   Future<void> ping();
 }
@@ -70,11 +70,11 @@ class AuthService
   }
 
   @override
-  Future<AuthSession> refresh(String token) async {
+  Future<AuthSession> refresh(String token, {String refreshToken = ''}) async {
     final data = await apiClient.post(
       '/api/v1/auth/refresh',
-      body: const {},
-      token: token,
+      body: refreshToken.isEmpty ? const {} : {'refresh_token': refreshToken},
+      token: token.isEmpty ? null : token,
     );
     return AuthSession.fromJson(data);
   }

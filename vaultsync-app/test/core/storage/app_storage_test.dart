@@ -30,6 +30,8 @@ void main() {
         tokenId: 'token-1',
         userId: 'user-1',
         expiresAt: '2026-06-28T00:00:00Z',
+        refreshToken: 'refresh-1',
+        refreshExpiresAt: '2026-07-28T00:00:00Z',
       ),
     );
     await storage.saveDevice(
@@ -44,6 +46,8 @@ void main() {
 
     expect(await storage.loadAuthToken(), 'server-token');
     expect(await storage.loadAuthExpiresAt(), '2026-06-28T00:00:00Z');
+    expect(await storage.loadRefreshToken(), 'refresh-1');
+    expect(await storage.loadRefreshExpiresAt(), '2026-07-28T00:00:00Z');
     expect(await storage.loadDeviceId(), 'device-1');
   });
 
@@ -61,6 +65,8 @@ void main() {
         tokenId: 'token-1',
         userId: 'user-1',
         expiresAt: '2026-06-28T00:00:00Z',
+        refreshToken: 'refresh-1',
+        refreshExpiresAt: '2026-07-28T00:00:00Z',
       ),
     );
     await storage.saveDevice(
@@ -90,6 +96,8 @@ void main() {
 
     expect(await storage.loadAuthToken(), isNull);
     expect(await storage.loadAuthExpiresAt(), isNull);
+    expect(await storage.loadRefreshToken(), isNull);
+    expect(await storage.loadRefreshExpiresAt(), isNull);
     expect(await storage.loadDeviceId(), isNull);
     expect(storage.loadUploadKeys(), throwsA(isA<MissingUploadKeyException>()));
     expect(await storage.loadSyncRootMappings(), hasLength(1));
@@ -97,6 +105,34 @@ void main() {
       (await storage.loadSyncRootMappings()).single.localPath,
       '/Users/alice/Photos',
     );
+  });
+
+  test('AppStorage keeps refresh token for legacy session response', () async {
+    SharedPreferences.setMockInitialValues({});
+    const storage = AppStorage();
+    await storage.saveAuthSession(
+      const AuthSession(
+        token: 'token-1',
+        tokenId: 'token-id-1',
+        userId: 'user-1',
+        expiresAt: '2026-08-04T00:00:00Z',
+        refreshToken: 'refresh-1',
+        refreshExpiresAt: '2026-09-02T00:00:00Z',
+      ),
+    );
+
+    await storage.saveAuthSession(
+      const AuthSession(
+        token: 'legacy-token',
+        tokenId: 'legacy-token-id',
+        userId: 'user-1',
+        expiresAt: '2026-08-05T00:00:00Z',
+      ),
+    );
+
+    expect(await storage.loadAuthToken(), 'legacy-token');
+    expect(await storage.loadRefreshToken(), 'refresh-1');
+    expect(await storage.loadRefreshExpiresAt(), '2026-09-02T00:00:00Z');
   });
 
   test('AppStorage saves local sync root mappings', () async {

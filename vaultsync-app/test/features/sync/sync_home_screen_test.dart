@@ -57,6 +57,8 @@ void main() {
         status: 'pending',
         attempts: 0,
         createdAt: DateTime.utc(2026, 6, 27, 10),
+        uploadTotalSize: 2048,
+        uploadedBytes: 1024,
       ),
     ]);
 
@@ -88,6 +90,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('a.jpg'), findsOneWidget);
+    expect(find.text('待续传 50%'), findsOneWidget);
     expect(find.textContaining('2026/a.jpg'), findsNothing);
     expect(find.textContaining('2.0 KB · 2026-06-27 17:30'), findsOneWidget);
     expect(find.text('清理策略：上传后删除'), findsOneWidget);
@@ -3082,8 +3085,11 @@ void main() {
     );
   });
 
-  testWidgets('sync home runs startup auto pull silently', (tester) async {
+  testWidgets('sync home resumes uploads and pulls on startup silently', (
+    tester,
+  ) async {
     final autoSyncStatus = FakeAutoSyncStatusStore();
+    final uploadExecutor = FakeUploadExecutor(uploadedCount: 1);
     final pullExecutor = FakeRemotePullExecutor(
       result: const SyncPullResult(
         downloadedCount: 2,
@@ -3104,7 +3110,18 @@ void main() {
           syncRootMappings: FakeSyncRootMappingStore(),
           uploadTasks: FakeUploadTaskStore(),
           autoSyncStatus: autoSyncStatus,
-          syncRoots: FakeSyncRootGateway(const []),
+          syncRoots: FakeSyncRootGateway(const [
+            SyncRoot(
+              id: 'root-1',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-08-04T00:00:00Z',
+            ),
+          ]),
+          uploadExecutor: uploadExecutor,
           remotePullExecutor: pullExecutor,
           autoSyncEnabled: true,
           autoSyncInitialDelay: Duration.zero,
@@ -3116,6 +3133,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(pullExecutor.callCount, 1);
+    expect(uploadExecutor.callCount, 1);
+    expect(autoSyncStatus.saved.uploadedCount, 1);
     expect(autoSyncStatus.saved.status, 'success');
     expect(autoSyncStatus.saved.downloadedCount, 2);
     expect(find.textContaining('已下载 2 个远端更新'), findsNothing);

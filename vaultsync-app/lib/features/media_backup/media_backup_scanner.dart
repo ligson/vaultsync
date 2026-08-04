@@ -32,9 +32,10 @@ class MediaBackupScanner {
     final existingIds = existingTasks.map((task) => task.id).toSet();
     final createdTasks = <LocalUploadTask>[];
 
-    for (final asset in assets) {
+    for (var index = 0; index < assets.length; index += 1) {
+      final asset = assets[index];
       final taskId = '${source.syncRootId}:${asset.id}';
-      if (existingIds.contains(taskId)) {
+      if (!existingIds.add(taskId)) {
         continue;
       }
       createdTasks.add(
@@ -54,6 +55,9 @@ class MediaBackupScanner {
           encryptionEnabled: source.encryptionEnabled,
         ),
       );
+      if ((index + 1) % 200 == 0) {
+        await Future<void>.delayed(Duration.zero);
+      }
     }
 
     await uploadTasks.saveUploadTasks([...existingTasks, ...createdTasks]);

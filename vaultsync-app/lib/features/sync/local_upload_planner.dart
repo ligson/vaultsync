@@ -18,7 +18,8 @@ class LocalUploadPlanner {
     final createdAt = now().toUtc();
     final enqueuedTasks = <LocalUploadTask>[];
 
-    for (final file in files) {
+    for (var index = 0; index < files.length; index += 1) {
+      final file = files[index];
       final id = _taskId(file);
       final existingTask = tasksById[id];
       final status = _nextStatus(existingTask, file);
@@ -54,6 +55,9 @@ class LocalUploadPlanner {
       );
       tasksById[id] = task;
       enqueuedTasks.add(task);
+      if ((index + 1) % 200 == 0) {
+        await Future<void>.delayed(Duration.zero);
+      }
     }
 
     final allTasks = tasksById.values.toList()

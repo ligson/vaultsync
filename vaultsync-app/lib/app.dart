@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'core/config/app_config.dart';
 import 'core/device/device_profile.dart';
@@ -291,6 +294,12 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
           uploads: resolvedUploads,
           payloadPreparer: StoredEncryptedUploadPayloadPreparer(
             keyStore: widget.uploadKeys,
+            cacheDirectoryProvider: () async {
+              final temporaryDirectory = await getTemporaryDirectory();
+              return Directory(
+                '${temporaryDirectory.path}/vaultsync-upload-payloads',
+              );
+            },
             contentReader: MediaAwareUploadContentReader(
               fileReader: const FileUploadContentReader(),
               media: mediaGateway,

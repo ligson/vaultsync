@@ -31,4 +31,19 @@ class AndroidSyncKeepAlive {
       debugPrint('VaultSync background service stop failed: $error');
     }
   }
+
+  Future<void> setTransferActive(String platform, bool active) async {
+    if (kIsWeb || platform != 'android') {
+      return;
+    }
+    try {
+      await _channel.invokeMethod<void>('setTransferActive', {
+        'active': active,
+      });
+    } on MissingPluginException {
+      // Unit tests and non-Android embedders do not register this channel.
+    } catch (error) {
+      debugPrint('VaultSync upload wake lock update failed: $error');
+    }
+  }
 }

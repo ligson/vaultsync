@@ -167,6 +167,93 @@ void main() {
       sha256.convert(const [1, 2, 3]).toString(),
     );
   });
+
+  test('streaming prepare keeps VSENC001 bytes and reuses cache', () async {
+    final dir = await Directory.systemTemp.createTemp('vaultsync_stream_');
+    addTearDown(() => dir.delete(recursive: true));
+    final source = File('${dir.path}/large.bin');
+    await source.writeAsBytes(List<int>.generate(128 * 1024, (i) => i % 251));
+    final cache = Directory('${dir.path}/cache');
+    final task = LocalUploadTask(
+      id: 'root-1:large.bin',
+      syncRootId: 'root-1',
+      localPath: source.path,
+      relativePath: 'large.bin',
+      sizeBytes: await source.length(),
+      modifiedAt: (await source.stat()).modified,
+      status: 'pending',
+      attempts: 0,
+      createdAt: DateTime.utc(2026, 8, 4),
+    );
+    final memoryPreparer = EncryptedUploadPayloadPreparer(
+      contentKeyBytes: List<int>.filled(32, 1),
+      metadataKeyBytes: List<int>.filled(32, 2),
+    );
+    final streamingPreparer = EncryptedUploadPayloadPreparer(
+      contentKeyBytes: List<int>.filled(32, 1),
+      metadataKeyBytes: List<int>.filled(32, 2),
+      cacheDirectoryProvider: () async => cache,
+    );
+
+    final expected = await memoryPreparer.prepare(
+      task,
+      objectId: 'object-1',
+      versionId: 'version-1',
+    );
+    final first = await streamingPreparer.prepare(
+      task,
+      objectId: 'object-1',
+      versionId: 'version-1',
+    );
+    final firstModifiedAt = (await first.payloadFile!.stat()).modified;
+    final second = await streamingPreparer.prepare(
+      task,
+      objectId: 'object-1',
+      versionId: 'version-1',
+    );
+
+    expect(first.bytes, isEmpty);
+    expect(await first.readAll(), expected.bytes);
+    expect(first.payloadHash, expected.payloadHash);
+    expect(first.metadataJson, expected.metadataJson);
+    expect(first.encryptedName, expected.encryptedName);
+    expect(await first.readRange(7, 39), expected.bytes.sublist(7, 39));
+    expect((await second.payloadFile!.stat()).modified, firstModifiedAt);
+    expect(await second.readAll(), expected.bytes);
+
+    await second.cleanupAfterSuccess();
+    expect(await second.payloadFile!.exists(), isFalse);
+  });
+
+  test(
+    'plain file prepare streams without keeping all bytes in memory',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('vaultsync_plain_');
+      addTearDown(() => dir.delete(recursive: true));
+      final source = File('${dir.path}/plain.bin');
+      await source.writeAsBytes(const [1, 2, 3, 4]);
+      final payload = await const PlainUploadPayloadPreparer().prepare(
+        LocalUploadTask(
+          id: 'root-1:plain.bin',
+          syncRootId: 'root-1',
+          localPath: source.path,
+          relativePath: 'plain.bin',
+          sizeBytes: 4,
+          modifiedAt: DateTime.utc(2026, 8, 4),
+          status: 'pending',
+          attempts: 0,
+          createdAt: DateTime.utc(2026, 8, 4),
+          encryptionEnabled: false,
+        ),
+        objectId: 'object-1',
+        versionId: 'version-1',
+      );
+
+      expect(payload.bytes, isEmpty);
+      expect(payload.payloadFile?.path, source.path);
+      expect(await payload.readRange(1, 3), [2, 3]);
+    },
+  );
 }
 
 Future<List<int>> _decryptContent(List<int> payload) async {

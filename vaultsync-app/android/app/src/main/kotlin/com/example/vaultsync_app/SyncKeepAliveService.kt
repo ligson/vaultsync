@@ -8,8 +8,11 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 
 class SyncKeepAliveService : Service() {
+    private var uploadWakeLock: PowerManager.WakeLock? = null
+
     override fun onCreate() {
         super.onCreate()
         val manager = getSystemService(NotificationManager::class.java)
@@ -49,7 +52,40 @@ class SyncKeepAliveService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.getBooleanExtra(EXTRA_TRANSFER_ACTIVE, false)) {
+            true -> acquireUploadWakeLock()
+            false -> releaseUploadWakeLock()
+            null -> Unit
+        }
         return START_STICKY
+    }
+
+    override fun onDestroy() {
+        releaseUploadWakeLock()
+        super.onDestroy()
+    }
+
+    private fun acquireUploadWakeLock() {
+        if (uploadWakeLock?.isHeld == true) {
+            return
+        }
+        val powerManager = getSystemService(PowerManager::class.java)
+        uploadWakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "$packageName:upload",
+        ).apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+    }
+
+    private fun releaseUploadWakeLock() {
+        uploadWakeLock?.let { wakeLock ->
+            if (wakeLock.isHeld) {
+                wakeLock.release()
+            }
+        }
+        uploadWakeLock = null
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -57,5 +93,6 @@ class SyncKeepAliveService : Service() {
     companion object {
         private const val CHANNEL_ID = "vaultsync_background_sync"
         private const val NOTIFICATION_ID = 1001
+        const val EXTRA_TRANSFER_ACTIVE = "transfer_active"
     }
 }

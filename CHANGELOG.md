@@ -2,6 +2,13 @@
 
 所有有意义的项目变更都应记录在这里。
 
+## 2026-08-04
+
+- 已发布签名 Android APK `1.0.0+2026080401` 到 `https://files.ligson.xyz/downloads/vaultsync-android-latest.apk`，APK 大小为 75,846,383 字节，本地、NAS 和公网断点续传后的 SHA-256 均为 `ae1f69b0f5879157766361bbbf460396517361f6d67031503d98d7d988791b2f`。发布前已将 SQLite、配置、Compose 和旧 APK 备份到 `data/backups/app-release-20260804-084607-2026080401/`，备份和发布后数据库快速完整性检查均为 `ok`；本次后端无代码变化，NAS 继续运行镜像 `ligson/vaultsync-be:2026080301-e4cbfd9-session-tree`，未重建或重启服务，也未修改用户、设备、同步目录、上传会话、文件版本、密文对象或加密密钥。
+- 修复 Android 扫描、上传和重试大文件时的高内存与界面卡顿：普通文件改为流式哈希和按分片读取，加密文件改为流式生成与现有 `VSENC001 + XChaCha20-Poly1305` 完全一致的临时密文，不再同时把整份明文、密文和分片保留在内存；上传任务 JSON 编解码移到后台 isolate，进度持久化间隔调整为 32 MB，目录扫描和任务合并按批次让出事件循环。
+- 增强锁屏与进程恢复：Android 仅在实际上传期间持有 `PARTIAL_WAKE_LOCK`，上传结束立即释放；未完成会话在 App 启动时以服务器 `received_size` 校准真实进度并自动续传，界面显示“待续传”百分比。加密临时文件通过 `.part` 原子生成，失败或进程退出后可复用，上传成功后才清理。
+- 本次不修改后端协议、SQLite、服务器对象布局或既有 `VSENC001` 密文，不清空或迁移客户端 `SharedPreferences`、同步目录绑定、上传队列、相册记录、同步历史和加密密钥。回滚旧 App 时只会忽略新增临时缓存；服务器已完成的会话仍由客户端执行远端基线登记和用户配置的本地清理收尾，避免状态提前结束。
+
 ## 2026-08-03
 
 - 已从当前 `main` 重新构建并发布签名 Android APK `1.0.0+2026080302` 到 `https://files.ligson.xyz/downloads/vaultsync-android-latest.apk`，APK 大小为 75,748,079 字节，本地、NAS 和公网文件 SHA-256 均为 `facb49109ec6e1952f9658b4f419a357d976c854a0e10cf7e814afea8b67ef7b`。发布前已将 SQLite、配置、Compose 和旧 APK 备份到 `data/backups/app-release-20260803-175524-2026080302/`，备份数据库完整性检查通过；本次后端无代码变化，NAS 继续运行最新镜像 `ligson/vaultsync-be:2026080301-e4cbfd9-session-tree`，未重建或重启服务，也未修改用户、设备、同步目录、上传任务、文件版本、密文对象或加密密钥。华为 `HUAWEI NOH-AN00` 在覆盖安装前断开 USB，未执行真机升级，不记录为已安装。

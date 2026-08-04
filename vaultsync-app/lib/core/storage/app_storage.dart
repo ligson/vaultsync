@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../features/auth/auth_models.dart';
@@ -19,6 +20,16 @@ abstract interface class SessionStore {
   Future<void> saveAuthSession(AuthSession session);
 
   Future<void> saveDevice(RegisteredDevice device);
+}
+
+List<Map<String, Object?>> _decodeUploadTaskJsonItems(List<String> rawItems) {
+  return rawItems
+      .map((raw) => (jsonDecode(raw) as Map).cast<String, Object?>())
+      .toList(growable: false);
+}
+
+List<String> _encodeUploadTaskJsonItems(List<Map<String, Object?>> jsonItems) {
+  return jsonItems.map(jsonEncode).toList(growable: false);
 }
 
 abstract interface class CurrentDeviceInfoStore {
@@ -280,19 +291,23 @@ class AppStorage
   Future<List<LocalUploadTask>> loadUploadTasks() async {
     final prefs = await SharedPreferences.getInstance();
     final rawItems = prefs.getStringList(_uploadTasksKey) ?? const [];
-    return rawItems
-        .map((raw) => jsonDecode(raw) as Map<String, Object?>)
-        .map(LocalUploadTask.fromJson)
-        .toList();
+    if (rawItems.isEmpty) {
+      return const [];
+    }
+    final decodedItems = await compute(_decodeUploadTaskJsonItems, rawItems);
+    return decodedItems.map(LocalUploadTask.fromJson).toList();
   }
 
   @override
   Future<void> saveUploadTasks(List<LocalUploadTask> tasks) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(
-      _uploadTasksKey,
-      tasks.map((item) => jsonEncode(item.toJson())).toList(),
-    );
+    final encodedItems = tasks.isEmpty
+        ? const <String>[]
+        : await compute(
+            _encodeUploadTaskJsonItems,
+            tasks.map((task) => task.toJson()).toList(),
+          );
+    await prefs.setStringList(_uploadTasksKey, encodedItems);
   }
 
   @override

@@ -129,6 +129,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
   var _isUploading = false;
   var _isPulling = false;
   var _isAutoSyncing = false;
+  var _hasReconciledUploadProgress = false;
 
   @override
   void initState() {
@@ -152,7 +153,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     }
     _initialAutoSyncTimer = Timer(
       widget.autoSyncInitialDelay,
-      () => _runAutoSync(scanAndUpload: false),
+      () => _runAutoSync(scanAndUpload: false, resumeUploads: true),
     );
     _autoSyncTimer = Timer.periodic(
       widget.autoSyncInterval,
@@ -189,6 +190,18 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     final token = await widget.storage.loadAuthToken();
     if (token == null || token.isEmpty) {
       throw Exception('登录状态已失效');
+    }
+    final uploadExecutor = widget.uploadExecutor;
+    final progressReconciler = uploadExecutor is UploadSessionProgressReconciler
+        ? uploadExecutor as UploadSessionProgressReconciler
+        : null;
+    if (!_hasReconciledUploadProgress && progressReconciler != null) {
+      _hasReconciledUploadProgress = true;
+      try {
+        await progressReconciler.reconcilePendingUploadProgress();
+      } catch (error) {
+        debugPrint('VaultSync upload progress reconciliation failed: $error');
+      }
     }
     final currentDeviceId = await widget.storage.loadDeviceId();
     final currentDeviceName = widget.storage is CurrentDeviceInfoStore
@@ -708,6 +721,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       }
       _activeUploadRootIds.addAll(actionSyncRootIds);
       unawaited(_androidSyncKeepAlive.start(_devicePlatform));
+      unawaited(_androidSyncKeepAlive.setTransferActive(_devicePlatform, true));
       await _saveOperationStatuses(
         syncRootIds: actionSyncRootIds,
         operation: 'upload',
@@ -749,6 +763,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         ),
       );
     } catch (error) {
+      debugPrint('VaultSync manual upload failed: $error');
       await _saveOperationStatuses(
         syncRootIds: actionSyncRootIds,
         operation: 'upload',
@@ -772,6 +787,9 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       ).showSnackBar(SnackBar(content: Text(userReadableErrorMessage(error))));
     } finally {
       _activeUploadRootIds.removeAll(actionSyncRootIds);
+      unawaited(
+        _androidSyncKeepAlive.setTransferActive(_devicePlatform, false),
+      );
       if (!widget.autoSyncEnabled) {
         unawaited(_androidSyncKeepAlive.stop(_devicePlatform));
       }
@@ -1191,6 +1209,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
 
   Future<void> _runAutoSync({
     required bool scanAndUpload,
+    bool resumeUploads = false,
     Set<String>? syncRootIds,
   }) async {
     if (!mounted) {
@@ -1280,7 +1299,9 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       }
 
       final uploadExecutor = widget.uploadExecutor;
-      if (scanAndUpload && uploadExecutor != null && !_isUploading) {
+      if ((scanAndUpload || resumeUploads) &&
+          uploadExecutor != null &&
+          !_isUploading) {
         setState(() {
           _isUploading = true;
         });
@@ -1296,9 +1317,17 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
           startedAt: startedAt,
           message: '自动上传正在运行',
         );
-        final result = await _executeCurrentDevicePendingUploads(
-          uploadExecutor,
+        unawaited(
+          _androidSyncKeepAlive.setTransferActive(_devicePlatform, true),
         );
+        late final UploadExecutionResult result;
+        try {
+          result = await _executeCurrentDevicePendingUploads(uploadExecutor);
+        } finally {
+          unawaited(
+            _androidSyncKeepAlive.setTransferActive(_devicePlatform, false),
+          );
+        }
         uploadedCount = result.uploadedCount;
         failedCount = result.failedCount;
         await _saveOperationStatuses(
@@ -1342,7 +1371,11 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
           lastFinishedAt: DateTime.now().toUtc(),
           lastSuccessAt: DateTime.now().toUtc(),
           status: 'success',
-          message: scanAndUpload ? '自动同步完成' : '启动后自动拉取完成',
+          message: scanAndUpload
+              ? '自动同步完成'
+              : resumeUploads
+              ? '启动后续传与拉取完成'
+              : '启动后自动拉取完成',
           scannedCount: scannedCount,
           uploadedCount: uploadedCount,
           failedCount: failedCount,
@@ -1354,7 +1387,11 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       await _addHistory(
         type: 'auto_sync',
         result: failedCount > 0 ? 'failed' : 'success',
-        title: scanAndUpload ? '自动同步完成' : '启动后自动拉取完成',
+        title: scanAndUpload
+            ? '自动同步完成'
+            : resumeUploads
+            ? '启动后续传与拉取完成'
+            : '启动后自动拉取完成',
         message:
             '扫描 $scannedCount 个，上传 $uploadedCount 个，失败 $failedCount 个，下载 $downloadedCount 个，删除 $remoteDeleteCount 个',
       );
@@ -1395,7 +1432,11 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       await _addHistory(
         type: 'auto_sync',
         result: 'failed',
-        title: scanAndUpload ? '自动同步失败' : '启动后自动拉取失败',
+        title: scanAndUpload
+            ? '自动同步失败'
+            : resumeUploads
+            ? '启动后续传与拉取失败'
+            : '启动后自动拉取失败',
         message: message,
       );
     } finally {
@@ -3446,9 +3487,15 @@ String _uploadProgressPhaseLabel(UploadProgressPhase phase) {
 
 String _uploadProgressDetail(UploadProgress progress) {
   if (progress.phase == UploadProgressPhase.preparing) {
+    if (progress.totalBytes > 0 && progress.uploadedBytes > 0) {
+      return '已恢复 ${_formatBytes(progress.uploadedBytes)} / ${_formatBytes(progress.totalBytes)}，正在准备续传';
+    }
     return '正在读取文件并生成上传内容';
   }
   if (progress.phase == UploadProgressPhase.connecting) {
+    if (progress.totalBytes > 0 && progress.uploadedBytes > 0) {
+      return '已恢复 ${_formatBytes(progress.uploadedBytes)} / ${_formatBytes(progress.totalBytes)}，正在连接服务器';
+    }
     return '正在创建或恢复上传会话';
   }
   if (progress.totalBytes > 0) {
@@ -3458,9 +3505,7 @@ String _uploadProgressDetail(UploadProgress progress) {
 }
 
 double? _uploadFileProgress(UploadProgress progress) {
-  if (progress.phase == UploadProgressPhase.preparing ||
-      progress.phase == UploadProgressPhase.connecting ||
-      progress.totalBytes <= 0) {
+  if (progress.totalBytes <= 0) {
     return null;
   }
   return (progress.uploadedBytes / progress.totalBytes).clamp(0.0, 1.0);
@@ -5644,6 +5689,12 @@ class _SyncRootViewData {
       return '无法解密';
     }
     if (task?.status == 'pending') {
+      final uploadedBytes = task?.uploadedBytes ?? 0;
+      final totalBytes = task?.uploadTotalSize ?? 0;
+      if (uploadedBytes > 0 && totalBytes > 0) {
+        final percent = (uploadedBytes * 100 / totalBytes).floor().clamp(1, 99);
+        return '待续传 $percent%';
+      }
       return '待上传';
     }
     if (task?.status == 'failed') {
@@ -5760,6 +5811,7 @@ Color _treeStatusColor(ColorScheme colorScheme, String status) {
     return colorScheme.error;
   }
   if (status == '待上传' ||
+      status.startsWith('待续传 ') ||
       status == '待清理' ||
       status == '待确认' ||
       status == '已上传，服务器待确认') {
@@ -5769,6 +5821,9 @@ Color _treeStatusColor(ColorScheme colorScheme, String status) {
 }
 
 IconData _treeStatusIcon(String status) {
+  if (status.startsWith('待续传 ')) {
+    return Icons.schedule_outlined;
+  }
   return switch (status) {
     '上传失败' || '无法解密' => Icons.error_outline,
     '待上传' || '待清理' || '待确认' || '已上传，服务器待确认' => Icons.schedule_outlined,
@@ -5866,6 +5921,9 @@ String _dominantFileStatusLabel(String current, String next) {
 }
 
 int _fileStatusPriority(String status) {
+  if (status.startsWith('待续传 ')) {
+    return 70;
+  }
   return switch (status) {
     '无法解密' => 80,
     '上传失败' => 75,
@@ -5882,6 +5940,9 @@ int _fileStatusPriority(String status) {
 }
 
 String _folderStatusLabel(String fileStatusLabel) {
+  if (fileStatusLabel.startsWith('待续传 ')) {
+    return '待续传';
+  }
   return switch (fileStatusLabel) {
     '无法解密' => '无法解密',
     '上传失败' => '上传失败',

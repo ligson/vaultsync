@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -20,22 +21,79 @@ abstract interface class LocalUploadExecutionGateway {
   Future<UploadExecutionResult> executePendingUploads({String? syncRootId});
 }
 
+abstract interface class UploadSessionProgressReconciler {
+  Future<int> reconcilePendingUploadProgress();
+}
+
 abstract interface class LocalPostUploadCleaner {
   Future<Object> cleanupUploadedTasks();
 }
 
 class PreparedUploadPayload {
   final List<int> bytes;
+  final File? payloadFile;
+  final int? payloadFileSize;
+  final String payloadHash;
+  final List<File> cleanupFiles;
   final String encryptedName;
   final String metadataJson;
   final String sourceContentHash;
 
   const PreparedUploadPayload({
-    required this.bytes,
+    this.bytes = const [],
+    this.payloadFile,
+    this.payloadFileSize,
+    this.payloadHash = '',
+    this.cleanupFiles = const [],
     required this.encryptedName,
     required this.metadataJson,
     this.sourceContentHash = '',
-  });
+  }) : assert(payloadFile == null || payloadFileSize != null);
+
+  int get length => payloadFileSize ?? bytes.length;
+
+  Stream<List<int>> openRead() {
+    final file = payloadFile;
+    return file == null ? Stream.value(bytes) : file.openRead();
+  }
+
+  Future<List<int>> readRange(int start, int end) async {
+    if (start < 0 || end < start || end > length) {
+      throw RangeError.range(end, start, length, 'end');
+    }
+    final file = payloadFile;
+    if (file == null) {
+      return bytes.sublist(start, end);
+    }
+    final reader = await file.open();
+    try {
+      await reader.setPosition(start);
+      final result = await reader.read(end - start);
+      if (result.length != end - start) {
+        throw Exception('上传临时文件读取不完整，请重新准备后重试');
+      }
+      return result;
+    } finally {
+      await reader.close();
+    }
+  }
+
+  Future<List<int>> readAll() async {
+    final file = payloadFile;
+    return file == null ? bytes : file.readAsBytes();
+  }
+
+  Future<void> cleanupAfterSuccess() async {
+    for (final file in cleanupFiles) {
+      try {
+        if (await file.exists()) {
+          await file.delete();
+        }
+      } catch (_) {
+        // 临时缓存清理失败不能把已经完成的上传改成失败。
+      }
+    }
+  }
 }
 
 class UploadExecutionResult {
@@ -106,8 +164,10 @@ class UploadProgressChannel extends ChangeNotifier {
 
 typedef UploadTaskIDFactory = String Function(LocalUploadTask task);
 
-class LocalUploadExecutor implements LocalUploadExecutionGateway {
-  static const _progressPersistBytes = 8 * 1024 * 1024;
+class LocalUploadExecutor
+    implements LocalUploadExecutionGateway, UploadSessionProgressReconciler {
+  static const _progressPersistBytes = 32 * 1024 * 1024;
+  static const _maxStartupSessionChecks = 32;
 
   final SessionStore sessionStore;
   final SyncRootMappingStore? syncRootMappings;
@@ -134,6 +194,74 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
     this.chunkSize = 1024 * 1024,
     this.progress,
   });
+
+  @override
+  Future<int> reconcilePendingUploadProgress() async {
+    final token = await sessionStore.loadAuthToken();
+    if (token == null || token.isEmpty) {
+      return 0;
+    }
+    final tasks = await uploadTasks.loadUploadTasks();
+    final candidates =
+        tasks
+            .where(
+              (task) =>
+                  task.uploadSessionId.isNotEmpty &&
+                  (task.status == 'pending' || task.status == 'failed'),
+            )
+            .toList()
+          ..sort(
+            (left, right) => right.uploadedBytes.compareTo(left.uploadedBytes),
+          );
+    final sessionsByTaskId = <String, UploadSession>{};
+    for (final task in candidates.take(_maxStartupSessionChecks)) {
+      try {
+        sessionsByTaskId[task.id] = await uploads.getUploadSession(
+          token: token,
+          sessionId: task.uploadSessionId,
+        );
+      } on ApiException catch (error) {
+        if (error.statusCode != 404) {
+          rethrow;
+        }
+      }
+    }
+    if (sessionsByTaskId.isEmpty) {
+      return 0;
+    }
+    var changedCount = 0;
+    final updatedTasks = <LocalUploadTask>[];
+    for (final task in tasks) {
+      final session = sessionsByTaskId[task.id];
+      if (session == null) {
+        updatedTasks.add(task);
+        continue;
+      }
+      // 已完成会话仍交给执行器收尾，以保存远端基线并执行用户配置的本地清理策略。
+      final nextStatus = task.status;
+      if (task.uploadedBytes == session.receivedSize &&
+          task.uploadTotalSize == session.totalSize &&
+          task.uploadChunkSize == session.chunkSize &&
+          task.status == nextStatus) {
+        updatedTasks.add(task);
+        continue;
+      }
+      changedCount += 1;
+      updatedTasks.add(
+        _withStatus(
+          task,
+          nextStatus,
+          uploadedBytes: session.receivedSize,
+          uploadTotalSize: session.totalSize,
+          uploadChunkSize: session.chunkSize,
+        ),
+      );
+    }
+    if (changedCount > 0) {
+      await uploadTasks.saveUploadTasks(updatedTasks);
+    }
+    return changedCount;
+  }
 
   @override
   Future<UploadExecutionResult> executePendingUploads({
@@ -183,22 +311,50 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
           taskIndex: processedTaskCount,
           taskCount: taskCount,
           currentPath: lastPath,
+          uploadedBytes: currentTask.uploadedBytes,
+          totalBytes: currentTask.uploadTotalSize,
           uploadedCount: uploadedCount,
           failedCount: failedCount,
           speedBytesPerSecond: lastSpeedBytesPerSecond,
         );
+        final knownSession = await _loadKnownSession(
+          token: token,
+          task: currentTask,
+        );
+        if (knownSession != null) {
+          currentTask = _withStatus(
+            currentTask,
+            currentTask.status,
+            uploadedBytes: knownSession.receivedSize,
+            uploadTotalSize: knownSession.totalSize,
+            uploadChunkSize: knownSession.chunkSize,
+          );
+          _reportProgress(
+            phase: UploadProgressPhase.preparing,
+            taskIndex: processedTaskCount,
+            taskCount: taskCount,
+            currentPath: lastPath,
+            uploadedBytes: knownSession.receivedSize,
+            totalBytes: knownSession.totalSize,
+            uploadedCount: uploadedCount,
+            failedCount: failedCount,
+            speedBytesPerSecond: lastSpeedBytesPerSecond,
+          );
+        }
         final payload = await payloadPreparer.prepare(
           currentTask,
           objectId: objectId,
           versionId: versionId,
         );
-        final payloadHash = _uploadPayloadFingerprint(payload);
+        final payloadHash = await _uploadPayloadFingerprint(payload);
         _reportProgress(
           phase: UploadProgressPhase.connecting,
           taskIndex: processedTaskCount,
           taskCount: taskCount,
           currentPath: lastPath,
-          totalBytes: payload.bytes.length,
+          uploadedBytes:
+              knownSession?.receivedSize ?? currentTask.uploadedBytes,
+          totalBytes: payload.length,
           uploadedCount: uploadedCount,
           failedCount: failedCount,
           speedBytesPerSecond: lastSpeedBytesPerSecond,
@@ -211,6 +367,7 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
           versionId: versionId,
           payload: payload,
           payloadHash: payloadHash,
+          knownSession: knownSession,
         );
         currentTask = _withStatus(
           currentTask,
@@ -218,7 +375,7 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
           lastError: '',
           uploadSessionId: session.id,
           uploadPayloadHash: payloadHash,
-          uploadTotalSize: payload.bytes.length,
+          uploadTotalSize: payload.length,
           uploadChunkSize: chunkSize,
           uploadedBytes: session.receivedSize,
         );
@@ -239,9 +396,9 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
               'uploaded',
               uploadSessionId: session.id,
               uploadPayloadHash: payloadHash,
-              uploadTotalSize: payload.bytes.length,
+              uploadTotalSize: payload.length,
               uploadChunkSize: chunkSize,
-              uploadedBytes: payload.bytes.length,
+              uploadedBytes: payload.length,
             ),
           );
           uploadedCount += 1;
@@ -250,12 +407,13 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
             taskIndex: processedTaskCount,
             taskCount: taskCount,
             currentPath: lastPath,
-            uploadedBytes: payload.bytes.length,
-            totalBytes: payload.bytes.length,
+            uploadedBytes: payload.length,
+            totalBytes: payload.length,
             uploadedCount: uploadedCount,
             failedCount: failedCount,
             speedBytesPerSecond: lastSpeedBytesPerSecond,
           );
+          await payload.cleanupAfterSuccess();
           continue;
         }
 
@@ -265,7 +423,7 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
           taskCount: taskCount,
           currentPath: lastPath,
           uploadedBytes: session.receivedSize,
-          totalBytes: payload.bytes.length,
+          totalBytes: payload.length,
           uploadedCount: uploadedCount,
           failedCount: failedCount,
           speedBytesPerSecond: lastSpeedBytesPerSecond,
@@ -275,15 +433,15 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
             session.receivedSize + _progressPersistBytes;
         for (
           var offset = session.receivedSize;
-          offset < payload.bytes.length;
+          offset < payload.length;
           offset += chunkSize
         ) {
-          final end = (offset + chunkSize).clamp(0, payload.bytes.length);
+          final end = (offset + chunkSize).clamp(0, payload.length);
           await uploads.uploadPart(
             token: token,
             sessionId: session.id,
             partIndex: partIndex,
-            bytes: payload.bytes.sublist(offset, end),
+            bytes: await payload.readRange(offset, end),
           );
           currentTask = _withStatus(
             currentTask,
@@ -291,7 +449,7 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
             lastError: '',
             uploadSessionId: session.id,
             uploadPayloadHash: payloadHash,
-            uploadTotalSize: payload.bytes.length,
+            uploadTotalSize: payload.length,
             uploadChunkSize: chunkSize,
             uploadedBytes: end,
           );
@@ -305,12 +463,12 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
             taskCount: taskCount,
             currentPath: lastPath,
             uploadedBytes: end,
-            totalBytes: payload.bytes.length,
+            totalBytes: payload.length,
             uploadedCount: uploadedCount,
             failedCount: failedCount,
             speedBytesPerSecond: lastSpeedBytesPerSecond,
           );
-          if (end == payload.bytes.length || end >= nextProgressPersistAt) {
+          if (end == payload.length || end >= nextProgressPersistAt) {
             await _saveProgress(updatedTasks, tasks, taskIndex, currentTask);
             nextProgressPersistAt = end + _progressPersistBytes;
           }
@@ -321,8 +479,8 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
           taskIndex: processedTaskCount,
           taskCount: taskCount,
           currentPath: lastPath,
-          uploadedBytes: payload.bytes.length,
-          totalBytes: payload.bytes.length,
+          uploadedBytes: payload.length,
+          totalBytes: payload.length,
           uploadedCount: uploadedCount,
           failedCount: failedCount,
           speedBytesPerSecond: lastSpeedBytesPerSecond,
@@ -343,11 +501,12 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
             'uploaded',
             uploadSessionId: session.id,
             uploadPayloadHash: payloadHash,
-            uploadTotalSize: payload.bytes.length,
+            uploadTotalSize: payload.length,
             uploadChunkSize: chunkSize,
-            uploadedBytes: payload.bytes.length,
+            uploadedBytes: payload.length,
           ),
         );
+        await payload.cleanupAfterSuccess();
         uploadedCount += 1;
       } catch (error) {
         failedCount += 1;
@@ -506,18 +665,21 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
     required String versionId,
     required PreparedUploadPayload payload,
     required String payloadHash,
+    UploadSession? knownSession,
   }) async {
-    if (_canReuseSession(task, payloadHash, payload.bytes.length)) {
+    if (_canReuseSession(task, payloadHash, payload.length)) {
       try {
-        final session = await uploads.getUploadSession(
-          token: token,
-          sessionId: task.uploadSessionId,
-        );
+        final session =
+            knownSession ??
+            await uploads.getUploadSession(
+              token: token,
+              sessionId: task.uploadSessionId,
+            );
         if (session.status == 'pending' &&
-            session.totalSize == payload.bytes.length &&
+            session.totalSize == payload.length &&
             session.chunkSize == chunkSize &&
             session.receivedSize >= 0 &&
-            session.receivedSize < payload.bytes.length) {
+            session.receivedSize < payload.length) {
           return session;
         }
         if (session.status == 'completed') {
@@ -535,11 +697,31 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
       syncRootId: task.syncRootId,
       objectId: objectId,
       versionId: versionId,
-      totalSize: payload.bytes.length,
+      totalSize: payload.length,
       chunkSize: chunkSize,
       encryptedName: payload.encryptedName,
       metadataJson: payload.metadataJson,
     );
+  }
+
+  Future<UploadSession?> _loadKnownSession({
+    required String token,
+    required LocalUploadTask task,
+  }) async {
+    if (task.uploadSessionId.isEmpty) {
+      return null;
+    }
+    try {
+      return await uploads.getUploadSession(
+        token: token,
+        sessionId: task.uploadSessionId,
+      );
+    } on ApiException catch (error) {
+      if (error.statusCode == 404) {
+        return null;
+      }
+      rethrow;
+    }
   }
 
   bool _canReuseSession(
@@ -611,8 +793,14 @@ class LocalUploadExecutor implements LocalUploadExecutionGateway {
   static String _defaultVersionId(LocalUploadTask task) =>
       versionIdForUploadTask(task);
 
-  static String _uploadPayloadFingerprint(PreparedUploadPayload payload) {
-    final contentHash = sha256.convert(payload.bytes).toString();
+  static Future<String> _uploadPayloadFingerprint(
+    PreparedUploadPayload payload,
+  ) async {
+    if (payload.payloadHash.isNotEmpty) {
+      return payload.payloadHash;
+    }
+    final contentHash = (await sha256.bind(payload.openRead()).first)
+        .toString();
     return sha256
         .convert(
           utf8.encode(

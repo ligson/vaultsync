@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'media_backup_models.dart';
 
 class MediaPermissionStatus {
@@ -16,6 +18,10 @@ class MediaAssetCleanupResult {
 
 abstract interface class MediaAssetCleaner {
   Future<MediaAssetCleanupResult> deleteAsset(String assetId);
+}
+
+abstract interface class MediaAssetFileResolver {
+  Future<File?> resolveAssetFile(String assetId);
 }
 
 abstract interface class MediaBackupGateway implements MediaAssetCleaner {

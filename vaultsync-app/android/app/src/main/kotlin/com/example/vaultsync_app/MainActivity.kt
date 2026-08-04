@@ -16,11 +16,15 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "start" -> {
                     val intent = Intent(this, SyncKeepAliveService::class.java)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        startForegroundService(intent)
-                    } else {
-                        startService(intent)
+                    startSyncService(intent)
+                    result.success(null)
+                }
+                "setTransferActive" -> {
+                    val active = call.argument<Boolean>("active") == true
+                    val intent = Intent(this, SyncKeepAliveService::class.java).apply {
+                        putExtra(SyncKeepAliveService.EXTRA_TRANSFER_ACTIVE, active)
                     }
+                    startSyncService(intent)
                     result.success(null)
                 }
                 "stop" -> {
@@ -29,6 +33,14 @@ class MainActivity : FlutterActivity() {
                 }
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    private fun startSyncService(intent: Intent) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
         }
     }
 }

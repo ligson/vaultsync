@@ -22,6 +22,7 @@ class LocalSyncScanner implements LocalSyncScanGateway {
   Future<List<LocalSyncFile>> scanMappedRoots({String? syncRootId}) async {
     final rootMappings = await mappings.loadSyncRootMappings();
     final files = <LocalSyncFile>[];
+    var processedFileCount = 0;
     for (final mapping in rootMappings) {
       if (syncRootId != null && mapping.syncRootId != syncRootId) {
         continue;
@@ -57,6 +58,10 @@ class LocalSyncScanner implements LocalSyncScanGateway {
             encryptionEnabled: mapping.encryptionEnabled,
           ),
         );
+        processedFileCount += 1;
+        if (processedFileCount % 200 == 0) {
+          await Future<void>.delayed(Duration.zero);
+        }
       }
     }
     files.sort((left, right) {

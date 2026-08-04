@@ -1,9 +1,14 @@
+import 'dart:io';
+
 import 'package:photo_manager/photo_manager.dart';
 
 import 'media_backup_gateway.dart';
 import 'media_backup_models.dart';
 
-class PhotoManagerMediaGateway implements MediaBackupGateway {
+class PhotoManagerMediaGateway
+    implements MediaBackupGateway, MediaAssetFileResolver {
+  static const _assetPageSize = 200;
+
   const PhotoManagerMediaGateway();
 
   static String assetTypeFor(String mediaTypes) {
@@ -50,23 +55,27 @@ class PhotoManagerMediaGateway implements MediaBackupGateway {
         continue;
       }
       final count = await path.assetCountAsync;
-      final assets = await path.getAssetListRange(start: 0, end: count);
-      for (final asset in assets) {
-        final file = await asset.file;
-        final stat = file == null ? null : await file.stat();
-        snapshots.add(
-          MediaAssetSnapshot(
-            id: asset.id,
-            albumId: path.id,
-            albumName: path.name,
-            mediaType: asset.type == AssetType.video ? 'video' : 'image',
-            fileName: asset.title ?? asset.id,
-            extension: _extensionFor(asset.title),
-            sizeBytes: stat?.size ?? 0,
-            createdAt: asset.createDateTime,
-            modifiedAt: asset.modifiedDateTime,
-          ),
-        );
+      for (var start = 0; start < count; start += _assetPageSize) {
+        final end = (start + _assetPageSize).clamp(0, count);
+        final assets = await path.getAssetListRange(start: start, end: end);
+        for (final asset in assets) {
+          final file = await asset.file;
+          final stat = file == null ? null : await file.stat();
+          snapshots.add(
+            MediaAssetSnapshot(
+              id: asset.id,
+              albumId: path.id,
+              albumName: path.name,
+              mediaType: asset.type == AssetType.video ? 'video' : 'image',
+              fileName: asset.title ?? asset.id,
+              extension: _extensionFor(asset.title),
+              sizeBytes: stat?.size ?? 0,
+              createdAt: asset.createDateTime,
+              modifiedAt: asset.modifiedDateTime,
+            ),
+          );
+        }
+        await Future<void>.delayed(Duration.zero);
       }
     }
     return snapshots;
@@ -74,12 +83,17 @@ class PhotoManagerMediaGateway implements MediaBackupGateway {
 
   @override
   Future<List<int>> readAssetBytes(String assetId) async {
-    final entity = await AssetEntity.fromId(assetId);
-    final file = await entity?.file;
+    final file = await resolveAssetFile(assetId);
     if (file == null) {
       throw Exception('无法读取该照片或视频');
     }
     return file.readAsBytes();
+  }
+
+  @override
+  Future<File?> resolveAssetFile(String assetId) async {
+    final entity = await AssetEntity.fromId(assetId);
+    return entity?.file;
   }
 
   @override

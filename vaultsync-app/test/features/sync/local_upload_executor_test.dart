@@ -321,7 +321,7 @@ void main() {
       final result = await executor.executePendingUploads();
 
       expect(result.uploadedCount, 1);
-      expect(uploads.requestedSessionId, isNull);
+      expect(uploads.requestedSessionId, 'session-old-metadata');
       expect(uploads.createCount, 1);
       expect(uploadTasks.saved.single.status, 'uploaded');
       expect(
@@ -330,6 +330,50 @@ void main() {
       );
     },
   );
+
+  test('reconcilePendingUploadProgress trusts server received size', () async {
+    final uploadTasks = FakeUploadTaskStore([
+      LocalUploadTask(
+        id: 'root-1:a.jpg',
+        syncRootId: 'root-1',
+        localPath: '/local/a.jpg',
+        relativePath: 'a.jpg',
+        sizeBytes: 100,
+        modifiedAt: DateTime.utc(2026, 8, 4),
+        status: 'pending',
+        attempts: 0,
+        createdAt: DateTime.utc(2026, 8, 4),
+        uploadSessionId: 'session-resume',
+        uploadTotalSize: 120,
+        uploadChunkSize: 10,
+        uploadedBytes: 20,
+      ),
+    ]);
+    final executor = LocalUploadExecutor(
+      sessionStore: FakeSessionStore(
+        token: 'server-token',
+        deviceId: 'device-1',
+      ),
+      uploadTasks: uploadTasks,
+      uploads: FakeUploadGateway(
+        existingSession: const UploadSession(
+          id: 'session-resume',
+          status: 'pending',
+          totalSize: 120,
+          chunkSize: 10,
+          receivedSize: 70,
+        ),
+      ),
+      payloadPreparer: const FakeUploadPayloadPreparer(),
+    );
+
+    final changed = await executor.reconcilePendingUploadProgress();
+
+    expect(changed, 1);
+    expect(uploadTasks.saved.single.uploadedBytes, 70);
+    expect(uploadTasks.saved.single.uploadTotalSize, 120);
+    expect(uploadTasks.saved.single.uploadChunkSize, 10);
+  });
 
   test(
     'executePendingUploads reconciles task encryption with local root mapping',

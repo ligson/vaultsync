@@ -339,6 +339,135 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  build-windows:
+    name: Windows x64
+    needs:
+      - validate-tag
+      - verify
+    runs-on: windows-2025
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate-tag.outputs.tag }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Select Windows signing mode
+        id: signing
+        env:
+          WINDOWS_CODE_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE_BASE64 }}
+          WINDOWS_CODE_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE_PASSWORD }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $required = @(
+            $env:WINDOWS_CODE_SIGNING_CERTIFICATE_BASE64,
+            $env:WINDOWS_CODE_SIGNING_CERTIFICATE_PASSWORD
+          )
+          $configured = @($required | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+          if ($configured -eq 0) {
+            'mode=unsigned' >> $env:GITHUB_OUTPUT
+            Write-Host 'Windows signing credentials are absent; building an unsigned package.'
+          } elseif ($configured -eq $required.Count) {
+            'mode=signed' >> $env:GITHUB_OUTPUT
+            Write-Host 'Windows signing credentials are complete; building a signed package.'
+          } else {
+            throw "Windows signing credentials are incomplete ($configured/$($required.Count) configured)."
+          }
+
+      - name: Build Windows release
+        working-directory: vaultsync-app
+        env:
+          RELEASE_VERSION: ${{ needs.validate-tag.outputs.version }}
+          BUILD_NUMBER: ${{ needs.validate-tag.outputs.build_number }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          flutter pub get
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          flutter build windows --release `
+            --build-name $env:RELEASE_VERSION `
+            --build-number $env:BUILD_NUMBER
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exePath = 'build/windows/x64/runner/Release/vaultsync_app.exe'
+          if (-not (Test-Path $exePath -PathType Leaf)) {
+            throw 'Windows release executable was not generated.'
+          }
+
+      - name: Sign and verify Windows executable
+        if: steps.signing.outputs.mode == 'signed'
+        working-directory: vaultsync-app
+        env:
+          WINDOWS_CODE_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE_BASE64 }}
+          WINDOWS_CODE_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE_PASSWORD }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'vaultsync-windows-signing.pfx'
+          [IO.File]::WriteAllBytes(
+            $certificatePath,
+            [Convert]::FromBase64String($env:WINDOWS_CODE_SIGNING_CERTIFICATE_BASE64)
+          )
+          $signTool = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin" `
+            -Filter signtool.exe -Recurse |
+            Where-Object { $_.FullName -match '[\\/]x64[\\/]signtool\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if ($null -eq $signTool) {
+            throw 'Windows signtool.exe was not found.'
+          }
+          $exePath = 'build/windows/x64/runner/Release/vaultsync_app.exe'
+          & $signTool.FullName sign `
+            /f $certificatePath `
+            /p $env:WINDOWS_CODE_SIGNING_CERTIFICATE_PASSWORD `
+            /fd SHA256 `
+            /tr http://timestamp.digicert.com `
+            /td SHA256 `
+            $exePath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $signTool.FullName verify /pa /v $exePath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package and verify Windows app
+        working-directory: vaultsync-app
+        env:
+          ARTIFACT_VERSION: ${{ needs.validate-tag.outputs.artifact_version }}
+          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releaseDir = Resolve-Path 'build/windows/x64/runner/Release'
+          $packageRoot = Join-Path $env:RUNNER_TEMP 'vaultsync-windows-package'
+          $appDir = Join-Path $packageRoot 'VaultSync'
+          New-Item -ItemType Directory -Path $appDir -Force | Out-Null
+          Copy-Item "$releaseDir/*" $appDir -Recurse -Force
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          $suffix = if ($env:SIGNING_MODE -eq 'signed') { '' } else { '-unsigned' }
+          $archiveName = "vaultsync-app-$($env:ARTIFACT_VERSION)-windows-x64$suffix.zip"
+          $archivePath = Join-Path (Resolve-Path dist) $archiveName
+          Compress-Archive -Path $appDir -DestinationPath $archivePath -CompressionLevel Optimal
+
+          $verifyDir = Join-Path $env:RUNNER_TEMP 'vaultsync-windows-verify'
+          Expand-Archive -Path $archivePath -DestinationPath $verifyDir
+          $verifiedExe = Join-Path $verifyDir 'VaultSync/vaultsync_app.exe'
+          if (-not (Test-Path $verifiedExe -PathType Leaf)) {
+            throw 'Packaged Windows executable was not found.'
+          }
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v7
+        with:
+          name: vaultsync-app-windows-x64
+          path: vaultsync-app/dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
   build-ios:
     name: iOS IPA
     needs:
@@ -724,6 +853,7 @@ jobs:
       - build-backend
       - build-frontend
       - build-android
+      - build-windows
       - build-ios
       - build-macos
     runs-on: ubuntu-latest
@@ -757,8 +887,8 @@ jobs:
               \( -name '*.apk' -o -name '*.aab' -o -name '*.ipa' -o -name '*.zip' -o -name '*.tar.gz' \) \
               | sort
           )
-          if [ "${#files[@]}" -ne 10 ]; then
-            printf 'Expected 10 release files, found %s:\n' "${#files[@]}" >&2
+          if [ "${#files[@]}" -ne 11 ]; then
+            printf 'Expected 11 release files, found %s:\n' "${#files[@]}" >&2
             printf '%s\n' "${files[@]}" >&2
             exit 1
           fi
@@ -780,7 +910,7 @@ jobs:
               \( -name '*.apk' -o -name '*.aab' -o -name '*.ipa' -o -name '*.zip' -o -name '*.tar.gz' -o -name 'SHA256SUMS.txt' \) \
               | sort
           )
-          release_notes='Android 包使用正式 release 签名。文件名包含 `unsigned` 的 iOS 包不能直接安装到普通 iPhone，需自行重签名；文件名包含 `unsigned` 的 macOS 包未使用 Developer ID 签名且未公证，首次运行可能被 Gatekeeper 阻止。配置完整 Apple Developer 凭据后，工作流会自动改为正式签名制品。'
+          release_notes='Android 包使用正式 release 签名。文件名包含 `unsigned` 的 iOS 包不能直接安装到普通 iPhone，需自行重签名；文件名包含 `unsigned` 的 macOS 包未使用 Developer ID 签名且未公证，首次运行可能被 Gatekeeper 阻止；文件名包含 `unsigned` 的 Windows 包未使用代码签名，运行时可能出现 SmartScreen 提示。配置完整平台签名凭据后，工作流会自动改为正式签名制品。'
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
           else

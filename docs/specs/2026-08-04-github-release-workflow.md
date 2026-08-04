@@ -6,7 +6,7 @@ VaultSync 使用 `.github/workflows/release.yml` 统一构建并发布 GitHub Re
 
 一次成功发版包含三组制品：
 
-- App：Android 签名 APK、Android 签名 AAB，以及 iOS、macOS x64、macOS arm64 客户端包。Apple Developer 凭据完整时自动签名；完全未配置时发布明确标注 `unsigned` 的包。
+- App：Android 签名 APK、Android 签名 AAB，以及 iOS、macOS x64、macOS arm64、Windows x64 客户端包。Apple Developer 或 Windows 代码签名凭据完整时自动签名；完全未配置时发布明确标注 `unsigned` 的包。
 - 前端：包含构建后静态文件及 Docker 配置的 zip。
 - 后端：Linux 和 macOS 的 amd64、arm64 二进制 tar.gz。
 
@@ -33,7 +33,7 @@ v1.0.0+2026080402
 
 ## 发布制品
 
-以 `v1.0.0+2026080402` 为例，GitHub Release 应包含 10 个构建制品和 1 个校验文件：
+以 `v1.0.0+2026080402` 为例，GitHub Release 应包含 11 个构建制品和 1 个校验文件：
 
 ```text
 vaultsync-app-1.0.0+2026080402-android.apk
@@ -41,6 +41,7 @@ vaultsync-app-1.0.0+2026080402-android.aab
 vaultsync-app-1.0.0+2026080402-ios-unsigned.ipa
 vaultsync-app-1.0.0+2026080402-macos-x64-unsigned.zip
 vaultsync-app-1.0.0+2026080402-macos-arm64-unsigned.zip
+vaultsync-app-1.0.0+2026080402-windows-x64-unsigned.zip
 vaultsync-fe-1.0.0+2026080402.zip
 vaultsync-be-1.0.0+2026080402-linux-amd64.tar.gz
 vaultsync-be-1.0.0+2026080402-linux-arm64.tar.gz
@@ -49,13 +50,14 @@ vaultsync-be-1.0.0+2026080402-macos-arm64.tar.gz
 SHA256SUMS.txt
 ```
 
-工作流会在发布前校验 10 个构建制品是否全部存在。Apple 凭据完整时，iOS 和 macOS 使用不带 `unsigned` 后缀的正式文件名。任何平台构建失败，或已启用的签名、验签、公证失败，整个 Release 都不会发布。
+工作流会在发布前校验 11 个构建制品是否全部存在。Apple 或 Windows 凭据完整时，对应平台使用不带 `unsigned` 后缀的正式文件名。任何平台构建失败，或已启用的签名、验签、公证失败，整个 Release 都不会发布。
 
-无签名 Apple 制品的边界：
+无签名客户端制品的边界：
 
 - iOS `*-unsigned.ipa` 只供后续重签名或开发测试，普通 iPhone 不能直接安装。
 - macOS `*-unsigned.zip` 未使用 Developer ID 签名、未经过 Apple 公证，用户首次打开时可能被 Gatekeeper 阻止。
-- `unsigned` 只描述 Apple 分发身份，不影响应用业务功能；工作流不会使用临时证书伪装成正式发布包。
+- Windows `*-unsigned.zip` 未使用代码签名，解压后可直接运行完整目录中的 `vaultsync_app.exe`，但 Windows SmartScreen 可能显示安全提示。
+- `unsigned` 只描述对应平台的分发签名状态，不影响应用业务功能；工作流不会使用临时证书伪装成正式发布包。
 
 ## GitHub 签名配置
 
@@ -71,6 +73,15 @@ SHA256SUMS.txt
 | `ANDROID_KEY_PASSWORD` | 签名 key 密码 |
 
 Android 必须使用当前已发布 App 的同一 keystore。更换 keystore 会导致现有安装无法通过覆盖升级保留客户端登录态、目录绑定、上传队列和加密密钥。工作流不提供 debug 签名回退，任何 Secret 缺失都会失败。
+
+### Windows Secrets
+
+| 名称 | 内容 |
+| --- | --- |
+| `WINDOWS_CODE_SIGNING_CERTIFICATE_BASE64` | Authenticode 代码签名 `.pfx` 文件的 Base64 |
+| `WINDOWS_CODE_SIGNING_CERTIFICATE_PASSWORD` | `.pfx` 密码 |
+
+Windows 使用官方 `windows-2025` x64 runner，构建后将 `vaultsync_app.exe`、Flutter 运行库、插件 DLL 和 `data/` 一起打包。两项 Secret 完全未配置时发布 `*-windows-x64-unsigned.zip`；两项完整时使用 SHA-256 和可信时间戳签名主 EXE，并在打包前执行 `signtool verify`。只配置一项时直接失败，避免静默发布未签名包。
 
 ### iOS Secrets 和 Variables
 
@@ -110,7 +121,7 @@ macOS 的 6 项 Secret 完全未配置时，工作流仍构建两个架构，但
 2. 更新 `CHANGELOG.md`，提交全部属于本次发版的代码并推送当前分支。
 3. 确认远端 commit 与本地提交一致，创建新的 annotated tag，例如 `git tag -a v1.0.0+2026080402 -m "VaultSync v1.0.0+2026080402"`。
 4. 推送该 tag；GitHub Actions 自动从该 tag 构建并发布 Release。
-5. 回查所有 job、签名验证、公证结果、11 个 Release assets 和 `SHA256SUMS.txt`。
+5. 回查所有 job、签名验证、公证结果、12 个 Release assets 和 `SHA256SUMS.txt`。
 6. 需要安装 Android 真机时，只使用 `adb install -r <apk>` 并回查 `firstInstallTime`、登录状态和权限，禁止先卸载旧版。
 
 工作流也支持手动运行并输入一个已经存在的 tag，用于网络故障后的原 tag 重跑。手动运行不会创建 tag，也不会改动 tag 指向；若 Release 已存在，只覆盖同名 assets。
@@ -119,7 +130,7 @@ macOS 的 6 项 Secret 完全未配置时，工作流仍构建两个架构，但
 
 - 构建失败：修复代码后创建更高 build number 的新 tag，不移动旧 tag。
 - 上传制品失败但 tag 代码没有问题：对原 tag 手动重跑 workflow。
-- 签名或公证失败：修正 GitHub Secrets/Variables 后对原 tag 手动重跑；不得自动降级为 debug 签名。只有全部 Apple 凭据都未配置时，才允许走文件名明确标注 `unsigned` 的预定分支。
+- 签名或公证失败：修正 GitHub Secrets/Variables 后对原 tag 手动重跑；不得自动降级为 debug 签名。只有对应平台的 Apple 或 Windows 凭据全部未配置时，才允许走文件名明确标注 `unsigned` 的预定分支。
 - 已发布版本有问题：保留原 Release 和 tag，回滚代码后以新 build number 再发版。
 
 CI 构建和 GitHub Release 本身不修改 NAS `data/`、SQLite、密文对象、下载目录或客户端本地状态。后续 NAS 部署仍必须先备份并按仓库数据安全规则单独验证。

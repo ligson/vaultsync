@@ -22,10 +22,18 @@ import 'package:vaultsync_app/features/sync/sync_models.dart';
 import 'package:vaultsync_app/features/sync/sync_pull_executor.dart';
 import 'package:vaultsync_app/features/sync/sync_service.dart';
 
+String _formatLocalTestDateTime(DateTime value) {
+  final local = value.toLocal();
+  String two(int number) => number.toString().padLeft(2, '0');
+  return '${local.year}-${two(local.month)}-${two(local.day)} '
+      '${two(local.hour)}:${two(local.minute)}';
+}
+
 void main() {
   testWidgets('sync home lists sync roots from local session token', (
     tester,
   ) async {
+    final modifiedAt = DateTime.utc(2026, 6, 27, 9, 30);
     final syncRoots = FakeSyncRootGateway([
       const SyncRoot(
         id: 'root-1',
@@ -53,7 +61,7 @@ void main() {
         localPath: '/Users/alice/Photos/2026/a.jpg',
         relativePath: '2026/a.jpg',
         sizeBytes: 2048,
-        modifiedAt: DateTime.utc(2026, 6, 27, 9, 30),
+        modifiedAt: modifiedAt,
         status: 'pending',
         attempts: 0,
         createdAt: DateTime.utc(2026, 6, 27, 10),
@@ -92,7 +100,10 @@ void main() {
     expect(find.text('a.jpg'), findsOneWidget);
     expect(find.text('待续传 50%'), findsOneWidget);
     expect(find.textContaining('2026/a.jpg'), findsNothing);
-    expect(find.textContaining('2.0 KB · 2026-06-27 17:30'), findsOneWidget);
+    expect(
+      find.textContaining('2.0 KB · ${_formatLocalTestDateTime(modifiedAt)}'),
+      findsOneWidget,
+    );
     expect(find.text('清理策略：上传后删除'), findsOneWidget);
   });
 

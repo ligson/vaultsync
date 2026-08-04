@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vaultsync_app/core/storage/app_storage.dart';
@@ -190,7 +193,13 @@ void main() {
 
   test('AppStorage saves local upload tasks', () async {
     SharedPreferences.setMockInitialValues({});
-    const storage = AppStorage();
+    final directory = await Directory.systemTemp.createTemp(
+      'vaultsync_upload_tasks_',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final storage = AppStorage(
+      uploadTaskDirectoryProvider: () async => directory,
+    );
 
     await storage.saveUploadTasks([
       LocalUploadTask(
@@ -247,7 +256,13 @@ void main() {
 
   test('AppStorage preserves media upload task source fields', () async {
     SharedPreferences.setMockInitialValues({});
-    const storage = AppStorage();
+    final directory = await Directory.systemTemp.createTemp(
+      'vaultsync_upload_tasks_',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final storage = AppStorage(
+      uploadTaskDirectoryProvider: () async => directory,
+    );
 
     await storage.saveUploadTasks([
       LocalUploadTask(
@@ -272,6 +287,126 @@ void main() {
     expect(task.assetId, 'asset-1');
     expect(task.assetMediaType, 'image');
   });
+
+  test(
+    'AppStorage migrates legacy upload tasks without removing old data',
+    () async {
+      final legacyTask = LocalUploadTask(
+        id: 'root-1:legacy.txt',
+        syncRootId: 'root-1',
+        localPath: '/local/legacy.txt',
+        relativePath: 'legacy.txt',
+        sizeBytes: 6,
+        modifiedAt: DateTime.utc(2026, 8, 4, 9),
+        status: 'failed',
+        attempts: 2,
+        createdAt: DateTime.utc(2026, 8, 4, 10),
+        lastError: '网络中断',
+      );
+      final legacyJson = jsonEncode(legacyTask.toJson());
+      SharedPreferences.setMockInitialValues({
+        'vaultsync.upload_tasks': <String>[legacyJson],
+      });
+      final directory = await Directory.systemTemp.createTemp(
+        'vaultsync_upload_tasks_migration_',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final storage = AppStorage(
+        uploadTaskDirectoryProvider: () async => directory,
+      );
+
+      final tasks = await storage.loadUploadTasks();
+      final prefs = await SharedPreferences.getInstance();
+
+      expect(tasks.single.id, legacyTask.id);
+      expect(tasks.single.status, 'failed');
+      expect(tasks.single.attempts, 2);
+      expect(prefs.getStringList('vaultsync.upload_tasks'), [legacyJson]);
+      expect(await File('${directory.path}/manifest.json').exists(), isTrue);
+    },
+  );
+
+  test(
+    'AppStorage updates and removes one upload-task shard incrementally',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final directory = await Directory.systemTemp.createTemp(
+        'vaultsync_upload_tasks_incremental_',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final storage = AppStorage(
+        uploadTaskDirectoryProvider: () async => directory,
+      );
+      final task = LocalUploadTask(
+        id: 'root-1:a.txt',
+        syncRootId: 'root-1',
+        localPath: '/local/a.txt',
+        relativePath: 'a.txt',
+        sizeBytes: 1,
+        modifiedAt: DateTime.utc(2026, 8, 4, 9),
+        status: 'pending',
+        attempts: 0,
+        createdAt: DateTime.utc(2026, 8, 4, 10),
+      );
+
+      await storage.saveUploadTasks([task]);
+      await storage.saveUploadTask(
+        LocalUploadTask.fromJson({...task.toJson(), 'status': 'uploaded'}),
+      );
+
+      expect((await storage.loadUploadTasks()).single.status, 'uploaded');
+      await storage.removeUploadTask(task.id);
+      expect(await storage.loadUploadTasks(), isEmpty);
+    },
+  );
+
+  test(
+    'AppStorage persists a queue larger than platform preferences limits',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final directory = await Directory.systemTemp.createTemp(
+        'vaultsync_upload_tasks_large_',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final storage = AppStorage(
+        uploadTaskDirectoryProvider: () async => directory,
+      );
+      final pathPadding = List.filled(1024, 'x').join();
+      final tasks = [
+        for (var index = 0; index < 5000; index += 1)
+          LocalUploadTask(
+            id: 'root-1:$index-$pathPadding',
+            syncRootId: 'root-1',
+            localPath: '/local/$index-$pathPadding',
+            relativePath: '$index-$pathPadding',
+            sizeBytes: index,
+            modifiedAt: DateTime.utc(2026, 8, 4, 9),
+            status: 'pending',
+            attempts: 0,
+            createdAt: DateTime.utc(2026, 8, 4, 10),
+          ),
+      ];
+
+      await storage.saveUploadTasks(tasks);
+
+      final loaded = await storage.loadUploadTasks();
+      final prefs = await SharedPreferences.getInstance();
+      final shardFiles = directory
+          .listSync()
+          .whereType<File>()
+          .where((file) => file.path.endsWith('.json'))
+          .toList();
+      expect(loaded, hasLength(5000));
+      expect(prefs.getStringList('vaultsync.upload_tasks'), isNull);
+      expect(shardFiles, isNotEmpty);
+      expect(
+        shardFiles
+            .map((file) => file.lengthSync())
+            .reduce((a, b) => a > b ? a : b),
+        lessThan(4 * 1024 * 1024),
+      );
+    },
+  );
 
   test('AppStorage saves and clears local sync history', () async {
     SharedPreferences.setMockInitialValues({});

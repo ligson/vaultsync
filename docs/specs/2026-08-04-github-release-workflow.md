@@ -74,6 +74,8 @@ SHA256SUMS.txt
 
 Android 必须使用当前已发布 App 的同一 keystore。更换 keystore 会导致现有安装无法通过覆盖升级保留客户端登录态、目录绑定、上传队列和加密密钥。工作流不提供 debug 签名回退，任何 Secret 缺失都会失败。
 
+当前生产证书公钥 SHA-256 指纹为 `5e0dcce66a22640a79075996da1acfedcd933678ec1ad03a9aab56497d42ff20`。工作流在 APK 构建后强制比对该指纹；Secret 中的 keystore、alias 或密码配置错误，或误换成另一份 keystore 时，构建会失败且不会发布制品。原始 `.jks` 应作为唯一签名源在本地离线备份，GitHub Secret 只保存它的受控副本。
+
 ### Windows Secrets
 
 | 名称 | 内容 |

@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../features/auth/auth_models.dart';
@@ -28,9 +30,47 @@ List<Map<String, Object?>> _decodeUploadTaskJsonItems(List<String> rawItems) {
       .toList(growable: false);
 }
 
-List<String> _encodeUploadTaskJsonItems(List<Map<String, Object?>> jsonItems) {
-  return jsonItems.map(jsonEncode).toList(growable: false);
+List<Map<String, Object?>> _decodeUploadTaskShardContents(
+  List<String> contents,
+) {
+  return [
+    for (final content in contents)
+      for (final item in jsonDecode(content) as List<dynamic>)
+        (item as Map).cast<String, Object?>(),
+  ];
 }
+
+Map<int, String> _encodeUploadTaskShardContents(
+  List<Map<String, Object?>> jsonItems,
+) {
+  final shards = <int, List<Map<String, Object?>>>{};
+  for (final item in jsonItems) {
+    final id = item['id'] as String? ?? '';
+    (shards[_uploadTaskShardFor(id)] ??= []).add(item);
+  }
+  return {
+    for (var index = 0; index < _uploadTaskShardCount; index += 1)
+      index: jsonEncode(shards[index] ?? const <Map<String, Object?>>[]),
+  };
+}
+
+const _uploadTaskShardCount = 32;
+
+int _uploadTaskShardFor(String id) {
+  var hash = 0x811c9dc5;
+  for (final byte in utf8.encode(id)) {
+    hash ^= byte;
+    hash = (hash * 0x01000193) & 0xFFFFFFFF;
+  }
+  return hash % _uploadTaskShardCount;
+}
+
+Future<Directory> _defaultUploadTaskDirectoryProvider() async {
+  final support = await getApplicationSupportDirectory();
+  return Directory('${support.path}/vaultsync/upload-tasks-v1');
+}
+
+typedef UploadTaskDirectoryProvider = Future<Directory> Function();
 
 abstract interface class CurrentDeviceInfoStore {
   Future<String?> loadDeviceName();
@@ -64,6 +104,12 @@ abstract interface class UploadTaskStore {
   Future<List<LocalUploadTask>> loadUploadTasks();
 
   Future<void> saveUploadTasks(List<LocalUploadTask> tasks);
+}
+
+abstract interface class IncrementalUploadTaskStore implements UploadTaskStore {
+  Future<void> saveUploadTask(LocalUploadTask task);
+
+  Future<void> removeUploadTask(String taskId);
 }
 
 abstract interface class MediaBackupSourceStore {
@@ -124,7 +170,7 @@ class AppStorage
         RefreshTokenStore,
         CurrentDeviceInfoStore,
         SyncRootMappingStore,
-        UploadTaskStore,
+        IncrementalUploadTaskStore,
         MediaBackupSourceStore,
         SyncCursorStore,
         RemoteVersionIndexStore,
@@ -135,8 +181,12 @@ class AppStorage
         SyncHistoryStore,
         LocalSessionCleaner {
   final PasswordUploadKeyDeriver uploadKeyDeriver;
+  final UploadTaskDirectoryProvider uploadTaskDirectoryProvider;
 
-  const AppStorage({this.uploadKeyDeriver = const PasswordUploadKeyDeriver()});
+  const AppStorage({
+    this.uploadKeyDeriver = const PasswordUploadKeyDeriver(),
+    this.uploadTaskDirectoryProvider = _defaultUploadTaskDirectoryProvider,
+  });
 
   static const _authTokenKey = 'vaultsync.auth.token';
   static const _serverAddressKey = 'vaultsync.server.address';
@@ -150,6 +200,8 @@ class AppStorage
   static const _devicePlatformKey = 'vaultsync.device.platform';
   static const _syncRootMappingsKey = 'vaultsync.sync_roots.mappings';
   static const _uploadTasksKey = 'vaultsync.upload_tasks';
+  static const _uploadTaskManifestFileName = 'manifest.json';
+  static const _uploadTaskStorageVersion = 1;
   static const _mediaBackupSourcesKey = 'vaultsync.media_backup.sources';
   static const _remoteCursorKey = 'vaultsync.sync.remote_cursor';
   static const _remoteVersionIndexesKey = 'vaultsync.sync.remote_versions';
@@ -289,25 +341,212 @@ class AppStorage
 
   @override
   Future<List<LocalUploadTask>> loadUploadTasks() async {
-    final prefs = await SharedPreferences.getInstance();
-    final rawItems = prefs.getStringList(_uploadTasksKey) ?? const [];
-    if (rawItems.isEmpty) {
+    final directory = await _prepareUploadTaskDirectory();
+    final contents = await Future.wait([
+      for (var index = 0; index < _uploadTaskShardCount; index += 1)
+        _readUploadTaskShard(directory, index),
+    ]);
+    final nonEmptyContents = contents.where((item) => item.isNotEmpty).toList();
+    if (nonEmptyContents.isEmpty) {
       return const [];
     }
-    final decodedItems = await compute(_decodeUploadTaskJsonItems, rawItems);
-    return decodedItems.map(LocalUploadTask.fromJson).toList();
+    final decodedItems = await compute(
+      _decodeUploadTaskShardContents,
+      nonEmptyContents,
+    );
+    return decodedItems.map(LocalUploadTask.fromJson).toList()
+      ..sort((left, right) => left.id.compareTo(right.id));
   }
 
   @override
   Future<void> saveUploadTasks(List<LocalUploadTask> tasks) async {
+    final directory = await _prepareUploadTaskDirectory();
+    await _writeUploadTaskShards(directory, tasks);
+  }
+
+  @override
+  Future<void> saveUploadTask(LocalUploadTask task) async {
+    final directory = await _prepareUploadTaskDirectory();
+    final shardIndex = _uploadTaskShardFor(task.id);
+    final tasks = await _loadUploadTaskShard(directory, shardIndex);
+    final nextTasks = [
+      for (final existing in tasks)
+        if (existing.id != task.id) existing,
+      task,
+    ];
+    await _writeUploadTaskShard(directory, shardIndex, nextTasks);
+  }
+
+  @override
+  Future<void> removeUploadTask(String taskId) async {
+    final directory = await _prepareUploadTaskDirectory();
+    final shardIndex = _uploadTaskShardFor(taskId);
+    final tasks = await _loadUploadTaskShard(directory, shardIndex);
+    final nextTasks = [
+      for (final task in tasks)
+        if (task.id != taskId) task,
+    ];
+    if (nextTasks.length == tasks.length) {
+      return;
+    }
+    await _writeUploadTaskShard(directory, shardIndex, nextTasks);
+  }
+
+  Future<Directory> _prepareUploadTaskDirectory() async {
+    final directory = await uploadTaskDirectoryProvider();
+    await directory.create(recursive: true);
+    final manifest = File(
+      '${directory.path}${Platform.pathSeparator}$_uploadTaskManifestFileName',
+    );
+    await _recoverAtomicFile(manifest);
+    if (await manifest.exists()) {
+      try {
+        final value = jsonDecode(await manifest.readAsString());
+        if (value is Map && value['version'] == _uploadTaskStorageVersion) {
+          return directory;
+        }
+      } catch (_) {
+        // 继续使用旧偏好和可恢复分片重建，不丢弃任何可读取任务。
+      }
+    }
+
     final prefs = await SharedPreferences.getInstance();
-    final encodedItems = tasks.isEmpty
-        ? const <String>[]
-        : await compute(
-            _encodeUploadTaskJsonItems,
-            tasks.map((task) => task.toJson()).toList(),
-          );
-    await prefs.setStringList(_uploadTasksKey, encodedItems);
+    final legacyItems = prefs.getStringList(_uploadTasksKey) ?? const [];
+    final legacyTasks = legacyItems.isEmpty
+        ? const <LocalUploadTask>[]
+        : (await compute(
+            _decodeUploadTaskJsonItems,
+            legacyItems,
+          )).map(LocalUploadTask.fromJson).toList();
+    final recoveredTasks = <LocalUploadTask>[];
+    for (var index = 0; index < _uploadTaskShardCount; index += 1) {
+      recoveredTasks.addAll(await _loadUploadTaskShard(directory, index));
+    }
+    final tasksById = {
+      for (final task in legacyTasks) task.id: task,
+      for (final task in recoveredTasks) task.id: task,
+    };
+    await _writeUploadTaskShards(directory, tasksById.values.toList());
+    await _writeAtomicText(
+      manifest,
+      jsonEncode({
+        'version': _uploadTaskStorageVersion,
+        'shard_count': _uploadTaskShardCount,
+        'legacy_key_preserved': true,
+        'migrated_at': DateTime.now().toUtc().toIso8601String(),
+      }),
+    );
+    return directory;
+  }
+
+  Future<void> _writeUploadTaskShards(
+    Directory directory,
+    List<LocalUploadTask> tasks,
+  ) async {
+    final contents = await compute(
+      _encodeUploadTaskShardContents,
+      tasks.map((task) => task.toJson()).toList(growable: false),
+    );
+    for (var index = 0; index < _uploadTaskShardCount; index += 1) {
+      final nextContent = contents[index] ?? '[]';
+      final currentContent = await _readUploadTaskShard(directory, index);
+      if (currentContent == nextContent) {
+        continue;
+      }
+      await _writeAtomicText(
+        _uploadTaskShardFile(directory, index),
+        nextContent,
+      );
+    }
+  }
+
+  Future<List<LocalUploadTask>> _loadUploadTaskShard(
+    Directory directory,
+    int index,
+  ) async {
+    final content = await _readUploadTaskShard(directory, index);
+    if (content.isEmpty) {
+      return const [];
+    }
+    try {
+      final items = await compute(_decodeUploadTaskShardContents, <String>[
+        content,
+      ]);
+      return items.map(LocalUploadTask.fromJson).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<String> _readUploadTaskShard(Directory directory, int index) async {
+    final file = _uploadTaskShardFile(directory, index);
+    await _recoverAtomicFile(file);
+    if (!await file.exists()) {
+      return '';
+    }
+    return file.readAsString();
+  }
+
+  Future<void> _writeUploadTaskShard(
+    Directory directory,
+    int index,
+    List<LocalUploadTask> tasks,
+  ) async {
+    tasks.sort((left, right) => left.id.compareTo(right.id));
+    await _writeAtomicText(
+      _uploadTaskShardFile(directory, index),
+      jsonEncode(tasks.map((task) => task.toJson()).toList(growable: false)),
+    );
+  }
+
+  File _uploadTaskShardFile(Directory directory, int index) {
+    final name = index.toString().padLeft(2, '0');
+    return File('${directory.path}${Platform.pathSeparator}tasks-$name.json');
+  }
+
+  Future<void> _writeAtomicText(File target, String content) async {
+    await target.parent.create(recursive: true);
+    final next = File('${target.path}.next');
+    final backup = File('${target.path}.backup');
+    if (await next.exists()) {
+      await next.delete();
+    }
+    await next.writeAsString(content, flush: true);
+    if (await backup.exists()) {
+      await backup.delete();
+    }
+    if (await target.exists()) {
+      await target.rename(backup.path);
+    }
+    try {
+      await next.rename(target.path);
+      if (await backup.exists()) {
+        await backup.delete();
+      }
+    } catch (_) {
+      if (!await target.exists() && await backup.exists()) {
+        await backup.rename(target.path);
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _recoverAtomicFile(File target) async {
+    final next = File('${target.path}.next');
+    final backup = File('${target.path}.backup');
+    if (!await target.exists()) {
+      if (await next.exists()) {
+        await next.rename(target.path);
+      } else if (await backup.exists()) {
+        await backup.rename(target.path);
+      }
+    }
+    if (await target.exists() && await next.exists()) {
+      await next.delete();
+    }
+    if (await target.exists() && await backup.exists()) {
+      await backup.delete();
+    }
   }
 
   @override

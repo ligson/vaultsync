@@ -27,6 +27,8 @@ abstract interface class UploadSessionProgressReconciler {
 
 abstract interface class LocalPostUploadCleaner {
   Future<Object> cleanupUploadedTasks();
+
+  Future<LocalUploadTask> cleanupUploadedTask(LocalUploadTask task);
 }
 
 class PreparedUploadPayload {
@@ -99,10 +101,12 @@ class PreparedUploadPayload {
 class UploadExecutionResult {
   final int uploadedCount;
   final int failedCount;
+  final int removedCount;
 
   const UploadExecutionResult({
     required this.uploadedCount,
     this.failedCount = 0,
+    this.removedCount = 0,
   });
 }
 
@@ -258,7 +262,15 @@ class LocalUploadExecutor
       );
     }
     if (changedCount > 0) {
-      await uploadTasks.saveUploadTasks(updatedTasks);
+      if (uploadTasks case final IncrementalUploadTaskStore incrementalStore) {
+        for (final task in updatedTasks) {
+          if (sessionsByTaskId.containsKey(task.id)) {
+            await incrementalStore.saveUploadTask(task);
+          }
+        }
+      } else {
+        await uploadTasks.saveUploadTasks(updatedTasks);
+      }
     }
     return changedCount;
   }
@@ -283,6 +295,7 @@ class LocalUploadExecutor
     }).length;
     var uploadedCount = 0;
     var failedCount = 0;
+    var removedCount = 0;
     var processedTaskCount = 0;
     var lastErrorMessage = '';
     var lastPath = '';
@@ -390,17 +403,22 @@ class LocalUploadExecutor
             versionId: versionId,
             sourceContentHash: payload.sourceContentHash,
           );
-          updatedTasks.add(
-            _withStatus(
-              currentTask,
-              'uploaded',
-              uploadSessionId: session.id,
-              uploadPayloadHash: payloadHash,
-              uploadTotalSize: payload.length,
-              uploadChunkSize: chunkSize,
-              uploadedBytes: payload.length,
-            ),
+          currentTask = _withStatus(
+            currentTask,
+            'uploaded',
+            uploadSessionId: session.id,
+            uploadPayloadHash: payloadHash,
+            uploadTotalSize: payload.length,
+            uploadChunkSize: chunkSize,
+            uploadedBytes: payload.length,
           );
+          currentTask = await _finishUploadedTask(
+            completedTasks: updatedTasks,
+            originalTasks: tasks,
+            currentIndex: taskIndex,
+            uploadedTask: currentTask,
+          );
+          updatedTasks.add(currentTask);
           uploadedCount += 1;
           _reportProgress(
             phase: UploadProgressPhase.completing,
@@ -495,30 +513,50 @@ class LocalUploadExecutor
           versionId: completedVersion.id,
           sourceContentHash: payload.sourceContentHash,
         );
-        updatedTasks.add(
-          _withStatus(
-            currentTask,
-            'uploaded',
-            uploadSessionId: session.id,
-            uploadPayloadHash: payloadHash,
-            uploadTotalSize: payload.length,
-            uploadChunkSize: chunkSize,
-            uploadedBytes: payload.length,
-          ),
+        currentTask = _withStatus(
+          currentTask,
+          'uploaded',
+          uploadSessionId: session.id,
+          uploadPayloadHash: payloadHash,
+          uploadTotalSize: payload.length,
+          uploadChunkSize: chunkSize,
+          uploadedBytes: payload.length,
         );
+        currentTask = await _finishUploadedTask(
+          completedTasks: updatedTasks,
+          originalTasks: tasks,
+          currentIndex: taskIndex,
+          uploadedTask: currentTask,
+        );
+        updatedTasks.add(currentTask);
         await payload.cleanupAfterSuccess();
         uploadedCount += 1;
       } catch (error) {
+        if (_isMissingLocalUploadSource(currentTask, error)) {
+          removedCount += 1;
+          if (uploadTasks
+              case final IncrementalUploadTaskStore incrementalStore) {
+            await incrementalStore.removeUploadTask(currentTask.id);
+          }
+          debugPrint(
+            'VaultSync removed upload task because its local source no longer exists: '
+            '${currentTask.localPath}',
+          );
+          continue;
+        }
         failedCount += 1;
         lastErrorMessage = _uploadErrorMessage(error);
-        updatedTasks.add(
-          _withStatus(
-            currentTask,
-            'failed',
-            attempts: currentTask.attempts + 1,
-            lastError: lastErrorMessage,
-          ),
+        currentTask = _withStatus(
+          currentTask,
+          'failed',
+          attempts: currentTask.attempts + 1,
+          lastError: lastErrorMessage,
         );
+        updatedTasks.add(currentTask);
+        if (uploadTasks
+            case final IncrementalUploadTaskStore incrementalStore) {
+          await incrementalStore.saveUploadTask(currentTask);
+        }
         _reportProgress(
           phase: UploadProgressPhase.failed,
           taskIndex: processedTaskCount,
@@ -533,9 +571,8 @@ class LocalUploadExecutor
         );
       }
     }
-    await uploadTasks.saveUploadTasks(updatedTasks);
-    if (postUploadCleaner != null && uploadedCount > 0) {
-      await postUploadCleaner!.cleanupUploadedTasks();
+    if (uploadTasks is! IncrementalUploadTaskStore) {
+      await uploadTasks.saveUploadTasks(updatedTasks);
     }
     _reportProgress(
       phase: UploadProgressPhase.completed,
@@ -550,7 +587,32 @@ class LocalUploadExecutor
     return UploadExecutionResult(
       uploadedCount: uploadedCount,
       failedCount: failedCount,
+      removedCount: removedCount,
     );
+  }
+
+  bool _isMissingLocalUploadSource(LocalUploadTask task, Object error) {
+    if (task.sourceType == 'media_asset' || error is! FileSystemException) {
+      return false;
+    }
+    final errorPath = error.path;
+    if (errorPath == null || errorPath.trim().isEmpty) {
+      return false;
+    }
+    final isMissingError =
+        error is PathNotFoundException ||
+        error.osError?.errorCode == 2 ||
+        error.osError?.errorCode == 3;
+    if (!isMissingError) {
+      return false;
+    }
+    return _normalizedLocalPath(errorPath) ==
+        _normalizedLocalPath(task.localPath);
+  }
+
+  String _normalizedLocalPath(String path) {
+    final normalized = File(path).absolute.path.replaceAll('\\', '/');
+    return Platform.isWindows ? normalized.toLowerCase() : normalized;
   }
 
   bool _shouldUploadTask(LocalUploadTask task, {String? syncRootId}) {
@@ -741,12 +803,50 @@ class LocalUploadExecutor
     int currentIndex,
     LocalUploadTask currentTask,
   ) {
+    if (uploadTasks case final IncrementalUploadTaskStore incrementalStore) {
+      return incrementalStore.saveUploadTask(currentTask);
+    }
     final nextTasks = <LocalUploadTask>[
       ...completedTasks,
       currentTask,
       ...originalTasks.skip(currentIndex + 1),
     ];
     return uploadTasks.saveUploadTasks(nextTasks);
+  }
+
+  Future<LocalUploadTask> _finishUploadedTask({
+    required List<LocalUploadTask> completedTasks,
+    required List<LocalUploadTask> originalTasks,
+    required int currentIndex,
+    required LocalUploadTask uploadedTask,
+  }) async {
+    await _saveProgress(
+      completedTasks,
+      originalTasks,
+      currentIndex,
+      uploadedTask,
+    );
+    final cleaner = postUploadCleaner;
+    if (cleaner == null) {
+      return uploadedTask;
+    }
+    LocalUploadTask cleanedTask;
+    try {
+      cleanedTask = await cleaner.cleanupUploadedTask(uploadedTask);
+    } catch (_) {
+      cleanedTask = _withStatus(
+        uploadedTask,
+        'cleanup_pending',
+        lastError: '上传已完成，本地清理暂未执行，请稍后重试',
+      );
+    }
+    await _saveProgress(
+      completedTasks,
+      originalTasks,
+      currentIndex,
+      cleanedTask,
+    );
+    return cleanedTask;
   }
 
   LocalUploadTask _withStatus(

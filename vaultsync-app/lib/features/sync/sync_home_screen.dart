@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../../core/device/device_profile.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/storage/app_storage.dart';
+import '../download/remote_file_download.dart';
 import '../media_backup/media_backup_models.dart';
 import '../media_backup/media_backup_screen.dart';
 import '../media_backup/media_backup_gateway.dart';
@@ -65,6 +67,8 @@ class SyncHomeScreen extends StatefulWidget {
   final RemoteObjectDeleteGateway? remoteObjectDeletes;
   final RemoteMetadataDecrypter? remoteMetadataDecrypter;
   final RemoteFilePreviewGateway? remoteFilePreviews;
+  final RemoteFileDownloadGateway? remoteFileDownloads;
+  final RemoteFileSaveGateway remoteFileSaver;
   final bool autoSyncEnabled;
   final Duration autoSyncInterval;
   final Duration autoSyncInitialDelay;
@@ -97,6 +101,8 @@ class SyncHomeScreen extends StatefulWidget {
     this.remoteObjectDeletes,
     this.remoteMetadataDecrypter,
     this.remoteFilePreviews,
+    this.remoteFileDownloads,
+    this.remoteFileSaver = const PlatformRemoteFileSaveGateway(),
     this.autoSyncEnabled = false,
     this.autoSyncInterval = const Duration(minutes: 5),
     this.autoSyncInitialDelay = const Duration(seconds: 2),
@@ -124,6 +130,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
   final Set<String> _pendingMonitorRootIds = {};
   final Set<String> _activeScanRootIds = {};
   final Set<String> _activeUploadRootIds = {};
+  final Set<String> _activeFileDownloadIds = {};
   var _autoSyncRequestedWhileRunning = false;
   var _isScanning = false;
   var _isUploading = false;
@@ -740,13 +747,15 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         status: result.failedCount > 0 ? 'failed' : 'success',
         startedAt: startedAt,
         itemCount: result.uploadedCount,
-        message: '上传 ${result.uploadedCount} 个，失败 ${result.failedCount} 个',
+        message:
+            '上传 ${result.uploadedCount} 个，移除本地不存在任务 ${result.removedCount} 个，失败 ${result.failedCount} 个',
       );
       await _addHistory(
         type: 'upload',
         result: result.failedCount > 0 ? 'failed' : 'success',
         title: syncRootId == null ? '上传待处理任务' : '上传单个同步目录',
-        message: '已上传 ${result.uploadedCount} 个任务，失败 ${result.failedCount} 个',
+        message:
+            '已上传 ${result.uploadedCount} 个任务，移除本地不存在任务 ${result.removedCount} 个，失败 ${result.failedCount} 个',
         syncRootId: syncRootId ?? '',
       );
       if (!mounted) {
@@ -757,9 +766,14 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       final failedSuffix = result.failedCount > 0
           ? '，${result.failedCount} 个失败'
           : '';
+      final removedSuffix = result.removedCount > 0
+          ? '，已移除 ${result.removedCount} 个本地不存在任务'
+          : '';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('已上传$scope ${result.uploadedCount} 个任务$failedSuffix'),
+          content: Text(
+            '已上传$scope ${result.uploadedCount} 个任务$removedSuffix$failedSuffix',
+          ),
         ),
       );
     } catch (error) {
@@ -815,6 +829,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     final roots = await widget.syncRoots.listSyncRoots(token: token);
     var uploadedCount = 0;
     var failedCount = 0;
+    var removedCount = 0;
     for (final root in roots) {
       if (root.deviceId != currentDeviceId) {
         continue;
@@ -822,10 +837,12 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
       final result = await executor.executePendingUploads(syncRootId: root.id);
       uploadedCount += result.uploadedCount;
       failedCount += result.failedCount;
+      removedCount += result.removedCount;
     }
     return UploadExecutionResult(
       uploadedCount: uploadedCount,
       failedCount: failedCount,
+      removedCount: removedCount,
     );
   }
 
@@ -1229,6 +1246,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     var scannedCount = 0;
     var uploadedCount = 0;
     var failedCount = 0;
+    var removedUploadTaskCount = 0;
     var downloadedCount = 0;
     var remoteDeleteCount = 0;
     var blockedDeleteCount = 0;
@@ -1330,6 +1348,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         }
         uploadedCount = result.uploadedCount;
         failedCount = result.failedCount;
+        removedUploadTaskCount = result.removedCount;
         await _saveOperationStatuses(
           syncRootIds: autoUploadRootIds,
           operation: 'upload',
@@ -1337,7 +1356,8 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
           status: result.failedCount > 0 ? 'failed' : 'success',
           startedAt: startedAt,
           itemCount: uploadedCount,
-          message: '自动上传 $uploadedCount 个，失败 $failedCount 个',
+          message:
+              '自动上传 $uploadedCount 个，移除本地不存在任务 $removedUploadTaskCount 个，失败 $failedCount 个',
         );
         _activeUploadRootIds.removeAll(autoUploadRootIds);
         if (mounted) {
@@ -1393,7 +1413,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
             ? '启动后续传与拉取完成'
             : '启动后自动拉取完成',
         message:
-            '扫描 $scannedCount 个，上传 $uploadedCount 个，失败 $failedCount 个，下载 $downloadedCount 个，删除 $remoteDeleteCount 个',
+            '扫描 $scannedCount 个，上传 $uploadedCount 个，移除本地不存在任务 $removedUploadTaskCount 个，失败 $failedCount 个，下载 $downloadedCount 个，删除 $remoteDeleteCount 个',
       );
     } catch (error, stackTrace) {
       debugPrint('VaultSync auto sync failed [$currentStage]: $error');
@@ -1893,6 +1913,9 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
             onPreviewFile: widget.remoteFilePreviews == null
                 ? null
                 : (file) => _openFilePreview(file),
+            onDownloadFile: widget.remoteFileDownloads == null
+                ? null
+                : (file) => _downloadRemoteFile(file),
           ),
     ];
     return Stack(
@@ -1980,6 +2003,69 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _downloadRemoteFile(_UnifiedFileRecord file) async {
+    final backup = file.backup;
+    final downloads = widget.remoteFileDownloads;
+    if (backup == null || downloads == null || !file.canDownload) {
+      return;
+    }
+    final downloadId = '${backup.syncRootId}:${backup.versionId}';
+    if (_activeFileDownloadIds.contains(downloadId)) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('此文件正在下载，请等待完成')));
+      return;
+    }
+    var progressDialogOpen = false;
+    final rootNavigator = Navigator.of(context, rootNavigator: true);
+    try {
+      final token = await widget.storage.loadAuthToken();
+      if (token == null || token.isEmpty) {
+        throw Exception('登录状态已失效，请重新登录');
+      }
+      final target = await widget.remoteFileSaver.chooseTarget(
+        fileName: backup.name,
+        platform: _devicePlatform,
+      );
+      if (target == null || !mounted) {
+        return;
+      }
+      _activeFileDownloadIds.add(downloadId);
+      progressDialogOpen = true;
+      unawaited(
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => _FileDownloadProgressDialog(fileName: backup.name),
+        ).whenComplete(() {
+          progressDialogOpen = false;
+        }),
+      );
+      final data = await downloads.load(token: token, entry: backup);
+      await widget.remoteFileSaver.write(target: target, bytes: data.bytes);
+      if (progressDialogOpen && rootNavigator.mounted) {
+        rootNavigator.pop();
+        progressDialogOpen = false;
+      }
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('下载完成：${target.displayPath}')));
+    } catch (error) {
+      if (progressDialogOpen && rootNavigator.mounted) {
+        rootNavigator.pop();
+        progressDialogOpen = false;
+      }
+      if (mounted) {
+        _showErrorSnackBar(error);
+      }
+    } finally {
+      _activeFileDownloadIds.remove(downloadId);
+    }
   }
 
   Future<void> _markIssueResolved(String issueId) async {
@@ -2273,6 +2359,35 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
     String cleanupPolicy,
   ) async {
     try {
+      final retainedCount = rootView.tasks
+          .where((task) => task.status == 'clean')
+          .length;
+      if (cleanupPolicy == 'delete' &&
+          rootView.root.cleanupPolicy != 'delete' &&
+          retainedCount > 0) {
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('确认删除已备份的本地文件'),
+            content: Text(
+              '该目录已有 $retainedCount 个文件上传后保留在本地。确认后，这些文件也会按新策略进入清理队列；文件内容变化或删除权限不足时不会强行删除。',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('暂不处理'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('确认并清理'),
+              ),
+            ],
+          ),
+        );
+        if (confirmed != true || !mounted) {
+          return;
+        }
+      }
       final token = await widget.storage.loadAuthToken();
       if (token == null || token.isEmpty) {
         throw Exception('登录状态已失效');
@@ -2300,6 +2415,9 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         return;
       }
       _reloadSyncRoots();
+      if (cleanupPolicy == 'delete' && retainedCount > 0) {
+        await _retryCleanupPending();
+      }
     } catch (error) {
       if (!mounted) {
         return;
@@ -2441,6 +2559,36 @@ bool _sameUploadTasks(List<LocalUploadTask> left, List<LocalUploadTask> right) {
   return true;
 }
 
+class _FileDownloadProgressDialog extends StatelessWidget {
+  final String fileName;
+
+  const _FileDownloadProgressDialog({required this.fileName});
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('正在下载'),
+      content: Row(
+        children: [
+          const SizedBox(
+            width: 24,
+            height: 24,
+            child: CircularProgressIndicator(strokeWidth: 2.5),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Text(
+              '$fileName\n正在安全下载、解密并保存...',
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _SyncHomeData {
   final List<SyncRoot> roots;
   final List<LocalSyncRootMapping> mappings;
@@ -2505,26 +2653,36 @@ class _SyncHomeData {
   }
 
   int get cleanupPendingTaskCount {
-    return uploadTasks.where((task) => task.status == 'cleanup_pending').length;
+    return rootViews.fold(
+      0,
+      (total, rootView) =>
+          total +
+          rootView.tasks
+              .where(
+                (task) =>
+                    _taskNeedsLocalCleanup(task, rootView.root.cleanupPolicy),
+              )
+              .length,
+    );
   }
 
   int get fileCleanupPendingTaskCount {
-    return uploadTasks
-        .where(
-          (task) =>
-              task.status == 'cleanup_pending' &&
-              task.sourceType != 'media_asset',
-        )
-        .length;
+    return rootViews.fold(
+      0,
+      (total, rootView) =>
+          total +
+          rootView.tasks
+              .where(
+                (task) =>
+                    _taskNeedsLocalCleanup(task, rootView.root.cleanupPolicy) &&
+                    task.sourceType != 'media_asset',
+              )
+              .length,
+    );
   }
 
   int get activeTaskCount {
-    return uploadTasks
-        .where(
-          (task) =>
-              task.status == 'pending' || task.status == 'cleanup_pending',
-        )
-        .length;
+    return pendingTaskCount + cleanupPendingTaskCount;
   }
 
   int get backedUpDeletedLocalCount {
@@ -4049,7 +4207,61 @@ class _AutoSyncStatusLine extends StatelessWidget {
   }
 }
 
-class _FailedUploadTaskList extends StatelessWidget {
+const _statusListPageSize = 40;
+final _epochDateTime = DateTime.fromMillisecondsSinceEpoch(0);
+
+class _StatusListPager extends StatelessWidget {
+  final String keyPrefix;
+  final int page;
+  final int pageCount;
+  final VoidCallback onPrevious;
+  final VoidCallback onNext;
+
+  const _StatusListPager({
+    required this.keyPrefix,
+    required this.page,
+    required this.pageCount,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (pageCount <= 1) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          IconButton(
+            key: ValueKey('${keyPrefix}_previous'),
+            tooltip: '上一页',
+            onPressed: page == 0 ? null : onPrevious,
+            icon: const Icon(Icons.chevron_left),
+          ),
+          SizedBox(
+            width: 88,
+            child: Text(
+              '第 ${page + 1} / $pageCount 页',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+          IconButton(
+            key: ValueKey('${keyPrefix}_next'),
+            tooltip: '下一页',
+            onPressed: page >= pageCount - 1 ? null : onNext,
+            icon: const Icon(Icons.chevron_right),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FailedUploadTaskList extends StatefulWidget {
   final _SyncHomeData data;
   final bool retryEnabled;
   final ValueChanged<String> onRetryRoot;
@@ -4061,9 +4273,16 @@ class _FailedUploadTaskList extends StatelessWidget {
   });
 
   @override
+  State<_FailedUploadTaskList> createState() => _FailedUploadTaskListState();
+}
+
+class _FailedUploadTaskListState extends State<_FailedUploadTaskList> {
+  var _page = 0;
+
+  @override
   Widget build(BuildContext context) {
     final failedItems = <({String rootName, LocalUploadTask task})>[
-      for (final rootView in data.rootViews)
+      for (final rootView in widget.data.rootViews)
         for (final task in rootView.tasks)
           if (task.status == 'failed')
             (rootName: rootView.displayName, task: task),
@@ -4071,6 +4290,13 @@ class _FailedUploadTaskList extends StatelessWidget {
     if (failedItems.isEmpty) {
       return const _StatusEmptyState();
     }
+    final pageCount = (failedItems.length / _statusListPageSize).ceil();
+    final page = _page.clamp(0, pageCount - 1);
+    final start = page * _statusListPageSize;
+    final pageItems = failedItems.sublist(
+      start,
+      math.min(start + _statusListPageSize, failedItems.length),
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -4081,8 +4307,9 @@ class _FailedUploadTaskList extends StatelessWidget {
             style: Theme.of(context).textTheme.titleMedium,
           ),
         ),
-        for (final item in failedItems)
+        for (final item in pageItems)
           Card(
+            key: ValueKey('failed_upload_task_${item.task.id}'),
             margin: const EdgeInsets.symmetric(vertical: 4),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(8),
@@ -4099,20 +4326,27 @@ class _FailedUploadTaskList extends StatelessWidget {
                 ].join(' · '),
               ),
               trailing: TextButton.icon(
-                onPressed: retryEnabled
-                    ? () => onRetryRoot(item.task.syncRootId)
+                onPressed: widget.retryEnabled
+                    ? () => widget.onRetryRoot(item.task.syncRootId)
                     : null,
                 icon: const Icon(Icons.refresh),
                 label: const Text('重试此目录'),
               ),
             ),
           ),
+        _StatusListPager(
+          keyPrefix: 'failed_uploads',
+          page: page,
+          pageCount: pageCount,
+          onPrevious: () => setState(() => _page = page - 1),
+          onNext: () => setState(() => _page = page + 1),
+        ),
       ],
     );
   }
 }
 
-class _CleanupPendingTaskList extends StatelessWidget {
+class _CleanupPendingTaskList extends StatefulWidget {
   final _SyncHomeData data;
   final VoidCallback onOpenMediaCleanupPage;
   final VoidCallback? onRetryCleanup;
@@ -4128,24 +4362,41 @@ class _CleanupPendingTaskList extends StatelessWidget {
   });
 
   @override
+  State<_CleanupPendingTaskList> createState() =>
+      _CleanupPendingTaskListState();
+}
+
+class _CleanupPendingTaskListState extends State<_CleanupPendingTaskList> {
+  var _page = 0;
+
+  @override
   Widget build(BuildContext context) {
     final mediaCleanupItems = <({String rootName, LocalUploadTask task})>[
-      for (final rootView in data.rootViews)
+      for (final rootView in widget.data.rootViews)
         for (final task in rootView.tasks)
-          if (task.status == 'cleanup_pending' &&
+          if (_taskNeedsLocalCleanup(task, rootView.root.cleanupPolicy) &&
               task.sourceType == 'media_asset')
             (rootName: rootView.displayName, task: task),
     ];
     final fileCleanupItems = <({String rootName, LocalUploadTask task})>[
-      for (final rootView in data.rootViews)
+      for (final rootView in widget.data.rootViews)
         for (final task in rootView.tasks)
-          if (task.status == 'cleanup_pending' &&
+          if (_taskNeedsLocalCleanup(task, rootView.root.cleanupPolicy) &&
               task.sourceType != 'media_asset')
             (rootName: rootView.displayName, task: task),
     ];
     if (mediaCleanupItems.isEmpty && fileCleanupItems.isEmpty) {
       return const SizedBox.shrink();
     }
+    final pageCount = (fileCleanupItems.length / _statusListPageSize).ceil();
+    final page = pageCount == 0 ? 0 : _page.clamp(0, pageCount - 1);
+    final start = page * _statusListPageSize;
+    final pageItems = fileCleanupItems.isEmpty
+        ? const <({String rootName, LocalUploadTask task})>[]
+        : fileCleanupItems.sublist(
+            start,
+            math.min(start + _statusListPageSize, fileCleanupItems.length),
+          );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -4162,7 +4413,7 @@ class _CleanupPendingTaskList extends StatelessWidget {
                 ),
                 TextButton.icon(
                   key: const ValueKey('open_media_cleanup_page_button'),
-                  onPressed: onOpenMediaCleanupPage,
+                  onPressed: widget.onOpenMediaCleanupPage,
                   icon: const Icon(Icons.photo_library_outlined),
                   label: const Text('查看待清理照片和视频'),
                 ),
@@ -4182,15 +4433,16 @@ class _CleanupPendingTaskList extends StatelessWidget {
                 ),
                 TextButton.icon(
                   key: const ValueKey('retry_cleanup_pending_list_button'),
-                  onPressed: onRetryCleanup,
+                  onPressed: widget.onRetryCleanup,
                   icon: const Icon(Icons.refresh),
                   label: const Text('重试清理'),
                 ),
               ],
             ),
           ),
-        for (final item in fileCleanupItems)
+        for (final item in pageItems)
           Card(
+            key: ValueKey('cleanup_pending_task_${item.task.id}'),
             margin: const EdgeInsets.symmetric(vertical: 4),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(8),
@@ -4214,26 +4466,33 @@ class _CleanupPendingTaskList extends StatelessWidget {
                 onSelected: (action) {
                   switch (action) {
                     case _CleanupTaskAction.retry:
-                      onRetryOne?.call(item.task.id);
+                      widget.onRetryOne?.call(item.task.id);
                     case _CleanupTaskAction.ignore:
-                      onIgnoreOne?.call(item.task.id);
+                      widget.onIgnoreOne?.call(item.task.id);
                   }
                 },
                 itemBuilder: (context) => [
                   PopupMenuItem(
                     value: _CleanupTaskAction.retry,
-                    enabled: onRetryOne != null,
+                    enabled: widget.onRetryOne != null,
                     child: const Text('重试此项'),
                   ),
                   PopupMenuItem(
                     value: _CleanupTaskAction.ignore,
-                    enabled: onIgnoreOne != null,
+                    enabled: widget.onIgnoreOne != null,
                     child: const Text('忽略此项'),
                   ),
                 ],
               ),
             ),
           ),
+        _StatusListPager(
+          keyPrefix: 'cleanup_pending',
+          page: page,
+          pageCount: pageCount,
+          onPrevious: () => setState(() => _page = page - 1),
+          onNext: () => setState(() => _page = page + 1),
+        ),
       ],
     );
   }
@@ -4278,6 +4537,7 @@ class _MediaCleanupConfirmationPageState
   final Set<String> _completedTaskIds = {};
   final Set<String> _ignoredTaskIds = {};
   var _isConfirming = false;
+  var _page = 0;
 
   List<({String rootName, LocalUploadTask task})> get _mediaCleanupItems {
     return [
@@ -4387,6 +4647,15 @@ class _MediaCleanupConfirmationPageState
   @override
   Widget build(BuildContext context) {
     final items = _mediaCleanupItems;
+    final pageCount = (items.length / _statusListPageSize).ceil();
+    final page = pageCount == 0 ? 0 : _page.clamp(0, pageCount - 1);
+    final start = page * _statusListPageSize;
+    final pageItems = items.isEmpty
+        ? const <({String rootName, LocalUploadTask task})>[]
+        : items.sublist(
+            start,
+            math.min(start + _statusListPageSize, items.length),
+          );
     final selectedCount = _selectedTaskIds.length;
     return Scaffold(
       appBar: AppBar(title: const Text('待清理照片和视频')),
@@ -4414,7 +4683,7 @@ class _MediaCleanupConfirmationPageState
               child: Center(child: Text('暂无待清理照片和视频')),
             )
           else
-            for (final item in items)
+            for (final item in pageItems)
               Card(
                 key: ValueKey('media_cleanup_select_${item.task.id}'),
                 margin: const EdgeInsets.symmetric(vertical: 4),
@@ -4453,6 +4722,13 @@ class _MediaCleanupConfirmationPageState
                         ),
                 ),
               ),
+          _StatusListPager(
+            keyPrefix: 'media_cleanup',
+            page: page,
+            pageCount: pageCount,
+            onPrevious: () => setState(() => _page = page - 1),
+            onNext: () => setState(() => _page = page + 1),
+          ),
         ],
       ),
       bottomNavigationBar: SafeArea(
@@ -4478,7 +4754,7 @@ class _MediaCleanupConfirmationPageState
   }
 }
 
-class _OpenSyncIssueList extends StatelessWidget {
+class _OpenSyncIssueList extends StatefulWidget {
   final _SyncHomeData data;
   final bool batchEnabled;
   final ValueChanged<LocalSyncIssue> onOpenIssue;
@@ -4494,14 +4770,28 @@ class _OpenSyncIssueList extends StatelessWidget {
   });
 
   @override
+  State<_OpenSyncIssueList> createState() => _OpenSyncIssueListState();
+}
+
+class _OpenSyncIssueListState extends State<_OpenSyncIssueList> {
+  var _page = 0;
+
+  @override
   Widget build(BuildContext context) {
-    final issues = data.openIssues;
+    final issues = widget.data.openIssues;
     if (issues.isEmpty) {
       return const SizedBox.shrink();
     }
     final conflictCount = issues
         .where((issue) => issue.type == 'download_conflict')
         .length;
+    final pageCount = (issues.length / _statusListPageSize).ceil();
+    final page = _page.clamp(0, pageCount - 1);
+    final start = page * _statusListPageSize;
+    final pageIssues = issues.sublist(
+      start,
+      math.min(start + _statusListPageSize, issues.length),
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -4532,13 +4822,17 @@ class _OpenSyncIssueList extends StatelessWidget {
               children: [
                 FilledButton.icon(
                   key: const ValueKey('enqueue_all_conflicts_button'),
-                  onPressed: batchEnabled ? onEnqueueAllConflicts : null,
+                  onPressed: widget.batchEnabled
+                      ? widget.onEnqueueAllConflicts
+                      : null,
                   icon: const Icon(Icons.cloud_upload_outlined),
                   label: const Text('全部上传冲突副本'),
                 ),
                 OutlinedButton.icon(
                   key: const ValueKey('resolve_all_conflicts_button'),
-                  onPressed: batchEnabled ? onResolveAllConflicts : null,
+                  onPressed: widget.batchEnabled
+                      ? widget.onResolveAllConflicts
+                      : null,
                   icon: const Icon(Icons.check_circle_outline),
                   label: const Text('全部关闭冲突提醒'),
                 ),
@@ -4546,7 +4840,7 @@ class _OpenSyncIssueList extends StatelessWidget {
             ),
           ),
         ],
-        for (final issue in issues)
+        for (final issue in pageIssues)
           Card(
             margin: const EdgeInsets.symmetric(vertical: 4),
             shape: RoundedRectangleBorder(
@@ -4564,9 +4858,16 @@ class _OpenSyncIssueList extends StatelessWidget {
                 ].join(' · '),
               ),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () => onOpenIssue(issue),
+              onTap: () => widget.onOpenIssue(issue),
             ),
           ),
+        _StatusListPager(
+          keyPrefix: 'sync_issues',
+          page: page,
+          pageCount: pageCount,
+          onPrevious: () => setState(() => _page = page - 1),
+          onNext: () => setState(() => _page = page + 1),
+        ),
       ],
     );
   }
@@ -4796,6 +5097,7 @@ class _SyncRootPanel extends StatelessWidget {
   final ValueChanged<_UnifiedFileRecord>? onDeleteFile;
   final ValueChanged<String>? onDeleteFolder;
   final ValueChanged<_UnifiedFileRecord>? onPreviewFile;
+  final ValueChanged<_UnifiedFileRecord>? onDownloadFile;
 
   const _SyncRootPanel({
     required this.rootView,
@@ -4808,6 +5110,7 @@ class _SyncRootPanel extends StatelessWidget {
     required this.onDeleteFile,
     required this.onDeleteFolder,
     required this.onPreviewFile,
+    required this.onDownloadFile,
   });
 
   @override
@@ -4967,6 +5270,7 @@ class _SyncRootPanel extends StatelessWidget {
               onDeleteFile: onDeleteFile,
               onDeleteFolder: onDeleteFolder,
               onPreviewFile: onPreviewFile,
+              onDownloadFile: onDownloadFile,
             ),
         ],
       ),
@@ -5085,12 +5389,14 @@ class _UnifiedFileTree extends StatefulWidget {
   final ValueChanged<_UnifiedFileRecord>? onDeleteFile;
   final ValueChanged<String>? onDeleteFolder;
   final ValueChanged<_UnifiedFileRecord>? onPreviewFile;
+  final ValueChanged<_UnifiedFileRecord>? onDownloadFile;
 
   const _UnifiedFileTree({
     required this.rootView,
     required this.onDeleteFile,
     required this.onDeleteFolder,
     required this.onPreviewFile,
+    required this.onDownloadFile,
   });
 
   @override
@@ -5100,71 +5406,228 @@ class _UnifiedFileTree extends StatefulWidget {
 class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
   static const _entryBatchSize = 150;
 
-  final _expandedFolders = <String>{};
+  final _queryController = TextEditingController();
   var _visibleEntryLimit = _entryBatchSize;
+  var _viewMode = _FileViewMode.list;
+  var _sortMode = _FileSortMode.name;
+  var _query = '';
+  var _currentDirectory = '';
 
-  void _toggleFolder(String path) {
+  @override
+  void dispose() {
+    _queryController.dispose();
+    super.dispose();
+  }
+
+  void _openDirectory(String path) {
     setState(() {
-      if (!_expandedFolders.add(path)) {
-        _expandedFolders.remove(path);
-      }
+      _currentDirectory = path;
+      _query = '';
+      _queryController.clear();
+      _visibleEntryLimit = _entryBatchSize;
     });
   }
 
-  bool _isVisible(_UnifiedTreeEntry entry) {
-    if (entry.depth == 0) {
-      return true;
+  void _navigateToRoot() => _openDirectory('');
+
+  void _navigateUp() {
+    final parts = _pathParts(_currentDirectory);
+    if (parts.isEmpty) {
+      return;
     }
-    final parts = _pathParts(entry.path);
-    for (var index = 0; index < parts.length - 1; index += 1) {
-      final parentPath = parts.take(index + 1).join('/');
-      if (!_expandedFolders.contains(parentPath)) {
-        return false;
+    _openDirectory(parts.take(parts.length - 1).join('/'));
+  }
+
+  List<_UnifiedFileRecord> _filteredSortedFiles() {
+    final query = _query.trim().toLowerCase();
+    final files = widget.rootView.fileEntries.where((file) {
+      if (query.isEmpty) {
+        return true;
       }
+      return file.path.toLowerCase().contains(query);
+    }).toList();
+    files.sort((left, right) {
+      final result = switch (_sortMode) {
+        _FileSortMode.name => left.path.compareTo(right.path),
+        _FileSortMode.size =>
+          (right.backup?.sizeBytes ?? right.task?.sizeBytes ?? 0).compareTo(
+            left.backup?.sizeBytes ?? left.task?.sizeBytes ?? 0,
+          ),
+        _FileSortMode.updated => _fileUpdatedAt(
+          right,
+        ).compareTo(_fileUpdatedAt(left)),
+        _FileSortMode.status =>
+          widget.rootView
+              .fileStatusLabel(left)
+              .compareTo(widget.rootView.fileStatusLabel(right)),
+      };
+      return result == 0 ? left.path.compareTo(right.path) : result;
+    });
+    return files;
+  }
+
+  DateTime _fileUpdatedAt(_UnifiedFileRecord file) {
+    return _unifiedFileUpdatedAt(file);
+  }
+
+  List<_UnifiedTreeEntry> _directoryEntries(
+    List<_UnifiedFileRecord> files,
+    _UnifiedFolderSummaries folderSummaries,
+  ) {
+    if (_query.trim().isNotEmpty) {
+      return [
+        for (final file in files)
+          _UnifiedFileEntry(
+            name: _pathParts(file.path).last,
+            path: file.path,
+            depth: 0,
+            file: file,
+          ),
+      ];
     }
-    return true;
+    final currentParts = _pathParts(_currentDirectory);
+    final folders = <String, _UnifiedFolderEntry>{};
+    final directFiles = <_UnifiedFileEntry>[];
+    for (final file in files) {
+      final parts = _pathParts(file.path);
+      if (parts.length <= currentParts.length ||
+          !_hasPathPrefix(parts, currentParts)) {
+        continue;
+      }
+      final remainder = parts.sublist(currentParts.length);
+      if (remainder.length == 1) {
+        directFiles.add(
+          _UnifiedFileEntry(
+            name: remainder.first,
+            path: file.path,
+            depth: 0,
+            file: file,
+          ),
+        );
+        continue;
+      }
+      final folderPath = [...currentParts, remainder.first].join('/');
+      folders.putIfAbsent(
+        folderPath,
+        () => _UnifiedFolderEntry(
+          name: remainder.first,
+          path: folderPath,
+          depth: 0,
+        ),
+      );
+    }
+    final entries = <_UnifiedTreeEntry>[...folders.values, ...directFiles];
+    entries.sort((left, right) {
+      final leftFolder = left is _UnifiedFolderEntry;
+      final rightFolder = right is _UnifiedFolderEntry;
+      if (leftFolder != rightFolder) {
+        return leftFolder ? -1 : 1;
+      }
+      final result = switch (_sortMode) {
+        _FileSortMode.name => left.name.compareTo(right.name),
+        _FileSortMode.size => _entrySize(
+          right,
+          folderSummaries,
+        ).compareTo(_entrySize(left, folderSummaries)),
+        _FileSortMode.updated => _entryUpdatedAt(
+          right,
+          folderSummaries,
+        ).compareTo(_entryUpdatedAt(left, folderSummaries)),
+        _FileSortMode.status => _entryStatus(
+          left,
+          folderSummaries,
+        ).compareTo(_entryStatus(right, folderSummaries)),
+      };
+      return result == 0 ? left.path.compareTo(right.path) : result;
+    });
+    return entries;
+  }
+
+  int _entrySize(
+    _UnifiedTreeEntry entry,
+    _UnifiedFolderSummaries folderSummaries,
+  ) {
+    if (entry case _UnifiedFolderEntry()) {
+      return folderSummaries.byPath[entry.path]?.sizeBytes ?? 0;
+    }
+    final file = (entry as _UnifiedFileEntry).file;
+    return file.backup?.sizeBytes ?? file.task?.sizeBytes ?? 0;
+  }
+
+  String _entryStatus(
+    _UnifiedTreeEntry entry,
+    _UnifiedFolderSummaries folderSummaries,
+  ) {
+    if (entry case _UnifiedFolderEntry()) {
+      return folderSummaries.byPath[entry.path]?.statusLabel ?? '';
+    }
+    return widget.rootView.fileStatusLabel((entry as _UnifiedFileEntry).file);
+  }
+
+  DateTime _entryUpdatedAt(
+    _UnifiedTreeEntry entry,
+    _UnifiedFolderSummaries folderSummaries,
+  ) {
+    if (entry case _UnifiedFolderEntry()) {
+      return folderSummaries.byPath[entry.path]?.updatedAt ?? _epochDateTime;
+    }
+    return _fileUpdatedAt((entry as _UnifiedFileEntry).file);
   }
 
   @override
   Widget build(BuildContext context) {
+    final files = _filteredSortedFiles();
     final folderSummaries = _UnifiedFolderSummaries.fromFiles(
-      widget.rootView.fileEntries,
+      files,
       widget.rootView,
     );
-    final allVisibleEntries = [
-      for (final entry in _UnifiedTreeEntry.fromFiles(
-        widget.rootView.fileEntries,
-      ))
-        if (_isVisible(entry)) entry,
-    ];
+    final allVisibleEntries = _directoryEntries(files, folderSummaries);
     final visibleEntries = allVisibleEntries
         .take(_visibleEntryLimit)
         .toList(growable: false);
     final hiddenCount = allVisibleEntries.length - visibleEntries.length;
     return Column(
       children: [
-        for (final entry in visibleEntries)
-          switch (entry) {
-            _UnifiedFolderEntry() => _UnifiedFolderRow(
-              entry: entry,
-              summary: folderSummaries.byPath[entry.path]!,
-              expanded: _expandedFolders.contains(entry.path),
-              onToggle: () => _toggleFolder(entry.path),
-              onDelete: widget.onDeleteFolder == null
-                  ? null
-                  : () => widget.onDeleteFolder?.call(entry.path),
-            ),
-            _UnifiedFileEntry() => _UnifiedFileRow(
-              entry: entry,
-              statusLabel: widget.rootView.fileStatusLabel(entry.file),
-              onPreview: entry.file.canPreview && widget.onPreviewFile != null
-                  ? () => widget.onPreviewFile?.call(entry.file)
-                  : null,
-              onDelete: widget.onDeleteFile == null
-                  ? null
-                  : () => widget.onDeleteFile?.call(entry.file),
-            ),
+        _DirectoryBreadcrumbs(
+          rootName: widget.rootView.displayName,
+          currentPath: _currentDirectory,
+          isSearching: _query.trim().isNotEmpty,
+          onRoot: _navigateToRoot,
+          onUp: _navigateUp,
+          onSegment: _openDirectory,
+        ),
+        _FileTreeToolbar(
+          viewMode: _viewMode,
+          sortMode: _sortMode,
+          query: _query,
+          queryController: _queryController,
+          fileCount: files.length,
+          onQueryChanged: (query) {
+            setState(() {
+              _query = query;
+              _visibleEntryLimit = _entryBatchSize;
+            });
           },
+          onViewModeChanged: (mode) {
+            setState(() {
+              _viewMode = mode;
+              _visibleEntryLimit = _entryBatchSize;
+            });
+          },
+          onSortModeChanged: (mode) {
+            setState(() {
+              _sortMode = mode;
+              _visibleEntryLimit = _entryBatchSize;
+            });
+          },
+        ),
+        if (_viewMode == _FileViewMode.grid)
+          _buildGridEntries(visibleEntries, folderSummaries)
+        else if (_viewMode == _FileViewMode.details)
+          _buildDetailsEntries(visibleEntries, folderSummaries)
+        else
+          for (final entry in visibleEntries)
+            _buildListEntry(entry, folderSummaries),
         if (hiddenCount > 0)
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -5184,7 +5647,134 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
       ],
     );
   }
+
+  Widget _buildListEntry(
+    _UnifiedTreeEntry entry,
+    _UnifiedFolderSummaries folderSummaries,
+  ) {
+    return switch (entry) {
+      _UnifiedFolderEntry() => _UnifiedFolderRow(
+        entry: entry,
+        summary: folderSummaries.byPath[entry.path]!,
+        expanded: false,
+        onToggle: () => _openDirectory(entry.path),
+        onDelete: widget.onDeleteFolder == null
+            ? null
+            : () => widget.onDeleteFolder?.call(entry.path),
+      ),
+      _UnifiedFileEntry() => _UnifiedFileRow(
+        entry: entry,
+        statusLabel: widget.rootView.fileStatusLabel(entry.file),
+        onPreview: entry.file.canPreview && widget.onPreviewFile != null
+            ? () => widget.onPreviewFile?.call(entry.file)
+            : null,
+        onDownload: entry.file.canDownload && widget.onDownloadFile != null
+            ? () => widget.onDownloadFile?.call(entry.file)
+            : null,
+        onDelete: widget.onDeleteFile == null
+            ? null
+            : () => widget.onDeleteFile?.call(entry.file),
+      ),
+    };
+  }
+
+  Widget _buildDetailsEntries(
+    List<_UnifiedTreeEntry> entries,
+    _UnifiedFolderSummaries folderSummaries,
+  ) {
+    return Column(
+      children: [
+        const _DetailsHeader(),
+        for (final entry in entries)
+          switch (entry) {
+            _UnifiedFolderEntry() => _UnifiedDetailsFolderRow(
+              entry: entry,
+              summary: folderSummaries.byPath[entry.path]!,
+              expanded: false,
+              onToggle: () => _openDirectory(entry.path),
+              onDelete: widget.onDeleteFolder == null
+                  ? null
+                  : () => widget.onDeleteFolder?.call(entry.path),
+            ),
+            _UnifiedFileEntry() => _UnifiedDetailsFileRow(
+              entry: entry,
+              statusLabel: widget.rootView.fileStatusLabel(entry.file),
+              onPreview: entry.file.canPreview && widget.onPreviewFile != null
+                  ? () => widget.onPreviewFile?.call(entry.file)
+                  : null,
+              onDownload:
+                  entry.file.canDownload && widget.onDownloadFile != null
+                  ? () => widget.onDownloadFile?.call(entry.file)
+                  : null,
+              onDelete: widget.onDeleteFile == null
+                  ? null
+                  : () => widget.onDeleteFile?.call(entry.file),
+            ),
+          },
+      ],
+    );
+  }
+
+  Widget _buildGridEntries(
+    List<_UnifiedTreeEntry> entries,
+    _UnifiedFolderSummaries folderSummaries,
+  ) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final tileWidth = width >= 760
+            ? 176.0
+            : width >= 500
+            ? 150.0
+            : ((width - 12) / 2).clamp(132.0, 220.0);
+        return Align(
+          alignment: Alignment.centerLeft,
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final entry in entries)
+                SizedBox(
+                  width: tileWidth,
+                  child: switch (entry) {
+                    _UnifiedFolderEntry() => _UnifiedGridFolderTile(
+                      entry: entry,
+                      summary: folderSummaries.byPath[entry.path]!,
+                      expanded: false,
+                      onToggle: () => _openDirectory(entry.path),
+                      onDelete: widget.onDeleteFolder == null
+                          ? null
+                          : () => widget.onDeleteFolder?.call(entry.path),
+                    ),
+                    _UnifiedFileEntry() => _UnifiedGridFileTile(
+                      entry: entry,
+                      statusLabel: widget.rootView.fileStatusLabel(entry.file),
+                      onPreview:
+                          entry.file.canPreview && widget.onPreviewFile != null
+                          ? () => widget.onPreviewFile?.call(entry.file)
+                          : null,
+                      onDownload:
+                          entry.file.canDownload &&
+                              widget.onDownloadFile != null
+                          ? () => widget.onDownloadFile?.call(entry.file)
+                          : null,
+                      onDelete: widget.onDeleteFile == null
+                          ? null
+                          : () => widget.onDeleteFile?.call(entry.file),
+                    ),
+                  },
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 }
+
+enum _FileViewMode { list, details, grid }
+
+enum _FileSortMode { name, updated, size, status }
 
 sealed class _UnifiedTreeEntry {
   final String name;
@@ -5196,36 +5786,237 @@ sealed class _UnifiedTreeEntry {
     required this.path,
     required this.depth,
   });
+}
 
-  static List<_UnifiedTreeEntry> fromFiles(List<_UnifiedFileRecord> files) {
-    final sorted = [...files]
-      ..sort((left, right) => left.path.compareTo(right.path));
-    final treeEntries = <_UnifiedTreeEntry>[];
-    final seenFolders = <String>{};
-    for (final file in sorted) {
-      final parts = _pathParts(file.path);
-      if (parts.isEmpty) {
-        continue;
-      }
-      for (var index = 0; index < parts.length - 1; index += 1) {
-        final path = parts.take(index + 1).join('/');
-        if (!seenFolders.add(path)) {
-          continue;
-        }
-        treeEntries.add(
-          _UnifiedFolderEntry(name: parts[index], path: path, depth: index),
+class _FileTreeToolbar extends StatelessWidget {
+  final _FileViewMode viewMode;
+  final _FileSortMode sortMode;
+  final String query;
+  final TextEditingController queryController;
+  final int fileCount;
+  final ValueChanged<String> onQueryChanged;
+  final ValueChanged<_FileViewMode> onViewModeChanged;
+  final ValueChanged<_FileSortMode> onSortModeChanged;
+
+  const _FileTreeToolbar({
+    required this.viewMode,
+    required this.sortMode,
+    required this.query,
+    required this.queryController,
+    required this.fileCount,
+    required this.onQueryChanged,
+    required this.onViewModeChanged,
+    required this.onSortModeChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final searchWidth = constraints.maxWidth < 420
+            ? constraints.maxWidth
+            : 280.0;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: searchWidth,
+                child: TextField(
+                  key: const ValueKey('file_tree_search_field'),
+                  onChanged: onQueryChanged,
+                  controller: queryController,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.search, size: 20),
+                    hintText: '搜索文件名或路径',
+                    suffixIcon: query.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: '清除搜索',
+                            onPressed: () {
+                              queryController.clear();
+                              onQueryChanged('');
+                            },
+                            icon: const Icon(Icons.clear, size: 18),
+                          ),
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+              ),
+              SegmentedButton<_FileViewMode>(
+                key: const ValueKey('file_tree_view_mode_button'),
+                segments: const [
+                  ButtonSegment(
+                    value: _FileViewMode.list,
+                    icon: Icon(Icons.view_list_outlined),
+                    label: Text('列表'),
+                  ),
+                  ButtonSegment(
+                    value: _FileViewMode.details,
+                    icon: Icon(Icons.view_agenda_outlined),
+                    label: Text('详细'),
+                  ),
+                  ButtonSegment(
+                    value: _FileViewMode.grid,
+                    icon: Icon(Icons.grid_view_outlined),
+                    label: Text('图标'),
+                  ),
+                ],
+                selected: {viewMode},
+                showSelectedIcon: false,
+                onSelectionChanged: (selection) {
+                  onViewModeChanged(selection.first);
+                },
+              ),
+              PopupMenuButton<_FileSortMode>(
+                key: const ValueKey('file_tree_sort_button'),
+                tooltip: '排序文件',
+                icon: const Icon(Icons.sort),
+                onSelected: onSortModeChanged,
+                itemBuilder: (context) => [
+                  _sortItem(_FileSortMode.name, '名称', Icons.sort_by_alpha),
+                  _sortItem(
+                    _FileSortMode.updated,
+                    '修改时间',
+                    Icons.schedule_outlined,
+                  ),
+                  _sortItem(_FileSortMode.size, '大小', Icons.data_usage),
+                  _sortItem(_FileSortMode.status, '同步状态', Icons.sync),
+                ],
+              ),
+              Text(
+                '$fileCount 个文件',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
         );
-      }
-      treeEntries.add(
-        _UnifiedFileEntry(
-          name: parts.last,
-          path: parts.join('/'),
-          depth: parts.length - 1,
-          file: file,
+      },
+    );
+  }
+
+  PopupMenuItem<_FileSortMode> _sortItem(
+    _FileSortMode value,
+    String label,
+    IconData icon,
+  ) {
+    return PopupMenuItem(
+      value: value,
+      child: ListTile(
+        dense: true,
+        leading: Icon(icon),
+        title: Text(label),
+        trailing: sortMode == value ? const Icon(Icons.check, size: 18) : null,
+      ),
+    );
+  }
+}
+
+class _DirectoryBreadcrumbs extends StatelessWidget {
+  final String rootName;
+  final String currentPath;
+  final bool isSearching;
+  final VoidCallback onRoot;
+  final VoidCallback onUp;
+  final ValueChanged<String> onSegment;
+
+  const _DirectoryBreadcrumbs({
+    required this.rootName,
+    required this.currentPath,
+    required this.isSearching,
+    required this.onRoot,
+    required this.onUp,
+    required this.onSegment,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = _pathParts(currentPath);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+      child: SizedBox(
+        height: 40,
+        child: Row(
+          children: [
+            if (parts.isNotEmpty && !isSearching)
+              IconButton(
+                key: const ValueKey('file_tree_up_button'),
+                tooltip: '返回上级目录',
+                onPressed: onUp,
+                icon: const Icon(Icons.arrow_upward),
+              ),
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    TextButton(
+                      key: const ValueKey('file_tree_breadcrumb_root'),
+                      onPressed: onRoot,
+                      child: Text(
+                        rootName.trim().isEmpty ? '根目录' : rootName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    for (var index = 0; index < parts.length; index += 1) ...[
+                      const Icon(Icons.chevron_right, size: 18),
+                      TextButton(
+                        onPressed: isSearching
+                            ? null
+                            : () => onSegment(parts.take(index + 1).join('/')),
+                        child: Text(parts[index]),
+                      ),
+                    ],
+                    if (isSearching) ...[
+                      const Icon(Icons.chevron_right, size: 18),
+                      const Text('搜索结果'),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
-      );
-    }
-    return treeEntries;
+      ),
+    );
+  }
+}
+
+class _DetailsHeader extends StatelessWidget {
+  const _DetailsHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.labelSmall;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final narrow = constraints.maxWidth < 560;
+        return Container(
+          padding: const EdgeInsets.fromLTRB(12, 6, 8, 6),
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          child: Row(
+            children: [
+              const SizedBox(width: 28),
+              Expanded(child: Text('名称', style: style)),
+              if (!narrow) ...[
+                SizedBox(width: 86, child: Text('大小', style: style)),
+                SizedBox(width: 148, child: Text('修改时间', style: style)),
+              ],
+              SizedBox(
+                width: narrow ? 86 : 116,
+                child: Text('状态', style: style),
+              ),
+              const SizedBox(width: 36),
+            ],
+          ),
+        );
+      },
+    );
   }
 }
 
@@ -5265,6 +6056,8 @@ class _UnifiedFolderSummaries {
         final current = summaries[path];
         summaries[path] = (current ?? const _UnifiedFolderSummary()).addFile(
           _folderStatusLabel(rootView.fileStatusLabel(file)),
+          file.backup?.sizeBytes ?? file.task?.sizeBytes ?? 0,
+          _unifiedFileUpdatedAt(file),
         );
       }
     }
@@ -5274,16 +6067,432 @@ class _UnifiedFolderSummaries {
 
 class _UnifiedFolderSummary {
   final int fileCount;
+  final int sizeBytes;
+  final DateTime? updatedAt;
   final String statusLabel;
 
-  const _UnifiedFolderSummary({this.fileCount = 0, this.statusLabel = '已同步'});
+  const _UnifiedFolderSummary({
+    this.fileCount = 0,
+    this.sizeBytes = 0,
+    this.updatedAt,
+    this.statusLabel = '已同步',
+  });
 
-  _UnifiedFolderSummary addFile(String nextStatusLabel) {
+  _UnifiedFolderSummary addFile(
+    String nextStatusLabel,
+    int nextSizeBytes,
+    DateTime nextUpdatedAt,
+  ) {
     return _UnifiedFolderSummary(
       fileCount: fileCount + 1,
+      sizeBytes: sizeBytes + nextSizeBytes,
+      updatedAt: nextUpdatedAt.isAfter(updatedAt ?? _epochDateTime)
+          ? nextUpdatedAt
+          : updatedAt,
       statusLabel: _dominantFileStatusLabel(statusLabel, nextStatusLabel),
     );
   }
+}
+
+class _UnifiedDetailsFolderRow extends StatelessWidget {
+  final _UnifiedFolderEntry entry;
+  final _UnifiedFolderSummary summary;
+  final bool expanded;
+  final VoidCallback onToggle;
+  final VoidCallback? onDelete;
+
+  const _UnifiedDetailsFolderRow({
+    required this.entry,
+    required this.summary,
+    required this.expanded,
+    required this.onToggle,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return ListTile(
+      dense: true,
+      contentPadding: EdgeInsets.only(left: 12 + _treeIndent(entry.depth)),
+      leading: Icon(
+        expanded ? Icons.folder_open_outlined : Icons.folder_outlined,
+        color: colorScheme.primary,
+      ),
+      onTap: onToggle,
+      title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text(
+        '${summary.fileCount} 个文件 · ${entry.path}',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: onDelete == null
+          ? null
+          : PopupMenuButton<_FolderTreeAction>(
+              tooltip: '文件夹操作',
+              onSelected: (action) {
+                if (action == _FolderTreeAction.delete) {
+                  onDelete?.call();
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: _FolderTreeAction.delete,
+                  child: ListTile(
+                    dense: true,
+                    leading: Icon(Icons.delete_outline),
+                    title: Text('删除服务器备份'),
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+}
+
+class _UnifiedDetailsFileRow extends StatelessWidget {
+  final _UnifiedFileEntry entry;
+  final String statusLabel;
+  final VoidCallback? onPreview;
+  final VoidCallback? onDownload;
+  final VoidCallback? onDelete;
+
+  const _UnifiedDetailsFileRow({
+    required this.entry,
+    required this.statusLabel,
+    required this.onPreview,
+    required this.onDownload,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 560) {
+          return _UnifiedFileRow(
+            entry: entry,
+            statusLabel: statusLabel,
+            onPreview: onPreview,
+            onDownload: onDownload,
+            onDelete: onDelete,
+          );
+        }
+        final file = entry.file;
+        final colorScheme = Theme.of(context).colorScheme;
+        return InkWell(
+          onTap: onPreview,
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: 12 + _treeIndent(entry.depth),
+              top: 7,
+              bottom: 7,
+              right: 4,
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  file.decryptable ? _fileIcon(entry.path) : Icons.lock_outline,
+                  size: 20,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        entry.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      Text(
+                        entry.path,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(
+                  width: 86,
+                  child: Text(
+                    _fileSizeText(file),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+                SizedBox(
+                  width: 148,
+                  child: Text(
+                    _fileDateText(file),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+                SizedBox(
+                  width: 116,
+                  child: Text(
+                    statusLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: _treeStatusColor(colorScheme, statusLabel),
+                    ),
+                  ),
+                ),
+                _FileTreeActionMenu(
+                  onPreview: onPreview,
+                  onDownload: onDownload,
+                  onDelete: onDelete,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _UnifiedGridFolderTile extends StatelessWidget {
+  final _UnifiedFolderEntry entry;
+  final _UnifiedFolderSummary summary;
+  final bool expanded;
+  final VoidCallback onToggle;
+  final VoidCallback? onDelete;
+
+  const _UnifiedGridFolderTile({
+    required this.entry,
+    required this.summary,
+    required this.expanded,
+    required this.onToggle,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      child: InkWell(
+        onTap: onToggle,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 8, 4, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    expanded
+                        ? Icons.folder_open_outlined
+                        : Icons.folder_outlined,
+                    size: 38,
+                    color: colorScheme.primary,
+                  ),
+                  const Spacer(),
+                  if (onDelete != null) _FolderActionMenu(onDelete: onDelete),
+                ],
+              ),
+              const SizedBox(height: 5),
+              Text(
+                entry.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              Text(
+                '${summary.fileCount} 个文件',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _UnifiedGridFileTile extends StatelessWidget {
+  final _UnifiedFileEntry entry;
+  final String statusLabel;
+  final VoidCallback? onPreview;
+  final VoidCallback? onDownload;
+  final VoidCallback? onDelete;
+
+  const _UnifiedGridFileTile({
+    required this.entry,
+    required this.statusLabel,
+    required this.onPreview,
+    required this.onDownload,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final file = entry.file;
+    final colorScheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      child: InkWell(
+        onTap: onPreview,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 8, 4, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    file.decryptable
+                        ? _fileIcon(entry.path)
+                        : Icons.lock_outline,
+                    size: 38,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                  const Spacer(),
+                  _FileTreeActionMenu(
+                    onPreview: onPreview,
+                    onDownload: onDownload,
+                    onDelete: onDelete,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 5),
+              Text(
+                entry.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              Text(
+                '${_fileSizeText(file)} · $statusLabel',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: _treeStatusColor(colorScheme, statusLabel),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FolderActionMenu extends StatelessWidget {
+  final VoidCallback? onDelete;
+
+  const _FolderActionMenu({required this.onDelete});
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<_FolderTreeAction>(
+      tooltip: '文件夹操作',
+      onSelected: (action) {
+        if (action == _FolderTreeAction.delete) {
+          onDelete?.call();
+        }
+      },
+      itemBuilder: (context) => const [
+        PopupMenuItem(
+          value: _FolderTreeAction.delete,
+          child: ListTile(
+            dense: true,
+            leading: Icon(Icons.delete_outline),
+            title: Text('删除服务器备份'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _FileTreeActionMenu extends StatelessWidget {
+  final VoidCallback? onPreview;
+  final VoidCallback? onDownload;
+  final VoidCallback? onDelete;
+
+  const _FileTreeActionMenu({
+    required this.onPreview,
+    required this.onDownload,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (onPreview == null && onDownload == null && onDelete == null) {
+      return const SizedBox(width: 36);
+    }
+    return PopupMenuButton<_FileTreeAction>(
+      tooltip: '文件操作',
+      onSelected: (action) {
+        switch (action) {
+          case _FileTreeAction.preview:
+            onPreview?.call();
+          case _FileTreeAction.download:
+            onDownload?.call();
+          case _FileTreeAction.delete:
+            onDelete?.call();
+        }
+      },
+      itemBuilder: (context) => [
+        if (onPreview != null)
+          const PopupMenuItem(
+            value: _FileTreeAction.preview,
+            child: ListTile(
+              dense: true,
+              leading: Icon(Icons.visibility_outlined),
+              title: Text('在线预览'),
+            ),
+          ),
+        if (onDownload != null)
+          const PopupMenuItem(
+            value: _FileTreeAction.download,
+            child: ListTile(
+              dense: true,
+              leading: Icon(Icons.download_outlined),
+              title: Text('下载到本地'),
+            ),
+          ),
+        if (onDelete != null)
+          const PopupMenuItem(
+            value: _FileTreeAction.delete,
+            child: ListTile(
+              dense: true,
+              leading: Icon(Icons.delete_outline),
+              title: Text('删除服务器备份'),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+String _fileSizeText(_UnifiedFileRecord file) {
+  final size = file.backup?.sizeBytes ?? file.task?.sizeBytes;
+  return size == null ? '-' : _formatBytes(size);
+}
+
+String _fileDateText(_UnifiedFileRecord file) {
+  final remote = file.backup?.updatedAt ?? '';
+  if (remote.isNotEmpty) {
+    final parsed = DateTime.tryParse(remote);
+    return parsed == null ? remote : _formatDateTime(parsed);
+  }
+  final local = file.task?.modifiedAt;
+  return local == null ? '-' : _formatDateTime(local);
 }
 
 class _UnifiedFolderRow extends StatelessWidget {
@@ -5368,12 +6577,14 @@ class _UnifiedFileRow extends StatelessWidget {
   final _UnifiedFileEntry entry;
   final String statusLabel;
   final VoidCallback? onPreview;
+  final VoidCallback? onDownload;
   final VoidCallback? onDelete;
 
   const _UnifiedFileRow({
     required this.entry,
     required this.statusLabel,
     required this.onPreview,
+    required this.onDownload,
     required this.onDelete,
   });
 
@@ -5395,7 +6606,7 @@ class _UnifiedFileRow extends StatelessWidget {
       title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: _FileTreeSubtitle(details: details, statusLabel: statusLabel),
       isThreeLine: details.isNotEmpty,
-      trailing: onPreview == null && onDelete == null
+      trailing: onPreview == null && onDownload == null && onDelete == null
           ? null
           : PopupMenuButton<_FileTreeAction>(
               tooltip: '文件操作',
@@ -5403,6 +6614,8 @@ class _UnifiedFileRow extends StatelessWidget {
                 switch (action) {
                   case _FileTreeAction.preview:
                     onPreview?.call();
+                  case _FileTreeAction.download:
+                    onDownload?.call();
                   case _FileTreeAction.delete:
                     onDelete?.call();
                 }
@@ -5415,6 +6628,15 @@ class _UnifiedFileRow extends StatelessWidget {
                       dense: true,
                       leading: Icon(Icons.visibility_outlined),
                       title: Text('在线预览'),
+                    ),
+                  ),
+                if (onDownload != null)
+                  const PopupMenuItem(
+                    value: _FileTreeAction.download,
+                    child: ListTile(
+                      dense: true,
+                      leading: Icon(Icons.download_outlined),
+                      title: Text('下载到本地'),
                     ),
                   ),
                 if (onDelete != null)
@@ -5481,7 +6703,7 @@ class _FileTreeSubtitle extends StatelessWidget {
   }
 }
 
-enum _FileTreeAction { preview, delete }
+enum _FileTreeAction { preview, download, delete }
 
 enum _FolderTreeAction { delete }
 
@@ -5703,6 +6925,9 @@ class _SyncRootViewData {
     if (task?.status == 'cleanup_pending') {
       return '待清理';
     }
+    if (task != null && _taskNeedsLocalCleanup(task, root.cleanupPolicy)) {
+      return '服务器已备份，待删除本地';
+    }
     if (task?.status == 'cleanup_ignored') {
       return '服务器已备份，本地保留';
     }
@@ -5736,7 +6961,7 @@ class _SyncRootViewData {
     if (tasks.any((task) => task.status == 'pending')) {
       return '待上传';
     }
-    if (tasks.any((task) => task.status == 'cleanup_pending')) {
+    if (tasks.any((task) => _taskNeedsLocalCleanup(task, root.cleanupPolicy))) {
       return '待清理';
     }
     if (tasks.isEmpty) {
@@ -5781,6 +7006,14 @@ class _UnifiedFileRecord {
         remoteFilePreviewKindFor(remoteBackup.name) != null;
   }
 
+  bool get canDownload {
+    final remoteBackup = backup;
+    return remoteBackup != null &&
+        remoteBackup.decryptable &&
+        remoteBackup.encryptedName.isNotEmpty &&
+        remoteBackup.metadataJson.isNotEmpty;
+  }
+
   String get detailsSubtitle {
     final size = backup?.sizeBytes ?? task?.sizeBytes;
     final updatedAt = backup?.updatedAt;
@@ -5813,6 +7046,7 @@ Color _treeStatusColor(ColorScheme colorScheme, String status) {
   if (status == '待上传' ||
       status.startsWith('待续传 ') ||
       status == '待清理' ||
+      status == '服务器已备份，待删除本地' ||
       status == '待确认' ||
       status == '已上传，服务器待确认') {
     return colorScheme.tertiary;
@@ -5826,7 +7060,11 @@ IconData _treeStatusIcon(String status) {
   }
   return switch (status) {
     '上传失败' || '无法解密' => Icons.error_outline,
-    '待上传' || '待清理' || '待确认' || '已上传，服务器待确认' => Icons.schedule_outlined,
+    '待上传' ||
+    '待清理' ||
+    '服务器已备份，待删除本地' ||
+    '待确认' ||
+    '已上传，服务器待确认' => Icons.schedule_outlined,
     _ => Icons.cloud_done_outlined,
   };
 }
@@ -5876,6 +7114,11 @@ String _taskStatusLabel(String status) {
     'cleanup_ignored' => '服务器已备份，本地保留',
     _ => status,
   };
+}
+
+bool _taskNeedsLocalCleanup(LocalUploadTask task, String cleanupPolicy) {
+  return task.status == 'cleanup_pending' ||
+      (cleanupPolicy == 'delete' && task.status == 'clean');
 }
 
 IconData _historyIcon(String type) {
@@ -5929,6 +7172,7 @@ int _fileStatusPriority(String status) {
     '上传失败' => 75,
     '待上传' => 70,
     '待清理' => 60,
+    '服务器已备份，待删除本地' => 60,
     '已上传，服务器待确认' => 50,
     '服务器已备份，本地已删除' => 40,
     '本地已删除' => 35,
@@ -5948,6 +7192,7 @@ String _folderStatusLabel(String fileStatusLabel) {
     '上传失败' => '上传失败',
     '待上传' => '待上传',
     '待清理' => '待清理',
+    '服务器已备份，待删除本地' => '待清理',
     '已上传，服务器待确认' => '待确认',
     '服务器已备份，本地已删除' => '已备份',
     '本地已删除' => '已清理',
@@ -5987,6 +7232,27 @@ List<String> _pathParts(String path) {
   return _normalizeRelativePath(
     path,
   ).split('/').where((part) => part.isNotEmpty).toList(growable: false);
+}
+
+DateTime _unifiedFileUpdatedAt(_UnifiedFileRecord file) {
+  final remoteDate = file.backup?.updatedAt ?? '';
+  final parsedRemote = DateTime.tryParse(remoteDate);
+  if (parsedRemote != null) {
+    return parsedRemote;
+  }
+  return file.task?.modifiedAt ?? _epochDateTime;
+}
+
+bool _hasPathPrefix(List<String> parts, List<String> prefix) {
+  if (parts.length < prefix.length) {
+    return false;
+  }
+  for (var index = 0; index < prefix.length; index += 1) {
+    if (parts[index] != prefix[index]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 String _normalizeRelativePath(String path) {

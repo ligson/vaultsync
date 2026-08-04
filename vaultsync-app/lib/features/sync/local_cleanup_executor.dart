@@ -34,6 +34,28 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
     return _cleanupTasks();
   }
 
+  @override
+  Future<LocalUploadTask> cleanupUploadedTask(LocalUploadTask task) async {
+    final mappingItems = await mappings.loadSyncRootMappings();
+    LocalSyncRootMapping? mapping;
+    for (final item in mappingItems) {
+      if (item.syncRootId == task.syncRootId) {
+        mapping = item;
+        break;
+      }
+    }
+    final policy = mapping?.cleanupPolicy ?? 'keep';
+    if (task.status != 'uploaded' && task.status != 'clean') {
+      return task;
+    }
+    final cleanupResult = await _cleanupTask(task, policy, mapping);
+    return _withStatus(
+      task,
+      cleanupResult.status,
+      lastError: cleanupResult.message,
+    );
+  }
+
   Future<LocalCleanupResult> cleanupTask(String taskId) async {
     return _cleanupTasks(taskId: taskId);
   }
@@ -115,7 +137,9 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
         updatedTasks.add(task);
         continue;
       }
-      if (task.status != 'uploaded' && task.status != 'cleanup_pending') {
+      if (task.status != 'uploaded' &&
+          task.status != 'cleanup_pending' &&
+          task.status != 'clean') {
         updatedTasks.add(task);
         continue;
       }
@@ -166,6 +190,21 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
         status: 'cleanup_pending',
         pending: true,
         message: '相册清理策略暂不可用，请检查目录设置',
+      );
+    }
+
+    if (!await File(task.localPath).exists()) {
+      if (policy == 'delete') {
+        return const _TaskCleanupResult(
+          status: 'deleted_local',
+          cleaned: true,
+          message: '本地文件已不存在，已确认服务器备份状态',
+        );
+      }
+      return const _TaskCleanupResult(
+        status: 'cleanup_pending',
+        pending: true,
+        message: '本地文件已不存在，无法执行归档清理',
       );
     }
 

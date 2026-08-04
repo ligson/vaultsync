@@ -13,6 +13,7 @@ import 'features/auth/auth_service.dart';
 import 'features/auth/login_screen.dart';
 import 'features/device/device_service.dart';
 import 'features/download/download_service.dart';
+import 'features/download/remote_file_download.dart';
 import 'features/media_backup/media_upload_content_reader.dart';
 import 'features/media_backup/photo_manager_media_gateway.dart';
 import 'features/preview/remote_file_preview.dart';
@@ -282,6 +283,10 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
       downloads: resolvedDownloads,
       decrypter: resolvedDownloadDecrypter,
     );
+    final resolvedFileDownloads = RemoteFileDownloadLoader(
+      downloads: resolvedDownloads,
+      decrypter: resolvedDownloadDecrypter,
+    );
     final deviceProfile = _deviceProfile;
     final mediaGateway = const PhotoManagerMediaGateway();
     final resolvedUploadExecutor =
@@ -371,6 +376,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
           remoteObjectDeletes: resolvedRemoteObjectDeletes,
           remoteMetadataDecrypter: resolvedRemoteMetadataDecrypter,
           remoteFilePreviews: resolvedFilePreviews,
+          remoteFileDownloads: resolvedFileDownloads,
           mediaBackupSources: widget.storage is MediaBackupSourceStore
               ? widget.storage as MediaBackupSourceStore
               : null,

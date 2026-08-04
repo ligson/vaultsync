@@ -307,12 +307,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          expected_android_cert_sha256='5e0dcce66a22640a79075996da1acfedcd933678ec1ad03a9aab56497d42ff20'
           apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           if [ -z "$apksigner" ]; then
             echo 'Android apksigner was not found.' >&2
             exit 1
           fi
           "$apksigner" verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk
+          actual_android_cert_sha256="$($apksigner verify --print-certs build/app/outputs/flutter-apk/app-release.apk \
+            | sed -n 's/.*certificate SHA-256 digest: //p' \
+            | tr -d ':[:space:]' \
+            | tr '[:upper:]' '[:lower:]' \
+            | head -n 1)"
+          if [ "$actual_android_cert_sha256" != "$expected_android_cert_sha256" ]; then
+            echo "Android signing certificate mismatch: expected $expected_android_cert_sha256, got ${actual_android_cert_sha256:-<missing>}" >&2
+            exit 1
+          fi
           aab_verification="$RUNNER_TEMP/vaultsync-aab-verification.txt"
           if ! LC_ALL=C jarsigner -verify -verbose -certs \
             build/app/outputs/bundle/release/app-release.aab \

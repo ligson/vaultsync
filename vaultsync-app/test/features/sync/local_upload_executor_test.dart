@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vaultsync_app/core/storage/app_storage.dart';
+import 'package:vaultsync_app/features/sync/local_cleanup_executor.dart';
 import 'package:vaultsync_app/features/sync/local_upload_executor.dart';
 import 'package:vaultsync_app/features/sync/sync_models.dart';
 import 'package:vaultsync_app/features/sync/upload_api_service.dart';
@@ -52,8 +55,62 @@ void main() {
       expect(remoteVersions.saved.single.relativePath, 'a.jpg');
       expect(remoteVersions.saved.single.contentHash, 'plain-content-hash');
       expect(cleaner.callCount, 1);
+      expect(cleaner.cleanedTaskIds, ['root-1:a.jpg']);
     },
   );
+
+  test('executePendingUploads deletes each local file after upload', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'vaultsync_upload_cleanup_',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/a.jpg');
+    await file.writeAsBytes([1, 2, 3]);
+    final modifiedAt = await file.lastModified();
+    final uploadTasks = FakeUploadTaskStore([
+      LocalUploadTask(
+        id: 'root-1:a.jpg',
+        syncRootId: 'root-1',
+        localPath: file.path,
+        relativePath: 'a.jpg',
+        sizeBytes: 3,
+        modifiedAt: modifiedAt,
+        status: 'pending',
+        attempts: 0,
+        createdAt: DateTime.utc(2026, 8, 4, 10),
+      ),
+    ]);
+    final executor = LocalUploadExecutor(
+      sessionStore: FakeSessionStore(
+        token: 'server-token',
+        deviceId: 'device-1',
+      ),
+      uploadTasks: uploadTasks,
+      uploads: FakeUploadGateway(),
+      payloadPreparer: const FakeUploadPayloadPreparer(),
+      postUploadCleaner: LocalCleanupExecutor(
+        mappings: const FakeSyncRootMappingStore([
+          LocalSyncRootMapping(
+            syncRootId: 'root-1',
+            localPath: '/local/root',
+            encryptedPath: 'server:path',
+            cleanupPolicy: 'delete',
+            archivePath: '',
+          ),
+        ]),
+        uploadTasks: uploadTasks,
+      ),
+      objectIdForTask: (_) => 'object-1',
+      versionIdForTask: (_) => 'version-1',
+      chunkSize: 3,
+    );
+
+    final result = await executor.executePendingUploads();
+
+    expect(result.uploadedCount, 1);
+    expect(await file.exists(), isFalse);
+    expect(uploadTasks.saved.single.status, 'deleted_local');
+  });
 
   test(
     'executePendingUploads splits prepared ciphertext into chunks',
@@ -528,6 +585,95 @@ void main() {
     expect(uploadTasks.saved.single.attempts, 1);
     expect(uploadTasks.saved.single.lastError, '网络暂时不可用');
   });
+
+  test(
+    'executePendingUploads removes task when local source is gone',
+    () async {
+      const localPath = '/Users/alice/Downloads/deleted.dmg';
+      final uploadTasks = FakeUploadTaskStore([
+        LocalUploadTask(
+          id: 'root-1:deleted.dmg',
+          syncRootId: 'root-1',
+          localPath: localPath,
+          relativePath: 'deleted.dmg',
+          sizeBytes: 3,
+          modifiedAt: DateTime.utc(2026, 6, 27, 9),
+          status: 'failed',
+          attempts: 1,
+          createdAt: DateTime.utc(2026, 6, 27, 10),
+        ),
+      ]);
+      final uploads = FakeUploadGateway();
+      final executor = LocalUploadExecutor(
+        sessionStore: FakeSessionStore(
+          token: 'server-token',
+          deviceId: 'device-1',
+        ),
+        uploadTasks: uploadTasks,
+        uploads: uploads,
+        payloadPreparer: const ThrowingUploadPayloadPreparer(
+          FileSystemException(
+            'Cannot open file',
+            localPath,
+            OSError('No such file or directory', 2),
+          ),
+        ),
+        objectIdForTask: (_) => 'object-1',
+        versionIdForTask: (_) => 'version-1',
+        chunkSize: 3,
+      );
+
+      final result = await executor.executePendingUploads();
+
+      expect(result.uploadedCount, 0);
+      expect(result.failedCount, 0);
+      expect(result.removedCount, 1);
+      expect(uploadTasks.saved, isEmpty);
+      expect(uploads.createCount, 0);
+    },
+  );
+
+  test('executePendingUploads keeps permission error as failed task', () async {
+    const localPath = '/Users/alice/Downloads/protected.dmg';
+    final uploadTasks = FakeUploadTaskStore([
+      LocalUploadTask(
+        id: 'root-1:protected.dmg',
+        syncRootId: 'root-1',
+        localPath: localPath,
+        relativePath: 'protected.dmg',
+        sizeBytes: 3,
+        modifiedAt: DateTime.utc(2026, 6, 27, 9),
+        status: 'pending',
+        attempts: 0,
+        createdAt: DateTime.utc(2026, 6, 27, 10),
+      ),
+    ]);
+    final executor = LocalUploadExecutor(
+      sessionStore: FakeSessionStore(
+        token: 'server-token',
+        deviceId: 'device-1',
+      ),
+      uploadTasks: uploadTasks,
+      uploads: FakeUploadGateway(),
+      payloadPreparer: const ThrowingUploadPayloadPreparer(
+        FileSystemException(
+          'Cannot open file',
+          localPath,
+          OSError('Permission denied', 13),
+        ),
+      ),
+      objectIdForTask: (_) => 'object-1',
+      versionIdForTask: (_) => 'version-1',
+      chunkSize: 3,
+    );
+
+    final result = await executor.executePendingUploads();
+
+    expect(result.failedCount, 1);
+    expect(result.removedCount, 0);
+    expect(uploadTasks.saved.single.status, 'failed');
+    expect(uploadTasks.saved.single.attempts, 1);
+  });
 }
 
 class FakeSessionStore implements SessionStore {
@@ -592,6 +738,21 @@ class FakeUploadPayloadPreparer implements UploadPayloadPreparer {
   }
 }
 
+class ThrowingUploadPayloadPreparer implements UploadPayloadPreparer {
+  final Object error;
+
+  const ThrowingUploadPayloadPreparer(this.error);
+
+  @override
+  Future<PreparedUploadPayload> prepare(
+    LocalUploadTask task, {
+    required String objectId,
+    required String versionId,
+  }) async {
+    throw error;
+  }
+}
+
 class FakeRemoteVersionIndexStore implements RemoteVersionIndexStore {
   final List<LocalRemoteVersionIndex> saved = [];
 
@@ -648,11 +809,19 @@ class FakeSyncRootMappingStore implements SyncRootMappingStore {
 
 class FakePostUploadCleaner implements LocalPostUploadCleaner {
   int callCount = 0;
+  final List<String> cleanedTaskIds = [];
 
   @override
   Future<Object> cleanupUploadedTasks() async {
     callCount += 1;
     return Object();
+  }
+
+  @override
+  Future<LocalUploadTask> cleanupUploadedTask(LocalUploadTask task) async {
+    callCount += 1;
+    cleanedTaskIds.add(task.id);
+    return task;
   }
 }
 

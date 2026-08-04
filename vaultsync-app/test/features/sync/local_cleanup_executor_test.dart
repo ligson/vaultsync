@@ -60,6 +60,55 @@ void main() {
   });
 
   test(
+    'cleanup deletes previously retained task after policy changes',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('vaultsync_cleanup_');
+      addTearDown(() => dir.delete(recursive: true));
+      final file = File('${dir.path}/retained.txt');
+      await file.writeAsString('abc');
+      final modifiedAt = await file.lastModified();
+      final uploadTasks = FakeUploadTaskStore([
+        _uploadedTask(file.path, modifiedAt: modifiedAt, status: 'clean'),
+      ]);
+      final executor = LocalCleanupExecutor(
+        mappings: FakeSyncRootMappingStore(
+          cleanupPolicy: 'delete',
+          archivePath: '',
+        ),
+        uploadTasks: uploadTasks,
+      );
+
+      final result = await executor.cleanupUploadedTasks();
+
+      expect(result.cleanedCount, 1);
+      expect(await file.exists(), isFalse);
+      expect(uploadTasks.saved.single.status, 'deleted_local');
+    },
+  );
+
+  test('cleanup treats an already missing backed-up file as deleted', () async {
+    final uploadTasks = FakeUploadTaskStore([
+      _uploadedTask(
+        '/local/already-deleted.txt',
+        modifiedAt: DateTime.utc(2026, 8, 4),
+      ),
+    ]);
+    final executor = LocalCleanupExecutor(
+      mappings: FakeSyncRootMappingStore(
+        cleanupPolicy: 'delete',
+        archivePath: '',
+      ),
+      uploadTasks: uploadTasks,
+    );
+
+    final result = await executor.cleanupUploadedTasks();
+
+    expect(result.cleanedCount, 1);
+    expect(result.pendingCount, 0);
+    expect(uploadTasks.saved.single.status, 'deleted_local');
+  });
+
+  test(
     'cleanup archives uploaded task without overwriting existing file',
     () async {
       final dir = await Directory.systemTemp.createTemp('vaultsync_cleanup_');

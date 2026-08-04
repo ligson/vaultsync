@@ -25,15 +25,19 @@ const uploadForm = reactive({
 });
 const platformOptions = [
   { label: 'Android', value: 'android' },
-  { label: 'macOS', value: 'macos' },
-  { label: 'Windows', value: 'windows' },
-  { label: 'Linux', value: 'linux' },
+  { label: 'iOS（未签名）', value: 'ios' },
+  { label: 'macOS 自动更新（Apple Silicon）', value: 'macos' },
+  { label: 'macOS Apple Silicon', value: 'macos-arm64' },
+  { label: 'macOS Intel', value: 'macos-x64' },
+  { label: 'Windows x64', value: 'windows' },
 ];
-const fileRules: Record<string, { suffix: string; label: string }> = {
-  android: { suffix: '.apk', label: 'Android 安装包 .apk' },
-  macos: { suffix: '.dmg', label: 'macOS 安装包 .dmg' },
-  windows: { suffix: '.exe', label: 'Windows 安装包 .exe' },
-  linux: { suffix: '.appimage', label: 'Linux 安装包 .AppImage' },
+const fileRules: Record<string, { suffixes: string[]; label: string }> = {
+  android: { suffixes: ['.apk'], label: 'Android 安装包 .apk' },
+  ios: { suffixes: ['.ipa'], label: 'iOS 安装包 .ipa' },
+  macos: { suffixes: ['.zip', '.dmg'], label: 'macOS 安装包 .zip 或 .dmg' },
+  'macos-arm64': { suffixes: ['.zip', '.dmg'], label: 'macOS Apple Silicon 安装包 .zip 或 .dmg' },
+  'macos-x64': { suffixes: ['.zip', '.dmg'], label: 'macOS Intel 安装包 .zip 或 .dmg' },
+  windows: { suffixes: ['.zip', '.exe'], label: 'Windows 安装包 .zip 或 .exe' },
 };
 const uploadHint = computed(() => fileRules[uploadForm.platform]?.label || '对应平台安装包');
 
@@ -81,8 +85,8 @@ function removeUploadFile() {
 }
 
 function isAllowedFile(platform: string, fileName: string) {
-  const suffix = fileRules[platform]?.suffix;
-  return suffix ? fileName.toLowerCase().endsWith(suffix) : false;
+  const suffixes = fileRules[platform]?.suffixes;
+  return suffixes?.some((suffix) => fileName.toLowerCase().endsWith(suffix)) ?? false;
 }
 
 function formatBytes(value: number) {

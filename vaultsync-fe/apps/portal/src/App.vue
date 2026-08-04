@@ -9,10 +9,11 @@ const features = [
 ];
 
 const downloads = [
-  { name: 'macOS', note: 'Apple Silicon / Intel', file: '/downloads/vaultsync-macos-latest.dmg' },
-  { name: 'Windows', note: 'Windows 10 及以上', file: '/downloads/vaultsync-windows-latest.exe' },
+  { name: 'macOS Apple Silicon', note: 'M1 / M2 / M3 / M4，未签名 zip', file: '/downloads/vaultsync-macos-arm64-latest-unsigned.zip' },
+  { name: 'macOS Intel', note: 'Intel x64，未签名 zip', file: '/downloads/vaultsync-macos-x64-latest-unsigned.zip' },
+  { name: 'Windows x64', note: 'Windows 10 及以上，未签名 zip', file: '/downloads/vaultsync-windows-x64-latest-unsigned.zip' },
   { name: 'Android', note: '相册自动备份', file: '/downloads/vaultsync-android-latest.apk' },
-  { name: 'Linux', note: '桌面同步客户端', file: '/downloads/vaultsync-linux-latest.AppImage' },
+  { name: 'iOS', note: '未签名 IPA，仅供重签名', file: '/downloads/vaultsync-ios-latest-unsigned.ipa' },
 ];
 </script>
 

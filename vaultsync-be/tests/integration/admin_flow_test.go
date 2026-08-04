@@ -239,6 +239,16 @@ func TestAdminDownloadUploadValidatesPlatformFileType(t *testing.T) {
 	resp := uploadDownloadRelease(t, server, adminToken, "android", "2.0.0", "vaultsync-android-latest.zip", []byte("zip-bytes"))
 	testutil.AssertStatus(t, resp, http.StatusBadRequest)
 	testutil.AssertJSONContains(t, resp, "Android 安装包必须是 .apk 文件")
+
+	resp = uploadDownloadRelease(t, server, adminToken, "ios", "2.0.0", "vaultsync-ios-latest-unsigned.zip", []byte("zip-bytes"))
+	testutil.AssertStatus(t, resp, http.StatusBadRequest)
+	testutil.AssertJSONContains(t, resp, "iOS 安装包必须是 .ipa 文件")
+
+	resp = uploadDownloadRelease(t, server, adminToken, "macos-arm64", "2.0.0", "vaultsync-macos-arm64-latest-unsigned.zip", []byte("zip-bytes"))
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+
+	resp = uploadDownloadRelease(t, server, adminToken, "windows", "2.0.0", "vaultsync-windows-x64-latest-unsigned.zip", []byte("zip-bytes"))
+	testutil.AssertStatus(t, resp, http.StatusCreated)
 }
 
 func TestAdminCanDeleteDownloadReleaseFile(t *testing.T) {

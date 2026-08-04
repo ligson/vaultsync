@@ -198,7 +198,12 @@ func TestUserCanChangePasswordWithCurrentPassword(t *testing.T) {
 func TestReleaseMetadataIsPubliclyReadable(t *testing.T) {
 	app := testutil.NewTestServer(t)
 
-	resp := testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/releases/android", "", "")
-	testutil.AssertStatus(t, resp, http.StatusOK)
-	testutil.AssertJSONContains(t, resp, `"platform":"android"`)
+	for _, platform := range []string{"android", "ios", "macos", "macos-arm64", "macos-x64", "windows"} {
+		resp := testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/releases/"+platform, "", "")
+		testutil.AssertStatus(t, resp, http.StatusOK)
+		testutil.AssertJSONContains(t, resp, `"platform":"`+platform+`"`)
+	}
+
+	resp := testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/releases/linux", "", "")
+	testutil.AssertStatus(t, resp, http.StatusNotFound)
 }

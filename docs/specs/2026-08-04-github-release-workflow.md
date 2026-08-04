@@ -136,3 +136,15 @@ macOS 的 6 项 Secret 完全未配置时，工作流仍构建两个架构，但
 - 已发布版本有问题：保留原 Release 和 tag，回滚代码后以新 build number 再发版。
 
 CI 构建和 GitHub Release 本身不修改 NAS `data/`、SQLite、密文对象、下载目录或客户端本地状态。后续 NAS 部署仍必须先备份并按仓库数据安全规则单独验证。
+
+## NAS 客户端下载发布
+
+GitHub Release 成功后，NAS 下载站需要单独发布客户端制品，不能把 GitHub Release 成功等同于 NAS 已更新：
+
+- Android 发布为 `vaultsync-android-latest.apk`。
+- iOS 无证书版本发布为 `vaultsync-ios-latest-unsigned.ipa`，页面必须说明只能用于后续重签名。
+- macOS 按架构分别发布 `vaultsync-macos-arm64-latest-unsigned.zip` 和 `vaultsync-macos-x64-latest-unsigned.zip`，不能用 `.dmg` 扩展名伪装 zip。
+- Windows 发布为 `vaultsync-windows-x64-latest-unsigned.zip`，不能用 `.exe` 扩展名伪装 zip。
+- 当前工作流没有 Linux 桌面 App 制品，下载页不得提供不存在的 AppImage 链接。
+
+替换 NAS 文件前必须为 SQLite 和同名旧安装包建立备份。发布后逐个平台回查版本接口、HTTP 下载状态、文件大小和 GitHub `SHA256SUMS.txt`；后端或前端代码没有变化时不为形式上的“更新”重建容器。

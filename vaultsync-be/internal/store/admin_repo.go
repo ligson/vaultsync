@@ -247,9 +247,11 @@ func (r *AdminRepo) UserRole(ctx context.Context, userID string) (string, error)
 
 func defaultDownloadReleases() []domain.DownloadRelease {
 	return []domain.DownloadRelease{
-		{Platform: "macos", FileName: "vaultsync-macos-latest.dmg", Version: "1.0.0", DownloadURL: "/downloads/vaultsync-macos-latest.dmg", UpdatedAt: ""},
-		{Platform: "windows", FileName: "vaultsync-windows-latest.exe", Version: "1.0.0", DownloadURL: "/downloads/vaultsync-windows-latest.exe", UpdatedAt: ""},
 		{Platform: "android", FileName: "vaultsync-android-latest.apk", Version: "1.0.0", DownloadURL: "/downloads/vaultsync-android-latest.apk", UpdatedAt: ""},
-		{Platform: "linux", FileName: "vaultsync-linux-latest.AppImage", Version: "1.0.0", DownloadURL: "/downloads/vaultsync-linux-latest.AppImage", UpdatedAt: ""},
+		{Platform: "ios", FileName: "vaultsync-ios-latest-unsigned.ipa", Version: "1.0.0", DownloadURL: "/downloads/vaultsync-ios-latest-unsigned.ipa", UpdatedAt: ""},
+		{Platform: "macos", FileName: "vaultsync-macos-arm64-latest-unsigned.zip", Version: "1.0.0", DownloadURL: "/downloads/vaultsync-macos-arm64-latest-unsigned.zip", UpdatedAt: ""},
+		{Platform: "macos-arm64", FileName: "vaultsync-macos-arm64-latest-unsigned.zip", Version: "1.0.0", DownloadURL: "/downloads/vaultsync-macos-arm64-latest-unsigned.zip", UpdatedAt: ""},
+		{Platform: "macos-x64", FileName: "vaultsync-macos-x64-latest-unsigned.zip", Version: "1.0.0", DownloadURL: "/downloads/vaultsync-macos-x64-latest-unsigned.zip", UpdatedAt: ""},
+		{Platform: "windows", FileName: "vaultsync-windows-x64-latest-unsigned.zip", Version: "1.0.0", DownloadURL: "/downloads/vaultsync-windows-x64-latest-unsigned.zip", UpdatedAt: ""},
 	}
 }

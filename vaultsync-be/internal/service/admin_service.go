@@ -283,20 +283,24 @@ func validateDownloadFileType(platform, fileName string) error {
 		if ext != ".apk" {
 			return InvalidRequest("Android 安装包必须是 .apk 文件")
 		}
-	case "macos":
-		if ext != ".dmg" {
-			return InvalidRequest("macOS 安装包必须是 .dmg 文件")
+	case "ios":
+		if ext != ".ipa" {
+			return InvalidRequest("iOS 安装包必须是 .ipa 文件")
+		}
+	case "macos", "macos-arm64", "macos-x64":
+		if ext != ".zip" && ext != ".dmg" {
+			return InvalidRequest("macOS 安装包必须是 .zip 或 .dmg 文件")
 		}
 	case "windows":
-		if ext != ".exe" {
-			return InvalidRequest("Windows 安装包必须是 .exe 文件")
+		if ext != ".zip" && ext != ".exe" {
+			return InvalidRequest("Windows 安装包必须是 .zip 或 .exe 文件")
 		}
 	case "linux":
 		if ext != ".appimage" {
 			return InvalidRequest("Linux 安装包必须是 .AppImage 文件")
 		}
 	default:
-		return InvalidRequest("平台只能是 android、macos、windows 或 linux")
+		return InvalidRequest("不支持该客户端平台")
 	}
 	return nil
 }

@@ -77,6 +77,11 @@ class FakeMediaBackupGateway implements MediaBackupGateway {
   Future<MediaAssetCleanupResult> deleteAsset(String assetId) {
     throw UnimplementedError();
   }
+
+  @override
+  Future<MediaAssetBatchCleanupResult> deleteAssets(List<String> assetIds) {
+    throw UnimplementedError();
+  }
 }
 
 class FakeUploadTaskStore implements UploadTaskStore {

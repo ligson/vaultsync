@@ -16,8 +16,20 @@ class MediaAssetCleanupResult {
   const MediaAssetCleanupResult({required this.deleted, this.message = ''});
 }
 
+class MediaAssetBatchCleanupResult {
+  final Set<String> deletedAssetIds;
+  final String message;
+
+  const MediaAssetBatchCleanupResult({
+    this.deletedAssetIds = const <String>{},
+    this.message = '',
+  });
+}
+
 abstract interface class MediaAssetCleaner {
   Future<MediaAssetCleanupResult> deleteAsset(String assetId);
+
+  Future<MediaAssetBatchCleanupResult> deleteAssets(List<String> assetIds);
 }
 
 abstract interface class MediaAssetFileResolver {
@@ -33,4 +45,7 @@ abstract interface class MediaBackupGateway implements MediaAssetCleaner {
 
   @override
   Future<MediaAssetCleanupResult> deleteAsset(String assetId);
+
+  @override
+  Future<MediaAssetBatchCleanupResult> deleteAssets(List<String> assetIds);
 }

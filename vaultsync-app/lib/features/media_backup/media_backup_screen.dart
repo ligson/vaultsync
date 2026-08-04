@@ -55,6 +55,13 @@ class _MediaBackupScreenState extends State<MediaBackupScreen> {
               },
             ),
           ),
+          if (_cleanupPolicy == 'delete')
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Text(
+                '上传并校验成功后自动批量清理本地资源。系统要求确认时，VaultSync 会在前台一次性提交；锁屏或后台期间会等待回到前台。',
+              ),
+            ),
           const Divider(),
           const _SectionTitle('本地处理'),
           Padding(

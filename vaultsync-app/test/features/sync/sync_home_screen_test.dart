@@ -2444,6 +2444,72 @@ void main() {
     expect(find.text('已上传 2 个任务'), findsOneWidget);
   });
 
+  testWidgets('sync home batches uploaded media cleanup while resumed', (
+    tester,
+  ) async {
+    final uploadTasks = FakeUploadTaskStore([
+      LocalUploadTask(
+        id: 'root-1:asset-1',
+        syncRootId: 'root-1',
+        localPath: 'asset://asset-1',
+        relativePath: '相册/2026/08/IMG_0001.jpg',
+        sizeBytes: 3,
+        modifiedAt: DateTime.utc(2026, 8, 4),
+        status: 'uploaded',
+        attempts: 0,
+        createdAt: DateTime.utc(2026, 8, 4),
+        sourceType: 'media_asset',
+        assetId: 'asset-1',
+        assetMediaType: 'image',
+      ),
+    ]);
+    final mediaGateway = FakeMediaBackupGateway(
+      permission: const MediaPermissionStatus(state: 'authorized'),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore([
+            const LocalSyncRootMapping(
+              syncRootId: 'root-1',
+              localPath: '',
+              encryptedPath: 'media-backup:v1:source-1',
+              cleanupPolicy: 'delete',
+              archivePath: '',
+            ),
+          ]),
+          uploadTasks: uploadTasks,
+          syncRoots: FakeSyncRootGateway([
+            const SyncRoot(
+              id: 'root-1',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'media-backup:v1:source-1',
+              cleanupPolicy: 'delete',
+              archivePath: '',
+              createdAt: '2026-08-04T00:00:00Z',
+            ),
+          ]),
+          uploadExecutor: FakeUploadExecutor(uploadedCount: 1),
+          mediaGateway: mediaGateway,
+          devicePlatform: 'android',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await _tapHomeAction(tester, 'execute_uploads_button');
+    await tester.pumpAndSettle();
+
+    expect(mediaGateway.deletedAssetIds, ['asset-1']);
+    expect(uploadTasks.saved.single.status, 'deleted_local');
+  });
+
   testWidgets('sync status page shows failed uploads and can retry them', (
     tester,
   ) async {
@@ -2906,7 +2972,7 @@ void main() {
     },
   );
 
-  testWidgets('media cleanup page starts with no selected items', (
+  testWidgets('media cleanup page offers one batch cleanup action', (
     tester,
   ) async {
     final uploadTasks = FakeUploadTaskStore([
@@ -2971,11 +3037,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('待清理照片和视频'), findsOneWidget);
-    expect(find.text('当前已选择 0'), findsOneWidget);
-    expect(find.text('请选择要清理的项目'), findsOneWidget);
+    expect(find.text('一次确认批量处理'), findsOneWidget);
+    expect(find.text('全部清理 1 个'), findsOneWidget);
   });
 
-  testWidgets('media cleanup page confirms one selected item', (tester) async {
+  testWidgets('media cleanup page confirms all pending items', (tester) async {
     final uploadTasks = FakeUploadTaskStore([
       LocalUploadTask(
         id: 'root-1:asset-1',
@@ -3039,18 +3105,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('待清理照片和视频'), findsOneWidget);
-    expect(find.text('当前已选择 0'), findsOneWidget);
-    await tester.tap(
-      find.byKey(const ValueKey('media_cleanup_select_root-1:asset-1')),
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('确认清理 1 个'), findsOneWidget);
+    expect(find.text('全部清理 1 个'), findsOneWidget);
 
     await tester.tap(
       find.byKey(const ValueKey('confirm_media_cleanup_button')),
     );
     await tester.pumpAndSettle();
-    expect(find.text('确认删除本机相册资源？'), findsOneWidget);
+    expect(find.text('确认批量清理 1 个相册资源？'), findsOneWidget);
     await tester.tap(
       find.byKey(const ValueKey('confirm_media_cleanup_dialog_button')),
     );
@@ -3126,10 +3187,6 @@ void main() {
       );
       await tester.pumpAndSettle();
       await tester.tap(
-        find.byKey(const ValueKey('media_cleanup_select_root-1:asset-1')),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(
         find.byKey(const ValueKey('confirm_media_cleanup_button')),
       );
       await tester.pumpAndSettle();
@@ -3141,7 +3198,7 @@ void main() {
     },
   );
 
-  testWidgets('media cleanup page limits selection to ten items', (
+  testWidgets('media cleanup page submits more than ten items in one batch', (
     tester,
   ) async {
     LocalUploadTask mediaCleanupTask(int index) {
@@ -3166,6 +3223,9 @@ void main() {
     final uploadTasks = FakeUploadTaskStore([
       for (var index = 1; index <= 11; index++) mediaCleanupTask(index),
     ]);
+    final mediaGateway = FakeMediaBackupGateway(
+      permission: const MediaPermissionStatus(state: 'authorized'),
+    );
 
     await tester.pumpWidget(
       MaterialApp(
@@ -3195,9 +3255,7 @@ void main() {
               createdAt: '2026-07-03T01:00:00Z',
             ),
           ]),
-          mediaGateway: FakeMediaBackupGateway(
-            permission: const MediaPermissionStatus(state: 'authorized'),
-          ),
+          mediaGateway: mediaGateway,
         ),
       ),
     );
@@ -3210,19 +3268,21 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    for (var index = 1; index <= 11; index++) {
-      final key = ValueKey('media_cleanup_select_root-1:asset-$index');
-      await tester.ensureVisible(find.byKey(key));
-      await tester.tap(find.byKey(key));
-      await tester.pumpAndSettle();
-    }
-
-    expect(find.text('第一版每次最多清理 10 个，请分批处理。'), findsOneWidget);
-
-    await tester.fling(find.byType(ListView), const Offset(0, 1000), 1000);
+    expect(find.text('全部清理 11 个'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('confirm_media_cleanup_button')),
+    );
     await tester.pumpAndSettle();
-    expect(find.text('当前已选择 10'), findsOneWidget);
-    expect(find.text('确认清理 10 个'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('confirm_media_cleanup_dialog_button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(mediaGateway.deletedAssetIds, hasLength(11));
+    expect(
+      uploadTasks.saved.map((task) => task.status),
+      everyElement('deleted_local'),
+    );
   });
 
   testWidgets(
@@ -3303,15 +3363,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(
-        find.byKey(const ValueKey('media_cleanup_select_root-1:asset-1')),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const ValueKey('media_cleanup_select_root-1:asset-2')),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('确认清理 2 个'), findsOneWidget);
+      expect(find.text('全部清理 3 个'), findsOneWidget);
 
       await tester.tap(
         find.byKey(const ValueKey('confirm_media_cleanup_button')),
@@ -3324,8 +3376,8 @@ void main() {
 
       expect(uploadTasks.saved[0].status, 'deleted_local');
       expect(uploadTasks.saved[1].status, 'cleanup_pending');
-      expect(uploadTasks.saved[2].status, 'cleanup_pending');
-      expect(find.text('已清理 1 个，仍待处理 2 个'), findsOneWidget);
+      expect(uploadTasks.saved[2].status, 'deleted_local');
+      expect(find.text('已清理 2 个，仍待处理 1 个'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('media_cleanup_select_root-1:asset-1')),
         findsNothing,
@@ -3336,7 +3388,7 @@ void main() {
       );
       expect(
         find.byKey(const ValueKey('media_cleanup_select_root-1:asset-3')),
-        findsOneWidget,
+        findsNothing,
       );
     },
   );
@@ -4519,6 +4571,27 @@ class FakeMediaBackupGateway implements MediaBackupGateway {
   Future<MediaAssetCleanupResult> deleteAsset(String assetId) async {
     deletedAssetIds.add(assetId);
     return cleanupResultsByAssetId[assetId] ?? cleanupResult;
+  }
+
+  @override
+  Future<MediaAssetBatchCleanupResult> deleteAssets(
+    List<String> assetIds,
+  ) async {
+    deletedAssetIds.addAll(assetIds);
+    final deleted = <String>{};
+    var message = '';
+    for (final assetId in assetIds) {
+      final result = cleanupResultsByAssetId[assetId] ?? cleanupResult;
+      if (result.deleted) {
+        deleted.add(assetId);
+      } else if (message.isEmpty) {
+        message = result.message;
+      }
+    }
+    return MediaAssetBatchCleanupResult(
+      deletedAssetIds: deleted,
+      message: message,
+    );
   }
 }
 

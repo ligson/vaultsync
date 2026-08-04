@@ -120,7 +120,8 @@ class SyncHomeScreen extends StatefulWidget {
   State<SyncHomeScreen> createState() => _SyncHomeScreenState();
 }
 
-class _SyncHomeScreenState extends State<SyncHomeScreen> {
+class _SyncHomeScreenState extends State<SyncHomeScreen>
+    with WidgetsBindingObserver {
   static const _androidSyncKeepAlive = AndroidSyncKeepAlive();
   late Future<_SyncHomeData> _homeFuture;
   _SyncHomeData? _cachedHomeData;
@@ -137,17 +138,31 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
   var _isUploading = false;
   var _isPulling = false;
   var _isAutoSyncing = false;
+  var _isAutoCleaningMedia = false;
   var _hasReconciledUploadProgress = false;
+  late AppLifecycleState _appLifecycleState;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _appLifecycleState =
+        WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
     _homeFuture = _loadAndCacheHomeData();
     _startAutoSync();
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appLifecycleState = state;
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_autoCleanupUploadedMedia());
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _initialAutoSyncTimer?.cancel();
     _autoSyncTimer?.cancel();
     unawaited(_localSyncMonitor?.stop());
@@ -812,6 +827,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         setState(() {
           _isUploading = false;
         });
+        await _autoCleanupUploadedMedia();
       }
     }
   }
@@ -1038,6 +1054,55 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
         return;
       }
       _showErrorSnackBar(error);
+    }
+  }
+
+  Future<LocalCleanupResult?> _autoCleanupUploadedMedia() async {
+    if (!mounted ||
+        _isAutoCleaningMedia ||
+        _isUploading ||
+        _appLifecycleState != AppLifecycleState.resumed ||
+        !_isMobilePlatform ||
+        widget.mediaGateway == null) {
+      return null;
+    }
+    final tasks = await widget.uploadTasks.loadUploadTasks();
+    final hasUploadedMedia = tasks.any(
+      (task) => task.sourceType == 'media_asset' && task.status == 'uploaded',
+    );
+    if (!hasUploadedMedia || !mounted) {
+      return null;
+    }
+
+    _isAutoCleaningMedia = true;
+    try {
+      final cleaner = LocalCleanupExecutor(
+        mappings: widget.syncRootMappings,
+        uploadTasks: widget.uploadTasks,
+        mediaCleaner: widget.mediaGateway,
+      );
+      final result = await cleaner.cleanupNewlyUploadedMediaTasks();
+      await _addHistory(
+        type: 'cleanup',
+        result: result.pendingCount > 0 ? 'failed' : 'success',
+        title: '自动清理已备份相册资源',
+        message: '已自动清理 ${result.cleanedCount} 个，仍待处理 ${result.pendingCount} 个',
+      );
+      if (mounted) {
+        _reloadSyncRoots();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result.pendingCount > 0
+                  ? '已清理 ${result.cleanedCount} 个，${result.pendingCount} 个需稍后批量确认'
+                  : '已自动清理 ${result.cleanedCount} 个已备份相册资源',
+            ),
+          ),
+        );
+      }
+      return result;
+    } finally {
+      _isAutoCleaningMedia = false;
     }
   }
 
@@ -1365,6 +1430,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen> {
           setState(() {
             _isUploading = false;
           });
+          await _autoCleanupUploadedMedia();
         }
       }
 
@@ -4532,9 +4598,6 @@ class _MediaCleanupConfirmationPage extends StatefulWidget {
 
 class _MediaCleanupConfirmationPageState
     extends State<_MediaCleanupConfirmationPage> {
-  static const _maxCleanupCount = 10;
-
-  final Set<String> _selectedTaskIds = {};
   final Set<String> _completedTaskIds = {};
   final Set<String> _ignoredTaskIds = {};
   var _isConfirming = false;
@@ -4552,22 +4615,6 @@ class _MediaCleanupConfirmationPageState
     ];
   }
 
-  void _toggleSelection(String taskId) {
-    setState(() {
-      if (_selectedTaskIds.contains(taskId)) {
-        _selectedTaskIds.remove(taskId);
-        return;
-      }
-      if (_selectedTaskIds.length >= _maxCleanupCount) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('第一版每次最多清理 10 个，请分批处理。')));
-        return;
-      }
-      _selectedTaskIds.add(taskId);
-    });
-  }
-
   Future<void> _ignoreTask(String taskId) async {
     final onIgnoreOne = widget.onIgnoreOne;
     if (onIgnoreOne == null) {
@@ -4578,21 +4625,24 @@ class _MediaCleanupConfirmationPageState
       return;
     }
     setState(() {
-      _selectedTaskIds.remove(taskId);
       _ignoredTaskIds.add(taskId);
     });
   }
 
-  Future<void> _confirmSelected() async {
-    if (_selectedTaskIds.isEmpty || _isConfirming) {
+  Future<void> _confirmAll() async {
+    final taskIds = _mediaCleanupItems
+        .map((item) => item.task.id)
+        .toList(growable: false);
+    if (taskIds.isEmpty || _isConfirming) {
       return;
     }
-    final selectedTaskIds = _selectedTaskIds.toList(growable: false);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('确认删除本机相册资源？'),
-        content: const Text('确认后将删除所选照片和视频的本机相册资源。服务器上的加密备份不会被删除。'),
+        title: Text('确认批量清理 ${taskIds.length} 个相册资源？'),
+        content: const Text(
+          '只会提交已经完成服务器备份的照片和视频。系统可能再显示一次删除确认；服务器上的加密备份不会被删除。',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -4613,7 +4663,7 @@ class _MediaCleanupConfirmationPageState
       _isConfirming = true;
     });
     try {
-      final result = await widget.onConfirmCleanup(selectedTaskIds);
+      final result = await widget.onConfirmCleanup(taskIds);
       if (!mounted) {
         return;
       }
@@ -4621,7 +4671,6 @@ class _MediaCleanupConfirmationPageState
           .where((item) => !result.cleanedTaskIds.contains(item.task.id))
           .length;
       setState(() {
-        _selectedTaskIds.clear();
         _completedTaskIds.addAll(result.cleanedTaskIds);
       });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -4657,14 +4706,13 @@ class _MediaCleanupConfirmationPageState
             start,
             math.min(start + _statusListPageSize, items.length),
           );
-    final selectedCount = _selectedTaskIds.length;
     return Scaffold(
       appBar: AppBar(title: const Text('待清理照片和视频')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
         children: [
           Text(
-            '这些照片和视频已经上传到 VaultSync 服务器。确认清理只会删除本机相册资源，不会删除服务器上的加密备份。',
+            '这些是旧版本留下的待清理任务。无需逐项选择，一次确认即可批量提交；文件名编码异常的项目会继续保留。',
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 12),
@@ -4673,8 +4721,7 @@ class _MediaCleanupConfirmationPageState
             runSpacing: 8,
             children: [
               _StatusBadge(label: '待清理总数 ${items.length}'),
-              _StatusBadge(label: '当前已选择 $selectedCount'),
-              _StatusBadge(label: '本次最多可清理数量：$_maxCleanupCount'),
+              const _StatusBadge(label: '一次确认批量处理'),
             ],
           ),
           const SizedBox(height: 12),
@@ -4692,15 +4739,7 @@ class _MediaCleanupConfirmationPageState
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: ListTile(
-                  onTap: _isConfirming
-                      ? null
-                      : () => _toggleSelection(item.task.id),
-                  leading: Checkbox(
-                    value: _selectedTaskIds.contains(item.task.id),
-                    onChanged: _isConfirming
-                        ? null
-                        : (_) => _toggleSelection(item.task.id),
-                  ),
+                  leading: const Icon(Icons.photo_outlined),
                   title: Text(item.task.relativePath),
                   subtitle: Text(
                     [
@@ -4736,9 +4775,7 @@ class _MediaCleanupConfirmationPageState
         minimum: const EdgeInsets.fromLTRB(16, 8, 16, 16),
         child: FilledButton.icon(
           key: const ValueKey('confirm_media_cleanup_button'),
-          onPressed: selectedCount == 0 || _isConfirming
-              ? null
-              : _confirmSelected,
+          onPressed: items.isEmpty || _isConfirming ? null : _confirmAll,
           icon: _isConfirming
               ? const SizedBox(
                   width: 18,
@@ -4746,9 +4783,7 @@ class _MediaCleanupConfirmationPageState
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Icon(Icons.delete_outline),
-          label: Text(
-            selectedCount == 0 ? '请选择要清理的项目' : '确认清理 $selectedCount 个',
-          ),
+          label: Text(items.isEmpty ? '暂无待清理项目' : '全部清理 ${items.length} 个'),
         ),
       ),
     );
@@ -6140,7 +6175,11 @@ class _UnifiedDetailsFolderRow extends StatelessWidget {
         color: colorScheme.primary,
       ),
       onTap: onToggle,
-      title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      title: Text(
+        _displayFileName(entry.name),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
       subtitle: Text(
         '${summary.fileCount} 个文件 · ${entry.path}',
         maxLines: 1,
@@ -6226,7 +6265,7 @@ class _UnifiedDetailsFileRow extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        entry.name,
+                        _displayFileName(entry.name),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -6327,7 +6366,7 @@ class _UnifiedGridFolderTile extends StatelessWidget {
               ),
               const SizedBox(height: 5),
               Text(
-                entry.name,
+                _displayFileName(entry.name),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.titleSmall,
@@ -6395,7 +6434,7 @@ class _UnifiedGridFileTile extends StatelessWidget {
               ),
               const SizedBox(height: 7),
               Text(
-                entry.name,
+                _displayFileName(entry.name),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.titleSmall,
@@ -6608,7 +6647,11 @@ class _UnifiedFolderRow extends StatelessWidget {
         ),
       ),
       onTap: onToggle,
-      title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      title: Text(
+        _displayFileName(entry.name),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -6654,7 +6697,11 @@ class _UnifiedFileRow extends StatelessWidget {
         color: Theme.of(context).colorScheme.onSurfaceVariant,
       ),
       onTap: onPreview,
-      title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      title: Text(
+        _displayFileName(entry.name),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
       subtitle: showMetadata
           ? _FileTreeSubtitle(details: details, statusLabel: statusLabel)
           : null,
@@ -7546,6 +7593,10 @@ List<String> _pathParts(String path) {
   return _normalizeRelativePath(
     path,
   ).split('/').where((part) => part.isNotEmpty).toList(growable: false);
+}
+
+String _displayFileName(String name) {
+  return name.contains('\uFFFD') ? '名称编码异常' : name;
 }
 
 DateTime _unifiedFileUpdatedAt(_UnifiedFileRecord file) {

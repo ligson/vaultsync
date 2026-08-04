@@ -171,6 +171,36 @@ void main() {
     expect(uploadTasks.saved.single.lastError, '本地文件已变化，暂不自动删除，请确认后重试');
   });
 
+  test('cleanup preserves local file with invalid filename encoding', () async {
+    final dir = await Directory.systemTemp.createTemp('vaultsync_cleanup_');
+    addTearDown(() => dir.delete(recursive: true));
+    final file = File('${dir.path}/invalid-name.txt');
+    await file.writeAsString('abc');
+    final modifiedAt = await file.lastModified();
+    final uploadTasks = FakeUploadTaskStore([
+      _uploadedTask(
+        file.path,
+        relativePath: 'books/���.txt',
+        modifiedAt: modifiedAt,
+      ),
+    ]);
+    final executor = LocalCleanupExecutor(
+      mappings: FakeSyncRootMappingStore(
+        cleanupPolicy: 'delete',
+        archivePath: '',
+      ),
+      uploadTasks: uploadTasks,
+    );
+
+    final result = await executor.cleanupUploadedTasks();
+
+    expect(result.cleanedCount, 0);
+    expect(result.pendingCount, 1);
+    expect(await file.exists(), isTrue);
+    expect(uploadTasks.saved.single.status, 'cleanup_pending');
+    expect(uploadTasks.saved.single.lastError, contains('文件名编码异常'));
+  });
+
   test('cleanup retries cleanup pending task', () async {
     final dir = await Directory.systemTemp.createTemp('vaultsync_cleanup_');
     addTearDown(() => dir.delete(recursive: true));
@@ -203,23 +233,77 @@ void main() {
     expect(uploadTasks.saved.single.lastError, '');
   });
 
+  test('cleanup batches newly uploaded media assets automatically', () async {
+    final uploadTasks = FakeUploadTaskStore([
+      LocalUploadTask(
+        id: 'root-1:asset-1',
+        syncRootId: 'root-1',
+        localPath: '',
+        relativePath: '相册/2026/07/a.jpg',
+        sizeBytes: 3,
+        modifiedAt: DateTime.utc(2026, 7, 3, 9),
+        status: 'uploaded',
+        attempts: 0,
+        createdAt: DateTime.utc(2026, 7, 3, 10),
+        sourceType: 'media_asset',
+        assetId: 'asset-1',
+        assetMediaType: 'image',
+      ),
+    ]);
+    final cleaner = FakeMediaAssetCleaner(deleted: true);
+    final executor = LocalCleanupExecutor(
+      mappings: FakeSyncRootMappingStore(
+        cleanupPolicy: 'delete',
+        archivePath: '',
+      ),
+      uploadTasks: uploadTasks,
+      mediaCleaner: cleaner,
+    );
+
+    final result = await executor.cleanupUploadedTasks();
+
+    expect(result.cleanedCount, 1);
+    expect(result.pendingCount, 0);
+    expect(cleaner.deletedAssetIds, ['asset-1']);
+    expect(uploadTasks.saved.single.status, 'deleted_local');
+    expect(uploadTasks.saved.single.lastError, isEmpty);
+  });
+
+  test('cleanup submits multiple uploaded media assets in one batch', () async {
+    final uploadTasks = FakeUploadTaskStore([
+      _mediaTask(id: 'root-1:asset-1', assetId: 'asset-1'),
+      _mediaTask(id: 'root-1:asset-2', assetId: 'asset-2'),
+    ]);
+    final cleaner = FakeMediaAssetCleaner(deleted: true);
+    final executor = LocalCleanupExecutor(
+      mappings: FakeSyncRootMappingStore(
+        cleanupPolicy: 'delete',
+        archivePath: '',
+      ),
+      uploadTasks: uploadTasks,
+      mediaCleaner: cleaner,
+    );
+
+    final result = await executor.cleanupNewlyUploadedMediaTasks();
+
+    expect(result.cleanedCount, 2);
+    expect(result.pendingCount, 0);
+    expect(cleaner.batchCallCount, 1);
+    expect(cleaner.deletedAssetIds, ['asset-1', 'asset-2']);
+    expect(
+      uploadTasks.saved.map((task) => task.status),
+      everyElement('deleted_local'),
+    );
+  });
+
   test(
-    'cleanup keeps uploaded media asset pending until user confirms',
+    'cleanup preserves media asset with invalid filename encoding',
     () async {
       final uploadTasks = FakeUploadTaskStore([
-        LocalUploadTask(
+        _mediaTask(
           id: 'root-1:asset-1',
-          syncRootId: 'root-1',
-          localPath: '',
-          relativePath: '相册/2026/07/a.jpg',
-          sizeBytes: 3,
-          modifiedAt: DateTime.utc(2026, 7, 3, 9),
-          status: 'uploaded',
-          attempts: 0,
-          createdAt: DateTime.utc(2026, 7, 3, 10),
-          sourceType: 'media_asset',
           assetId: 'asset-1',
-          assetMediaType: 'image',
+          relativePath: '相册/2026/08/���.jpg',
         ),
       ]);
       final cleaner = FakeMediaAssetCleaner(deleted: true);
@@ -232,13 +316,13 @@ void main() {
         mediaCleaner: cleaner,
       );
 
-      final result = await executor.cleanupUploadedTasks();
+      final result = await executor.cleanupNewlyUploadedMediaTasks();
 
       expect(result.cleanedCount, 0);
       expect(result.pendingCount, 1);
-      expect(cleaner.deletedAssetIds, isEmpty);
+      expect(cleaner.batchCallCount, 0);
       expect(uploadTasks.saved.single.status, 'cleanup_pending');
-      expect(uploadTasks.saved.single.lastError, '相册资源已备份，等待你确认后再删除本地照片和视频');
+      expect(uploadTasks.saved.single.lastError, contains('文件名编码异常'));
     },
   );
 
@@ -432,7 +516,7 @@ void main() {
       expect(result.pendingCount, 1);
       expect(cleaner.deletedAssetIds, ['asset-1']);
       expect(uploadTasks.saved.single.status, 'cleanup_pending');
-      expect(uploadTasks.saved.single.lastError, '删除本地相册资源失败，请检查相册权限后重试');
+      expect(uploadTasks.saved.single.lastError, '删除本地相册资源失败，请回到前台并检查相册权限后重试');
     },
   );
 
@@ -539,7 +623,8 @@ LocalUploadTask _uploadedTask(
 LocalUploadTask _mediaTask({
   required String id,
   required String assetId,
-  required String status,
+  String status = 'uploaded',
+  String relativePath = '相册/2026/07/a.jpg',
   String lastError = '',
   String uploadSessionId = '',
   String uploadPayloadHash = '',
@@ -551,7 +636,7 @@ LocalUploadTask _mediaTask({
     id: id,
     syncRootId: 'root-1',
     localPath: '',
-    relativePath: '相册/2026/07/a.jpg',
+    relativePath: relativePath,
     sizeBytes: 3,
     modifiedAt: DateTime.utc(2026, 7, 3, 9),
     status: status,
@@ -618,6 +703,7 @@ class FakeMediaAssetCleaner implements MediaAssetCleaner {
   final bool deleted;
   final bool throws;
   final List<String> deletedAssetIds = [];
+  int batchCallCount = 0;
 
   FakeMediaAssetCleaner({required this.deleted, this.throws = false});
 
@@ -628,5 +714,20 @@ class FakeMediaAssetCleaner implements MediaAssetCleaner {
       throw Exception('delete failed');
     }
     return MediaAssetCleanupResult(deleted: deleted);
+  }
+
+  @override
+  Future<MediaAssetBatchCleanupResult> deleteAssets(
+    List<String> assetIds,
+  ) async {
+    batchCallCount += 1;
+    deletedAssetIds.addAll(assetIds);
+    if (throws) {
+      throw Exception('delete failed');
+    }
+    return MediaAssetBatchCleanupResult(
+      deletedAssetIds: deleted ? assetIds.toSet() : const <String>{},
+      message: deleted ? '' : '系统未允许删除本地相册资源',
+    );
   }
 }

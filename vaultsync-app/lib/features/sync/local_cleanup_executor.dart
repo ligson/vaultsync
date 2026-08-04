@@ -6,7 +6,10 @@ import 'local_upload_executor.dart';
 import 'sync_models.dart';
 
 export '../media_backup/media_backup_gateway.dart'
-    show MediaAssetCleaner, MediaAssetCleanupResult;
+    show
+        MediaAssetBatchCleanupResult,
+        MediaAssetCleaner,
+        MediaAssetCleanupResult;
 
 class LocalCleanupResult {
   final int cleanedCount;
@@ -34,6 +37,10 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
     return _cleanupTasks();
   }
 
+  Future<LocalCleanupResult> cleanupNewlyUploadedMediaTasks() async {
+    return _cleanupTasks(onlyNewMedia: true);
+  }
+
   @override
   Future<LocalUploadTask> cleanupUploadedTask(LocalUploadTask task) async {
     final mappingItems = await mappings.loadSyncRootMappings();
@@ -47,6 +54,16 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
     final policy = mapping?.cleanupPolicy ?? 'keep';
     if (task.status != 'uploaded' && task.status != 'clean') {
       return task;
+    }
+    if (task.sourceType == 'media_asset' && policy == 'delete') {
+      if (_hasInvalidFileName(task.relativePath)) {
+        return _withStatus(
+          task,
+          'cleanup_pending',
+          lastError: _invalidFileNameCleanupMessage,
+        );
+      }
+      return _withStatus(task, 'uploaded');
     }
     final cleanupResult = await _cleanupTask(task, policy, mapping);
     return _withStatus(
@@ -73,6 +90,21 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
       for (final mapping in mappingItems) mapping.syncRootId: mapping,
     };
     final tasks = await uploadTasks.loadUploadTasks();
+    final eligibleTasks = <LocalUploadTask>[];
+    for (final task in tasks) {
+      if (!targetIds.contains(task.id) ||
+          task.sourceType != 'media_asset' ||
+          task.status != 'cleanup_pending') {
+        continue;
+      }
+      final mapping = mappingsByRoot[task.syncRootId];
+      if (mapping?.cleanupPolicy == 'delete' &&
+          !_hasInvalidFileName(task.relativePath) &&
+          task.assetId.trim().isNotEmpty) {
+        eligibleTasks.add(task);
+      }
+    }
+    final batchResult = await _deleteMediaAssets(eligibleTasks);
     var cleanedCount = 0;
     var pendingCount = 0;
 
@@ -85,9 +117,10 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
         continue;
       }
 
-      final cleanupResult = await _confirmMediaCleanupTask(
+      final cleanupResult = _confirmedMediaCleanupResult(
         task,
         mappingsByRoot[task.syncRootId],
+        batchResult,
       );
       if (cleanupResult.cleaned) {
         cleanedCount += 1;
@@ -122,17 +155,37 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
     ]);
   }
 
-  Future<LocalCleanupResult> _cleanupTasks({String? taskId}) async {
+  Future<LocalCleanupResult> _cleanupTasks({
+    String? taskId,
+    bool onlyNewMedia = false,
+  }) async {
     final mappingItems = await mappings.loadSyncRootMappings();
     final mappingsByRoot = {
       for (final mapping in mappingItems) mapping.syncRootId: mapping,
     };
     final tasks = await uploadTasks.loadUploadTasks();
+    final automaticMediaTasks = <LocalUploadTask>[];
+    for (final task in tasks) {
+      if ((taskId == null || task.id == taskId) &&
+          task.sourceType == 'media_asset' &&
+          task.status == 'uploaded' &&
+          mappingsByRoot[task.syncRootId]?.cleanupPolicy == 'delete' &&
+          !_hasInvalidFileName(task.relativePath) &&
+          task.assetId.trim().isNotEmpty) {
+        automaticMediaTasks.add(task);
+      }
+    }
+    final mediaBatchResult = await _deleteMediaAssets(automaticMediaTasks);
     var cleanedCount = 0;
     var pendingCount = 0;
 
     final updatedTasks = <LocalUploadTask>[];
     for (final task in tasks) {
+      if (onlyNewMedia &&
+          (task.sourceType != 'media_asset' || task.status != 'uploaded')) {
+        updatedTasks.add(task);
+        continue;
+      }
       if (taskId != null && task.id != taskId) {
         updatedTasks.add(task);
         continue;
@@ -146,7 +199,9 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
 
       final mapping = mappingsByRoot[task.syncRootId];
       final policy = mapping?.cleanupPolicy ?? 'keep';
-      final cleanupResult = await _cleanupTask(task, policy, mapping);
+      final cleanupResult = task.sourceType == 'media_asset'
+          ? _automaticMediaCleanupResult(task, policy, mediaBatchResult)
+          : await _cleanupTask(task, policy, mapping);
       if (cleanupResult.cleaned) {
         cleanedCount += 1;
       }
@@ -183,13 +238,21 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
         return const _TaskCleanupResult(
           status: 'cleanup_pending',
           pending: true,
-          message: '相册资源已备份，等待你确认后再删除本地照片和视频',
+          message: '相册资源已备份，等待系统允许批量删除本地照片和视频',
         );
       }
       return const _TaskCleanupResult(
         status: 'cleanup_pending',
         pending: true,
         message: '相册清理策略暂不可用，请检查目录设置',
+      );
+    }
+
+    if (policy == 'delete' && _hasInvalidFileName(task.relativePath)) {
+      return const _TaskCleanupResult(
+        status: 'cleanup_pending',
+        pending: true,
+        message: _invalidFileNameCleanupMessage,
       );
     }
 
@@ -229,10 +292,62 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
     );
   }
 
-  Future<_TaskCleanupResult> _confirmMediaCleanupTask(
+  _TaskCleanupResult _automaticMediaCleanupResult(
+    LocalUploadTask task,
+    String policy,
+    _MediaBatchDeleteResult batchResult,
+  ) {
+    if (policy == 'keep') {
+      return const _TaskCleanupResult(status: 'clean', cleaned: true);
+    }
+    if (policy != 'delete') {
+      return const _TaskCleanupResult(
+        status: 'cleanup_pending',
+        pending: true,
+        message: '相册清理策略暂不可用，请检查目录设置',
+      );
+    }
+    if (_hasInvalidFileName(task.relativePath)) {
+      return const _TaskCleanupResult(
+        status: 'cleanup_pending',
+        pending: true,
+        message: _invalidFileNameCleanupMessage,
+      );
+    }
+    if (task.status != 'uploaded') {
+      return _TaskCleanupResult(
+        status: task.status == 'clean' ? 'cleanup_pending' : task.status,
+        pending: true,
+        message: task.lastError.isEmpty
+            ? '历史相册资源已备份，确认一次即可批量清理本地照片和视频'
+            : task.lastError,
+      );
+    }
+    final assetId = task.assetId.trim();
+    if (assetId.isEmpty) {
+      return const _TaskCleanupResult(
+        status: 'cleanup_pending',
+        pending: true,
+        message: '无法定位该照片或视频，暂时不能清理',
+      );
+    }
+    if (batchResult.deletedAssetIds.contains(assetId)) {
+      return const _TaskCleanupResult(status: 'deleted_local', cleaned: true);
+    }
+    return _TaskCleanupResult(
+      status: 'cleanup_pending',
+      pending: true,
+      message: batchResult.message.isEmpty
+          ? '系统未允许删除本地相册资源，回到前台后可批量重试'
+          : batchResult.message,
+    );
+  }
+
+  _TaskCleanupResult _confirmedMediaCleanupResult(
     LocalUploadTask task,
     LocalSyncRootMapping? mapping,
-  ) async {
+    _MediaBatchDeleteResult batchResult,
+  ) {
     if (mapping?.cleanupPolicy != 'delete') {
       return const _TaskCleanupResult(
         status: 'cleanup_pending',
@@ -240,13 +355,11 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
         message: '清理策略已变更，请重新确认是否删除本机相册资源',
       );
     }
-
-    final cleaner = mediaCleaner;
-    if (cleaner == null) {
+    if (_hasInvalidFileName(task.relativePath)) {
       return const _TaskCleanupResult(
         status: 'cleanup_pending',
         pending: true,
-        message: '相册清理能力暂不可用',
+        message: _invalidFileNameCleanupMessage,
       );
     }
 
@@ -259,22 +372,38 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
       );
     }
 
-    try {
-      final result = await cleaner.deleteAsset(assetId);
-      if (result.deleted) {
-        return const _TaskCleanupResult(status: 'deleted_local', cleaned: true);
-      }
+    if (batchResult.deletedAssetIds.contains(assetId)) {
+      return const _TaskCleanupResult(status: 'deleted_local', cleaned: true);
+    }
+    return _TaskCleanupResult(
+      status: 'cleanup_pending',
+      pending: true,
+      message: batchResult.message.isEmpty
+          ? '系统未允许删除本地相册资源'
+          : batchResult.message,
+    );
+  }
 
-      return _TaskCleanupResult(
-        status: 'cleanup_pending',
-        pending: true,
-        message: result.message.isEmpty ? '系统未允许删除本地相册资源' : result.message,
+  Future<_MediaBatchDeleteResult> _deleteMediaAssets(
+    List<LocalUploadTask> tasks,
+  ) async {
+    if (tasks.isEmpty) {
+      return const _MediaBatchDeleteResult();
+    }
+    final cleaner = mediaCleaner;
+    if (cleaner == null) {
+      return const _MediaBatchDeleteResult(message: '相册清理能力暂不可用');
+    }
+    final assetIds = tasks.map((task) => task.assetId.trim()).toSet().toList();
+    try {
+      final result = await cleaner.deleteAssets(assetIds);
+      return _MediaBatchDeleteResult(
+        deletedAssetIds: result.deletedAssetIds,
+        message: result.message,
       );
     } catch (_) {
-      return const _TaskCleanupResult(
-        status: 'cleanup_pending',
-        pending: true,
-        message: '删除本地相册资源失败，请检查相册权限后重试',
+      return const _MediaBatchDeleteResult(
+        message: '删除本地相册资源失败，请回到前台并检查相册权限后重试',
       );
     }
   }
@@ -413,3 +542,18 @@ class _TaskCleanupResult {
     this.message = '',
   });
 }
+
+class _MediaBatchDeleteResult {
+  final Set<String> deletedAssetIds;
+  final String message;
+
+  const _MediaBatchDeleteResult({
+    this.deletedAssetIds = const <String>{},
+    this.message = '',
+  });
+}
+
+const _invalidFileNameCleanupMessage = '文件名编码异常，为避免无法恢复原始名称，已保留本地文件，请先重命名后重新扫描';
+
+bool _hasInvalidFileName(String relativePath) =>
+    relativePath.contains('\uFFFD');

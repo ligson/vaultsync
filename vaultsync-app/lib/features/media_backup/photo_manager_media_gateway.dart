@@ -98,13 +98,31 @@ class PhotoManagerMediaGateway
 
   @override
   Future<MediaAssetCleanupResult> deleteAsset(String assetId) async {
-    final result = await PhotoManager.editor.deleteWithIds([assetId]);
-    if (result.isNotEmpty) {
+    final result = await deleteAssets([assetId]);
+    if (result.deletedAssetIds.contains(assetId)) {
       return const MediaAssetCleanupResult(deleted: true);
     }
     return const MediaAssetCleanupResult(
       deleted: false,
       message: '系统未允许删除本地相册资源',
+    );
+  }
+
+  @override
+  Future<MediaAssetBatchCleanupResult> deleteAssets(
+    List<String> assetIds,
+  ) async {
+    final ids = assetIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    if (ids.isEmpty) {
+      return const MediaAssetBatchCleanupResult();
+    }
+    final deletedIds = await PhotoManager.editor.deleteWithIds(ids.toList());
+    return MediaAssetBatchCleanupResult(
+      deletedAssetIds: deletedIds.toSet(),
+      message: deletedIds.isEmpty ? '系统未允许删除本地相册资源' : '',
     );
   }
 

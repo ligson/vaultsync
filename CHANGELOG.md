@@ -4,6 +4,7 @@
 
 ## 2026-08-04
 
+- tag `v1.0.0+2026080405` 首次进入 iOS 无签名构建分支，但 `macos-15` runner 的旧 iOS SDK 无法编译 `device_info_plus 13.2.0` 使用的 `NSProcessInfo.isiOSAppOnVision`，因此未发布不完整 Release；iOS job 改用官方 `macos-26` arm64 runner，以匹配当前 Flutter 插件所需 SDK。该修复不调整依赖版本、业务代码或客户端数据格式。
 - GitHub tag 发版工作流支持无 Apple Developer 账号场景：iOS 在 4 项签名 Secret 全部缺失时生成明确标注 `ios-unsigned.ipa` 的待重签名包，macOS 在 6 项签名/公证 Secret 全部缺失时生成 x64、arm64 的 `unsigned.zip`；任一平台只配置部分凭据时仍直接失败，完整配置后自动恢复正式签名与公证。Android 继续强制使用现有正式 keystore。Release 说明同步提示 iOS 不可直接安装、macOS 可能受 Gatekeeper 限制。本次仅调整 CI 和文档，不修改 NAS 数据、SQLite、服务端对象、客户端同步映射、上传队列或加密密钥。
 - tag `v1.0.0+2026080404` 已验证 Android GitHub Actions 全链路：正式 keystore 导入、APK/AAB release 编译、APK `apksigner` 验签、AAB `jarsigner` 验签和 artifact 上传全部成功；`vaultsync-app-android` artifact 大小为 93,317,878 字节，artifact digest 为 `sha256:4d8ebc083f15e4d33756dabcc1094cf587896ce303204a3b621eef48b76947ce`。本轮前端 zip 与 Linux/macOS amd64/arm64 后端制品也全部成功；iOS 和 macOS 因仍缺少 Apple Developer 签名材料失败，Publish job 按设计跳过，未生成不完整 GitHub Release。本次不安装 APK、不部署 NAS，也不修改 SQLite、服务端对象或客户端本地数据。
 - 已将本机当前 Android 正式 keystore 的 4 项配置安全写入仓库 GitHub Actions Secrets，未在日志或仓库中暴露签名值；`v1.0.0+2026080403` attempt 2 已通过签名准备并成功编译 APK/AAB，随后发现 `jarsigner -verify -strict` 会把 AAB 内嵌依赖的 JarFile/JarInputStream 签名差异告警当成 exit 4。工作流改用标准 `jarsigner -verify -verbose -certs`，并额外强制检查 `jar verified.`，既避免该误判，也继续拒绝未签名 AAB。iOS/macOS 仍因缺少 Apple Developer 材料保持失败，不生成不完整 Release；本次不修改 App 签名身份、NAS 数据、SQLite、服务端对象或客户端本地数据。

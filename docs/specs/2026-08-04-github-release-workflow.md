@@ -85,7 +85,7 @@ Android 必须使用当前已发布 App 的同一 keystore。更换 keystore 会
 
 当前 iOS bundle ID 为 `com.example.vaultsyncApp`，provisioning profile 必须与它一致。后续如需改成正式 bundle ID，应单独评估应用身份、Keychain 和客户端数据迁移，不能在常规发版时直接替换。
 
-iOS 的 4 项必填 Secret 完全未配置时，工作流自动执行 `flutter build ios --release --no-codesign` 并发布 `*-ios-unsigned.ipa`。如果只配置了一部分，工作流会直接失败并指出凭据不完整，避免把误配置静默降级为无签名包。
+iOS 使用官方 `macos-26` arm64 runner，确保 iOS SDK 与当前 Flutter 插件依赖匹配。4 项必填 Secret 完全未配置时，工作流自动执行 `flutter build ios --release --no-codesign` 并发布 `*-ios-unsigned.ipa`。如果只配置了一部分，工作流会直接失败并指出凭据不完整，避免把误配置静默降级为无签名包。
 
 ### macOS Secrets
 

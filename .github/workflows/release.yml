@@ -344,7 +344,7 @@ jobs:
     needs:
       - validate-tag
       - verify
-    runs-on: macos-15
+    runs-on: macos-26
     env:
       SIGNING_KEYCHAIN: /tmp/vaultsync-ios-${{ github.run_id }}-${{ github.run_attempt }}.keychain-db
       KEYCHAIN_PASSWORD: vaultsync-${{ github.run_id }}-${{ github.run_attempt }}

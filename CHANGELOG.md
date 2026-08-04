@@ -4,7 +4,8 @@
 
 ## 2026-08-04
 
-- GitHub tag 发版新增 Windows x64 客户端：使用 `windows-2025` runner 构建并将 EXE、Flutter 运行库、插件 DLL 和 data 目录完整打包；未配置 PFX 时发布 `windows-x64-unsigned.zip` 并提示 SmartScreen 风险，完整配置两项 Windows Secret 后自动对主 EXE 做 Authenticode SHA-256 签名、可信时间戳和验签，部分配置则拒绝发布。Windows 制品已纳入统一 Release、11 个构建文件数量校验和 SHA-256 清单。本次仅调整 CI 与文档，不修改 NAS、SQLite、服务端对象、客户端本地状态或同步数据。
+- tag `v1.0.0+2026080407` 首次执行 Windows 原生构建，确认签名模式和 Flutter 环境准备正常，但 `windows-2025` 的 Visual Studio 18 将 `permission_handler_windows 0.2.1` 使用的 experimental coroutine 弃用提示升级为编译错误，因此未发布不完整 Release；Windows job 改用官方 `windows-2022` 与 Visual Studio 2022 稳定工具链，不通过全局关闭编译器保护掩盖依赖问题，也不调整应用依赖版本。
+- GitHub tag 发版新增 Windows x64 客户端：使用 `windows-2022` runner 构建并将 EXE、Flutter 运行库、插件 DLL 和 data 目录完整打包；未配置 PFX 时发布 `windows-x64-unsigned.zip` 并提示 SmartScreen 风险，完整配置两项 Windows Secret 后自动对主 EXE 做 Authenticode SHA-256 签名、可信时间戳和验签，部分配置则拒绝发布。Windows 制品已纳入统一 Release、11 个构建文件数量校验和 SHA-256 清单。本次仅调整 CI 与文档，不修改 NAS、SQLite、服务端对象、客户端本地状态或同步数据。
 - tag `v1.0.0+2026080406` 已完成无 Apple Developer 证书的 GitHub Release 全链路验证：基础测试、Android 正式签名 APK/AAB、iOS `unsigned.ipa`、macOS x64/arm64 `unsigned.zip`、前端 zip、Linux/macOS amd64/arm64 后端包和发布 job 全部成功。Release 共包含 10 个构建制品及 `SHA256SUMS.txt`，校验清单覆盖全部构建制品；iOS 包已验证 `Payload/Runner.app` 结构。此次仅发布 GitHub 制品，未安装手机、未部署 NAS，也未修改服务端数据或客户端本地状态。
 - tag `v1.0.0+2026080405` 首次进入 iOS 无签名构建分支，但 `macos-15` runner 的旧 iOS SDK 无法编译 `device_info_plus 13.2.0` 使用的 `NSProcessInfo.isiOSAppOnVision`，因此未发布不完整 Release；iOS job 改用官方 `macos-26` arm64 runner，以匹配当前 Flutter 插件所需 SDK。该修复不调整依赖版本、业务代码或客户端数据格式。
 - GitHub tag 发版工作流支持无 Apple Developer 账号场景：iOS 在 4 项签名 Secret 全部缺失时生成明确标注 `ios-unsigned.ipa` 的待重签名包，macOS 在 6 项签名/公证 Secret 全部缺失时生成 x64、arm64 的 `unsigned.zip`；任一平台只配置部分凭据时仍直接失败，完整配置后自动恢复正式签名与公证。Android 继续强制使用现有正式 keystore。Release 说明同步提示 iOS 不可直接安装、macOS 可能受 Gatekeeper 限制。本次仅调整 CI 和文档，不修改 NAS 数据、SQLite、服务端对象、客户端同步映射、上传队列或加密密钥。

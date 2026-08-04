@@ -81,7 +81,7 @@ Android 必须使用当前已发布 App 的同一 keystore。更换 keystore 会
 | `WINDOWS_CODE_SIGNING_CERTIFICATE_BASE64` | Authenticode 代码签名 `.pfx` 文件的 Base64 |
 | `WINDOWS_CODE_SIGNING_CERTIFICATE_PASSWORD` | `.pfx` 密码 |
 
-Windows 使用官方 `windows-2025` x64 runner，构建后将 `vaultsync_app.exe`、Flutter 运行库、插件 DLL 和 `data/` 一起打包。两项 Secret 完全未配置时发布 `*-windows-x64-unsigned.zip`；两项完整时使用 SHA-256 和可信时间戳签名主 EXE，并在打包前执行 `signtool verify`。只配置一项时直接失败，避免静默发布未签名包。
+Windows 使用官方 `windows-2022` x64 runner 及 Visual Studio 2022 稳定工具链，构建后将 `vaultsync_app.exe`、Flutter 运行库、插件 DLL 和 `data/` 一起打包。两项 Secret 完全未配置时发布 `*-windows-x64-unsigned.zip`；两项完整时使用 SHA-256 和可信时间戳签名主 EXE，并在打包前执行 `signtool verify`。只配置一项时直接失败，避免静默发布未签名包。
 
 ### iOS Secrets 和 Variables
 

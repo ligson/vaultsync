@@ -344,7 +344,7 @@ jobs:
     needs:
       - validate-tag
       - verify
-    runs-on: windows-2025
+    runs-on: windows-2022
     steps:
       - name: Checkout tag
         uses: actions/checkout@v6

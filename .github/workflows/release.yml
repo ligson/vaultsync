@@ -1,0 +1,669 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag, for example v1.0.0+2026080402'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  FLUTTER_VERSION: 3.41.7
+  NODE_VERSION: 22
+
+jobs:
+  validate-tag:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      build_number: ${{ steps.release.outputs.build_number }}
+      artifact_version: ${{ steps.release.outputs.artifact_version }}
+      commit: ${{ steps.release.outputs.commit }}
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Validate tag and checkout
+        id: release
+        env:
+          REQUESTED_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$REQUESTED_TAG"
+          if [[ ! "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)\+([0-9]+)$ ]]; then
+            echo "Invalid release tag: $tag" >&2
+            echo 'Expected format: v1.0.0+2026080402' >&2
+            exit 1
+          fi
+          version="${BASH_REMATCH[1]}"
+          build_number="${BASH_REMATCH[2]}"
+          artifact_version="${tag#v}"
+          if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "Tag $tag does not exist." >&2
+            exit 1
+          fi
+          commit="$(git rev-list -n 1 "$tag")"
+          if [ "$(git rev-parse HEAD)" != "$commit" ]; then
+            echo "Checked out commit does not match $tag." >&2
+            exit 1
+          fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "build_number=$build_number"
+            echo "artifact_version=$artifact_version"
+            echo "commit=$commit"
+          } >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: Verify tagged source
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate-tag.outputs.tag }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: vaultsync-be/go.mod
+          cache-dependency-path: vaultsync-be/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: vaultsync-fe/package-lock.json
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2.9.1
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Test backend
+        working-directory: vaultsync-be
+        run: go test ./...
+
+      - name: Build frontend
+        working-directory: vaultsync-fe
+        run: |
+          npm ci
+          npm run build
+
+      - name: Analyze and test app
+        working-directory: vaultsync-app
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+
+  build-backend:
+    name: Backend ${{ matrix.target }}
+    needs:
+      - validate-tag
+      - verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            goos: linux
+            goarch: amd64
+          - target: linux-arm64
+            goos: linux
+            goarch: arm64
+          - target: macos-amd64
+            goos: darwin
+            goarch: amd64
+          - target: macos-arm64
+            goos: darwin
+            goarch: arm64
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate-tag.outputs.tag }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: vaultsync-be/go.mod
+          cache-dependency-path: vaultsync-be/go.sum
+
+      - name: Build and package backend
+        working-directory: vaultsync-be
+        env:
+          ARTIFACT_VERSION: ${{ needs.validate-tag.outputs.artifact_version }}
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_root="vaultsync-be-${ARTIFACT_VERSION}-${{ matrix.target }}"
+          package_dir="dist/$archive_root"
+          mkdir -p "$package_dir"
+          go build -trimpath -ldflags="-s -w" -o "$package_dir/vaultsync-be" ./cmd/server
+          cp config.example.yaml README.md "$package_dir/"
+          chmod +x "$package_dir/vaultsync-be"
+          tar -C dist -czf "dist/$archive_root.tar.gz" "$archive_root"
+
+      - name: Upload backend package
+        uses: actions/upload-artifact@v7
+        with:
+          name: vaultsync-be-${{ matrix.target }}
+          path: vaultsync-be/dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  build-frontend:
+    name: Frontend zip
+    needs:
+      - validate-tag
+      - verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate-tag.outputs.tag }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: vaultsync-fe/package-lock.json
+
+      - name: Build and package frontend
+        working-directory: vaultsync-fe
+        env:
+          ARTIFACT_VERSION: ${{ needs.validate-tag.outputs.artifact_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          archive_root="vaultsync-fe-${ARTIFACT_VERSION}"
+          package_dir="release/$archive_root"
+          mkdir -p "$package_dir"
+          cp -R dist "$package_dir/web"
+          cp -R docker "$package_dir/docker"
+          cp README.md "$package_dir/README.md"
+          mkdir -p release
+          cd release
+          zip -qry "$archive_root.zip" "$archive_root"
+
+      - name: Upload frontend package
+        uses: actions/upload-artifact@v7
+        with:
+          name: vaultsync-fe
+          path: vaultsync-fe/release/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  build-android:
+    name: Android signed APK and AAB
+    needs:
+      - validate-tag
+      - verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate-tag.outputs.tag }}
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2.9.1
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Prepare Android release signing
+        working-directory: vaultsync-app
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing required GitHub secret: $name" >&2
+              exit 1
+            fi
+          done
+          export KEYSTORE_PATH="$RUNNER_TEMP/vaultsync-release.jks"
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          Path(os.environ["KEYSTORE_PATH"]).write_bytes(
+              base64.b64decode(os.environ["ANDROID_KEYSTORE_BASE64"])
+          )
+          PY
+          cp "$KEYSTORE_PATH" android/vaultsync-release.jks
+          {
+            printf 'storePassword=%s\n' "$ANDROID_KEYSTORE_PASSWORD"
+            printf 'keyPassword=%s\n' "$ANDROID_KEY_PASSWORD"
+            printf 'keyAlias=%s\n' "$ANDROID_KEY_ALIAS"
+            printf 'storeFile=../vaultsync-release.jks\n'
+          } > android/key.properties
+          keytool -list \
+            -keystore android/vaultsync-release.jks \
+            -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+            -alias "$ANDROID_KEY_ALIAS" >/dev/null
+
+      - name: Build Android release
+        working-directory: vaultsync-app
+        env:
+          RELEASE_VERSION: ${{ needs.validate-tag.outputs.version }}
+          BUILD_NUMBER: ${{ needs.validate-tag.outputs.build_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter pub get
+          flutter build apk --release --build-name "$RELEASE_VERSION" --build-number "$BUILD_NUMBER"
+          flutter build appbundle --release --build-name "$RELEASE_VERSION" --build-number "$BUILD_NUMBER"
+
+      - name: Verify and package Android signatures
+        working-directory: vaultsync-app
+        env:
+          ARTIFACT_VERSION: ${{ needs.validate-tag.outputs.artifact_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          if [ -z "$apksigner" ]; then
+            echo 'Android apksigner was not found.' >&2
+            exit 1
+          fi
+          "$apksigner" verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk
+          jarsigner -verify -strict build/app/outputs/bundle/release/app-release.aab
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/vaultsync-app-${ARTIFACT_VERSION}-android.apk"
+          cp build/app/outputs/bundle/release/app-release.aab "dist/vaultsync-app-${ARTIFACT_VERSION}-android.aab"
+
+      - name: Upload Android packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: vaultsync-app-android
+          path: |
+            vaultsync-app/dist/*.apk
+            vaultsync-app/dist/*.aab
+          if-no-files-found: error
+          retention-days: 14
+
+  build-ios:
+    name: iOS signed IPA
+    needs:
+      - validate-tag
+      - verify
+    runs-on: macos-15
+    env:
+      SIGNING_KEYCHAIN: /tmp/vaultsync-ios-${{ github.run_id }}-${{ github.run_attempt }}.keychain-db
+      KEYCHAIN_PASSWORD: vaultsync-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate-tag.outputs.tag }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2.9.1
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Import iOS signing certificate and profile
+        working-directory: vaultsync-app
+        env:
+          IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          IOS_PROVISIONING_PROFILE_NAME: ${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          IOS_EXPORT_METHOD: ${{ vars.IOS_EXPORT_METHOD || 'ad-hoc' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in IOS_DISTRIBUTION_CERTIFICATE_BASE64 IOS_DISTRIBUTION_CERTIFICATE_PASSWORD IOS_PROVISIONING_PROFILE_BASE64 IOS_TEAM_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing required GitHub secret: $name" >&2
+              exit 1
+            fi
+          done
+          export CERT_PATH="$RUNNER_TEMP/vaultsync-ios-distribution.p12"
+          export PROFILE_PATH="$RUNNER_TEMP/vaultsync.mobileprovision"
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          Path(os.environ["CERT_PATH"]).write_bytes(
+              base64.b64decode(os.environ["IOS_DISTRIBUTION_CERTIFICATE_BASE64"])
+          )
+          Path(os.environ["PROFILE_PATH"]).write_bytes(
+              base64.b64decode(os.environ["IOS_PROVISIONING_PROFILE_BASE64"])
+          )
+          PY
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$SIGNING_KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$SIGNING_KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$SIGNING_KEYCHAIN"
+          security import "$CERT_PATH" \
+            -P "$IOS_DISTRIBUTION_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$SIGNING_KEYCHAIN"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$SIGNING_KEYCHAIN"
+          security list-keychains -d user -s "$SIGNING_KEYCHAIN"
+          security find-identity -v -p codesigning "$SIGNING_KEYCHAIN"
+
+          profile_plist="$RUNNER_TEMP/vaultsync-profile.plist"
+          security cms -D -i "$PROFILE_PATH" > "$profile_plist"
+          profile_uuid="$(/usr/libexec/PlistBuddy -c 'Print UUID' "$profile_plist")"
+          decoded_profile_name="$(/usr/libexec/PlistBuddy -c 'Print Name' "$profile_plist")"
+          profile_name="${IOS_PROVISIONING_PROFILE_NAME:-$decoded_profile_name}"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$profile_uuid.mobileprovision"
+
+          {
+            printf '\nDEVELOPMENT_TEAM=%s\n' "$IOS_TEAM_ID"
+            printf 'CODE_SIGN_STYLE=Manual\n'
+            printf 'CODE_SIGN_IDENTITY=Apple Distribution\n'
+            printf 'PROVISIONING_PROFILE_SPECIFIER=%s\n' "$profile_name"
+          } >> ios/Flutter/Release.xcconfig
+
+          export PROFILE_NAME="$profile_name"
+          python3 - <<'PY'
+          import os
+          import plistlib
+
+          options = {
+              "method": os.environ["IOS_EXPORT_METHOD"],
+              "teamID": os.environ["IOS_TEAM_ID"],
+              "signingStyle": "manual",
+              "provisioningProfiles": {
+                  "com.example.vaultsyncApp": os.environ["PROFILE_NAME"],
+              },
+              "stripSwiftSymbols": True,
+          }
+          with open("ios/ExportOptions.plist", "wb") as handle:
+              plistlib.dump(options, handle)
+          PY
+
+      - name: Build and verify signed iOS IPA
+        working-directory: vaultsync-app
+        env:
+          RELEASE_VERSION: ${{ needs.validate-tag.outputs.version }}
+          ARTIFACT_VERSION: ${{ needs.validate-tag.outputs.artifact_version }}
+          BUILD_NUMBER: ${{ needs.validate-tag.outputs.build_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter pub get
+          flutter build ipa --release \
+            --build-name "$RELEASE_VERSION" \
+            --build-number "$BUILD_NUMBER" \
+            --export-options-plist=ios/ExportOptions.plist
+          ipa_path="$(find build/ios/ipa -maxdepth 1 -name '*.ipa' -print -quit)"
+          if [ -z "$ipa_path" ]; then
+            echo 'Signed iOS IPA was not generated.' >&2
+            exit 1
+          fi
+          verify_dir="$RUNNER_TEMP/vaultsync-ios-verify"
+          unzip -q "$ipa_path" -d "$verify_dir"
+          app_path="$(find "$verify_dir/Payload" -maxdepth 1 -name '*.app' -print -quit)"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          mkdir -p dist
+          cp "$ipa_path" "dist/vaultsync-app-${ARTIFACT_VERSION}-ios.ipa"
+
+      - name: Upload iOS package
+        uses: actions/upload-artifact@v7
+        with:
+          name: vaultsync-app-ios
+          path: vaultsync-app/dist/*.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Delete temporary iOS keychain
+        if: always()
+        shell: bash
+        run: security delete-keychain "$SIGNING_KEYCHAIN" >/dev/null 2>&1 || true
+
+  build-macos:
+    name: macOS signed and notarized ${{ matrix.arch }}
+    needs:
+      - validate-tag
+      - verify
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    env:
+      SIGNING_KEYCHAIN: /tmp/vaultsync-macos-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}.keychain-db
+      KEYCHAIN_PASSWORD: vaultsync-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate-tag.outputs.tag }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2.9.1
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Import macOS Developer ID certificate
+        working-directory: vaultsync-app
+        env:
+          MACOS_DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in MACOS_DEVELOPER_ID_CERTIFICATE_BASE64 MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD MACOS_SIGNING_IDENTITY; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing required GitHub secret: $name" >&2
+              exit 1
+            fi
+          done
+          export CERT_PATH="$RUNNER_TEMP/vaultsync-macos-developer-id.p12"
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          Path(os.environ["CERT_PATH"]).write_bytes(
+              base64.b64decode(os.environ["MACOS_DEVELOPER_ID_CERTIFICATE_BASE64"])
+          )
+          PY
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$SIGNING_KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$SIGNING_KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$SIGNING_KEYCHAIN"
+          security import "$CERT_PATH" \
+            -P "$MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$SIGNING_KEYCHAIN"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$SIGNING_KEYCHAIN"
+          security list-keychains -d user -s "$SIGNING_KEYCHAIN"
+          security find-identity -v -p codesigning "$SIGNING_KEYCHAIN"
+
+      - name: Build, sign, notarize, and package macOS app
+        working-directory: vaultsync-app
+        env:
+          RELEASE_VERSION: ${{ needs.validate-tag.outputs.version }}
+          ARTIFACT_VERSION: ${{ needs.validate-tag.outputs.artifact_version }}
+          BUILD_NUMBER: ${{ needs.validate-tag.outputs.build_number }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing required GitHub secret: $name" >&2
+              exit 1
+            fi
+          done
+          flutter pub get
+          flutter build macos --release \
+            --build-name "$RELEASE_VERSION" \
+            --build-number "$BUILD_NUMBER"
+          app_path="$(find build/macos/Build/Products/Release -maxdepth 1 -name '*.app' -print -quit)"
+          if [ -z "$app_path" ]; then
+            echo 'macOS app bundle was not generated.' >&2
+            exit 1
+          fi
+          codesign --force --deep \
+            --options runtime \
+            --timestamp \
+            --entitlements macos/Runner/Release.entitlements \
+            --sign "$MACOS_SIGNING_IDENTITY" \
+            "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          notarize_zip="$RUNNER_TEMP/vaultsync-notarize-${{ matrix.arch }}.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "$notarize_zip"
+          xcrun notarytool submit "$notarize_zip" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$app_path"
+          xcrun stapler validate "$app_path"
+          spctl --assess --type execute --verbose=2 "$app_path"
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$app_path" \
+            "dist/vaultsync-app-${ARTIFACT_VERSION}-macos-${{ matrix.arch }}.zip"
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v7
+        with:
+          name: vaultsync-app-macos-${{ matrix.arch }}
+          path: vaultsync-app/dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Delete temporary macOS keychain
+        if: always()
+        shell: bash
+        run: security delete-keychain "$SIGNING_KEYCHAIN" >/dev/null 2>&1 || true
+
+  publish-release:
+    name: Publish GitHub Release
+    needs:
+      - validate-tag
+      - build-backend
+      - build-frontend
+      - build-android
+      - build-ios
+      - build-macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.validate-tag.outputs.tag }}
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Verify tag commit and prepare checksums
+        env:
+          RELEASE_TAG: ${{ needs.validate-tag.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.validate-tag.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" != "$RELEASE_COMMIT" ]; then
+            echo "Checked out source is not $RELEASE_TAG ($RELEASE_COMMIT)." >&2
+            exit 1
+          fi
+          mapfile -t files < <(
+            find artifacts -type f \
+              \( -name '*.apk' -o -name '*.aab' -o -name '*.ipa' -o -name '*.zip' -o -name '*.tar.gz' \) \
+              | sort
+          )
+          if [ "${#files[@]}" -ne 10 ]; then
+            printf 'Expected 10 release files, found %s:\n' "${#files[@]}" >&2
+            printf '%s\n' "${files[@]}" >&2
+            exit 1
+          fi
+          : > artifacts/SHA256SUMS.txt
+          for file in "${files[@]}"; do
+            digest="$(sha256sum "$file" | cut -d ' ' -f 1)"
+            printf '%s  %s\n' "$digest" "$(basename "$file")" >> artifacts/SHA256SUMS.txt
+          done
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate-tag.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(
+            find artifacts -type f \
+              \( -name '*.apk' -o -name '*.aab' -o -name '*.ipa' -o -name '*.zip' -o -name '*.tar.gz' -o -name 'SHA256SUMS.txt' \) \
+              | sort
+          )
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              --verify-tag \
+              --generate-notes \
+              --title "VaultSync $RELEASE_TAG"
+          fi

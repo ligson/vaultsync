@@ -15,6 +15,7 @@
 - 涉及数据库结构、存储路径、同步协议、本地缓存格式或清理策略的变更，必须提供兼容方案、备份/回滚说明，并优先做非破坏性迁移。
 - App 升级不得默认清空 `SharedPreferences`、本地目录绑定、上传队列、相册备份记录和加密密钥；确需重置时必须有用户可理解的确认。
 - Android 真机升级安装必须使用保留数据的 `adb install -r <apk>`；禁止使用会先卸载旧版的 `flutter install --use-application-binary`。安装后必须回查 `firstInstallTime`、当前登录页/主页和运行权限，确认没有意外重置客户端数据。
+- 用户明确说“发版”时，必须按 `docs/specs/2026-08-04-github-release-workflow.md` 完成测试、更新变更记录、提交、推送、创建并推送新 tag，等待 GitHub Actions 从该 tag 构建，并回查签名、公证、Release 制品和校验文件；禁止移动或复用已发布 tag。
 - 优先写小而聚焦的文档，避免把所有内容塞进一个大文件。
 - 稳定下来的决策要写入仓库，不只保留在聊天记录中。
 - 后端代码、构建、部署文件统一放在 `vaultsync-be/`。

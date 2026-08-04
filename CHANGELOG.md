@@ -4,6 +4,7 @@
 
 ## 2026-08-04
 
+- 新增基于 GitHub tag 的统一发版工作流：固定从 `v<semver>+<build-number>` tag 指向的 commit 构建，产出 Android 签名 APK/AAB、iOS 签名 IPA、macOS x64/arm64 签名公证包、前端 zip，以及 Linux/macOS amd64/arm64 后端 tar.gz，并在同一 GitHub Release 附带 SHA-256 校验文件。所有移动端和桌面端签名材料缺失时均直接失败，不回退到 debug 或未签名包；本次仅新增 CI 与文档，不修改 NAS 数据、SQLite、服务端对象、客户端目录绑定、上传队列、同步历史或加密密钥。
 - 已发布签名 Android APK `1.0.0+2026080401` 到 `https://files.ligson.xyz/downloads/vaultsync-android-latest.apk`，APK 大小为 75,846,383 字节，本地、NAS 和公网断点续传后的 SHA-256 均为 `ae1f69b0f5879157766361bbbf460396517361f6d67031503d98d7d988791b2f`。发布前已将 SQLite、配置、Compose 和旧 APK 备份到 `data/backups/app-release-20260804-084607-2026080401/`，备份和发布后数据库快速完整性检查均为 `ok`；本次后端无代码变化，NAS 继续运行镜像 `ligson/vaultsync-be:2026080301-e4cbfd9-session-tree`，未重建或重启服务，也未修改用户、设备、同步目录、上传会话、文件版本、密文对象或加密密钥。已使用 `adb install -r --no-streaming` 保留数据覆盖升级华为 `HUAWEI NOH-AN00`（`PQY0221120086806`），`firstInstallTime=2026-07-30 19:45:07` 未变化，登录主页、通知权限、所有文件访问权限和前台同步服务均保留；熄屏 30 秒期间进程保持运行，服务器新增 8 个文件版本并继续接收上传字节。
 - 修复 Android 扫描、上传和重试大文件时的高内存与界面卡顿：普通文件改为流式哈希和按分片读取，加密文件改为流式生成与现有 `VSENC001 + XChaCha20-Poly1305` 完全一致的临时密文，不再同时把整份明文、密文和分片保留在内存；上传任务 JSON 编解码移到后台 isolate，进度持久化间隔调整为 32 MB，目录扫描和任务合并按批次让出事件循环。
 - 增强锁屏与进程恢复：Android 仅在实际上传期间持有 `PARTIAL_WAKE_LOCK`，上传结束立即释放；未完成会话在 App 启动时以服务器 `received_size` 校准真实进度并自动续传，界面显示“待续传”百分比。加密临时文件通过 `.part` 原子生成，失败或进程退出后可复用，上传成功后才清理。

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -5405,6 +5406,7 @@ class _UnifiedFileTree extends StatefulWidget {
 
 class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
   static const _entryBatchSize = 150;
+  static const _gridEntryBatchSize = 48;
 
   final _queryController = TextEditingController();
   var _visibleEntryLimit = _entryBatchSize;
@@ -5424,8 +5426,12 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
       _currentDirectory = path;
       _query = '';
       _queryController.clear();
-      _visibleEntryLimit = _entryBatchSize;
+      _visibleEntryLimit = _batchSizeFor(_viewMode);
     });
+  }
+
+  int _batchSizeFor(_FileViewMode mode) {
+    return mode == _FileViewMode.grid ? _gridEntryBatchSize : _entryBatchSize;
   }
 
   void _navigateToRoot() => _openDirectory('');
@@ -5468,6 +5474,17 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
 
   DateTime _fileUpdatedAt(_UnifiedFileRecord file) {
     return _unifiedFileUpdatedAt(file);
+  }
+
+  Future<void> _showFileProperties(_UnifiedFileRecord file) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _FilePropertiesDialog(
+        file: file,
+        rootView: widget.rootView,
+        statusLabel: widget.rootView.fileStatusLabel(file),
+      ),
+    );
   }
 
   List<_UnifiedTreeEntry> _directoryEntries(
@@ -5605,19 +5622,19 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
           onQueryChanged: (query) {
             setState(() {
               _query = query;
-              _visibleEntryLimit = _entryBatchSize;
+              _visibleEntryLimit = _batchSizeFor(_viewMode);
             });
           },
           onViewModeChanged: (mode) {
             setState(() {
               _viewMode = mode;
-              _visibleEntryLimit = _entryBatchSize;
+              _visibleEntryLimit = _batchSizeFor(mode);
             });
           },
           onSortModeChanged: (mode) {
             setState(() {
               _sortMode = mode;
-              _visibleEntryLimit = _entryBatchSize;
+              _visibleEntryLimit = _batchSizeFor(_viewMode);
             });
           },
         ),
@@ -5635,12 +5652,12 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
               key: ValueKey('load_more_files_${widget.rootView.root.id}'),
               onPressed: () {
                 setState(() {
-                  _visibleEntryLimit += _entryBatchSize;
+                  _visibleEntryLimit += _batchSizeFor(_viewMode);
                 });
               },
               icon: const Icon(Icons.expand_more),
               label: Text(
-                '继续显示 ${hiddenCount > _entryBatchSize ? _entryBatchSize : hiddenCount} 项',
+                '继续显示 ${hiddenCount > _batchSizeFor(_viewMode) ? _batchSizeFor(_viewMode) : hiddenCount} 项',
               ),
             ),
           ),
@@ -5674,6 +5691,7 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
         onDelete: widget.onDeleteFile == null
             ? null
             : () => widget.onDeleteFile?.call(entry.file),
+        onDetails: () => _showFileProperties(entry.file),
       ),
     };
   }
@@ -5709,6 +5727,7 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
               onDelete: widget.onDeleteFile == null
                   ? null
                   : () => widget.onDeleteFile?.call(entry.file),
+              onDetails: () => _showFileProperties(entry.file),
             ),
           },
       ],
@@ -5761,6 +5780,7 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
                       onDelete: widget.onDeleteFile == null
                           ? null
                           : () => widget.onDeleteFile?.call(entry.file),
+                      onDetails: () => _showFileProperties(entry.file),
                     ),
                   },
                 ),
@@ -6156,6 +6176,7 @@ class _UnifiedDetailsFileRow extends StatelessWidget {
   final VoidCallback? onPreview;
   final VoidCallback? onDownload;
   final VoidCallback? onDelete;
+  final VoidCallback onDetails;
 
   const _UnifiedDetailsFileRow({
     required this.entry,
@@ -6163,6 +6184,7 @@ class _UnifiedDetailsFileRow extends StatelessWidget {
     required this.onPreview,
     required this.onDownload,
     required this.onDelete,
+    required this.onDetails,
   });
 
   @override
@@ -6176,6 +6198,8 @@ class _UnifiedDetailsFileRow extends StatelessWidget {
             onPreview: onPreview,
             onDownload: onDownload,
             onDelete: onDelete,
+            onDetails: onDetails,
+            showMetadata: true,
           );
         }
         final file = entry.file;
@@ -6248,6 +6272,7 @@ class _UnifiedDetailsFileRow extends StatelessWidget {
                   onPreview: onPreview,
                   onDownload: onDownload,
                   onDelete: onDelete,
+                  onDetails: onDetails,
                 ),
               ],
             ),
@@ -6327,6 +6352,7 @@ class _UnifiedGridFileTile extends StatelessWidget {
   final VoidCallback? onPreview;
   final VoidCallback? onDownload;
   final VoidCallback? onDelete;
+  final VoidCallback onDetails;
 
   const _UnifiedGridFileTile({
     required this.entry,
@@ -6334,6 +6360,7 @@ class _UnifiedGridFileTile extends StatelessWidget {
     required this.onPreview,
     required this.onDownload,
     required this.onDelete,
+    required this.onDetails,
   });
 
   @override
@@ -6347,28 +6374,26 @@ class _UnifiedGridFileTile extends StatelessWidget {
         onTap: onPreview,
         borderRadius: BorderRadius.circular(8),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(10, 8, 4, 10),
+          padding: const EdgeInsets.fromLTRB(8, 8, 4, 10),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
+              Stack(
                 children: [
-                  Icon(
-                    file.decryptable
-                        ? _fileIcon(entry.path)
-                        : Icons.lock_outline,
-                    size: 38,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                  const Spacer(),
-                  _FileTreeActionMenu(
-                    onPreview: onPreview,
-                    onDownload: onDownload,
-                    onDelete: onDelete,
+                  _GridFileVisual(file: file, path: entry.path),
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    child: _FileTreeActionMenu(
+                      onPreview: onPreview,
+                      onDownload: onDownload,
+                      onDelete: onDelete,
+                      onDetails: onDetails,
+                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 5),
+              const SizedBox(height: 7),
               Text(
                 entry.name,
                 maxLines: 1,
@@ -6386,6 +6411,47 @@ class _UnifiedGridFileTile extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _GridFileVisual extends StatelessWidget {
+  final _UnifiedFileRecord file;
+  final String path;
+
+  const _GridFileVisual({required this.file, required this.path});
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final thumbnailPath = file.localImageThumbnailPath;
+    final fallback = ColoredBox(
+      key: ValueKey('file_grid_icon_$path'),
+      color: colorScheme.surfaceContainerHighest,
+      child: Center(
+        child: Icon(
+          file.decryptable ? _fileIcon(path) : Icons.lock_outline,
+          size: 44,
+          color: colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(6),
+      child: SizedBox(
+        width: double.infinity,
+        height: 96,
+        child: thumbnailPath == null
+            ? fallback
+            : Image.file(
+                File(thumbnailPath),
+                key: ValueKey('file_grid_thumbnail_$path'),
+                fit: BoxFit.cover,
+                cacheWidth: 360,
+                filterQuality: FilterQuality.low,
+                errorBuilder: (_, _, _) => fallback,
+              ),
       ),
     );
   }
@@ -6423,22 +6489,23 @@ class _FileTreeActionMenu extends StatelessWidget {
   final VoidCallback? onPreview;
   final VoidCallback? onDownload;
   final VoidCallback? onDelete;
+  final VoidCallback onDetails;
 
   const _FileTreeActionMenu({
     required this.onPreview,
     required this.onDownload,
     required this.onDelete,
+    required this.onDetails,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (onPreview == null && onDownload == null && onDelete == null) {
-      return const SizedBox(width: 36);
-    }
     return PopupMenuButton<_FileTreeAction>(
       tooltip: '文件操作',
       onSelected: (action) {
         switch (action) {
+          case _FileTreeAction.details:
+            onDetails();
           case _FileTreeAction.preview:
             onPreview?.call();
           case _FileTreeAction.download:
@@ -6448,6 +6515,14 @@ class _FileTreeActionMenu extends StatelessWidget {
         }
       },
       itemBuilder: (context) => [
+        const PopupMenuItem(
+          value: _FileTreeAction.details,
+          child: ListTile(
+            dense: true,
+            leading: Icon(Icons.info_outline),
+            title: Text('详细信息'),
+          ),
+        ),
         if (onPreview != null)
           const PopupMenuItem(
             value: _FileTreeAction.preview,
@@ -6513,8 +6588,6 @@ class _UnifiedFolderRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final showStatus =
-        summary.statusLabel != '已同步' && summary.statusLabel != '已备份';
     return ListTile(
       dense: true,
       minLeadingWidth: 44,
@@ -6536,39 +6609,13 @@ class _UnifiedFolderRow extends StatelessWidget {
       ),
       onTap: onToggle,
       title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text(
-        showStatus
-            ? '${summary.fileCount} 个文件 · ${summary.statusLabel}'
-            : '${summary.fileCount} 个文件',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-          color: showStatus
-              ? _treeStatusColor(colorScheme, summary.statusLabel)
-              : null,
-        ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _FileStatusIcon(label: summary.statusLabel),
+          if (onDelete != null) _FolderActionMenu(onDelete: onDelete),
+        ],
       ),
-      trailing: onDelete == null
-          ? null
-          : PopupMenuButton<_FolderTreeAction>(
-              tooltip: '文件夹操作',
-              onSelected: (action) {
-                switch (action) {
-                  case _FolderTreeAction.delete:
-                    onDelete?.call();
-                }
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                  value: _FolderTreeAction.delete,
-                  child: ListTile(
-                    dense: true,
-                    leading: Icon(Icons.delete_outline),
-                    title: Text('删除服务器备份'),
-                  ),
-                ),
-              ],
-            ),
     );
   }
 }
@@ -6579,6 +6626,8 @@ class _UnifiedFileRow extends StatelessWidget {
   final VoidCallback? onPreview;
   final VoidCallback? onDownload;
   final VoidCallback? onDelete;
+  final VoidCallback onDetails;
+  final bool showMetadata;
 
   const _UnifiedFileRow({
     required this.entry,
@@ -6586,6 +6635,8 @@ class _UnifiedFileRow extends StatelessWidget {
     required this.onPreview,
     required this.onDownload,
     required this.onDelete,
+    required this.onDetails,
+    this.showMetadata = false,
   });
 
   @override
@@ -6604,54 +6655,304 @@ class _UnifiedFileRow extends StatelessWidget {
       ),
       onTap: onPreview,
       title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: _FileTreeSubtitle(details: details, statusLabel: statusLabel),
-      isThreeLine: details.isNotEmpty,
-      trailing: onPreview == null && onDownload == null && onDelete == null
-          ? null
-          : PopupMenuButton<_FileTreeAction>(
-              tooltip: '文件操作',
-              onSelected: (action) {
-                switch (action) {
-                  case _FileTreeAction.preview:
-                    onPreview?.call();
-                  case _FileTreeAction.download:
-                    onDownload?.call();
-                  case _FileTreeAction.delete:
-                    onDelete?.call();
-                }
-              },
-              itemBuilder: (context) => [
-                if (onPreview != null)
-                  const PopupMenuItem(
-                    value: _FileTreeAction.preview,
-                    child: ListTile(
-                      dense: true,
-                      leading: Icon(Icons.visibility_outlined),
-                      title: Text('在线预览'),
-                    ),
-                  ),
-                if (onDownload != null)
-                  const PopupMenuItem(
-                    value: _FileTreeAction.download,
-                    child: ListTile(
-                      dense: true,
-                      leading: Icon(Icons.download_outlined),
-                      title: Text('下载到本地'),
-                    ),
-                  ),
-                if (onDelete != null)
-                  const PopupMenuItem(
-                    value: _FileTreeAction.delete,
-                    child: ListTile(
-                      dense: true,
-                      leading: Icon(Icons.delete_outline),
-                      title: Text('删除服务器备份'),
-                    ),
-                  ),
-              ],
-            ),
+      subtitle: showMetadata
+          ? _FileTreeSubtitle(details: details, statusLabel: statusLabel)
+          : null,
+      isThreeLine: showMetadata && details.isNotEmpty,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _FileStatusIcon(label: statusLabel),
+          _FileTreeActionMenu(
+            onPreview: onPreview,
+            onDownload: onDownload,
+            onDelete: onDelete,
+            onDetails: onDetails,
+          ),
+        ],
+      ),
     );
   }
+}
+
+class _FileStatusIcon extends StatelessWidget {
+  final String label;
+
+  const _FileStatusIcon({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: label,
+      child: SizedBox.square(
+        dimension: 32,
+        child: Icon(
+          _treeStatusIcon(label),
+          size: 18,
+          color: _treeStatusColor(colorScheme, label),
+        ),
+      ),
+    );
+  }
+}
+
+class _FilePropertiesDialog extends StatelessWidget {
+  final _UnifiedFileRecord file;
+  final _SyncRootViewData rootView;
+  final String statusLabel;
+
+  const _FilePropertiesDialog({
+    required this.file,
+    required this.rootView,
+    required this.statusLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final task = file.task;
+    final backup = file.backup;
+    final fileName = _pathParts(file.path).last;
+    final size = backup?.sizeBytes ?? task?.sizeBytes;
+    final uploadedBytes = task?.uploadedBytes ?? 0;
+    final uploadTotal = task?.uploadTotalSize ?? task?.sizeBytes ?? 0;
+    final mediaSize = MediaQuery.sizeOf(context);
+    return AlertDialog(
+      key: const ValueKey('file_properties_dialog'),
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 12, 10),
+      title: Row(
+        children: [
+          Icon(
+            file.decryptable ? _fileIcon(file.path) : Icons.lock_outline,
+            size: 34,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(fileName, maxLines: 2, overflow: TextOverflow.ellipsis),
+                Text(
+                  _fileTypeText(fileName),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: math.min(680, math.max(280, mediaSize.width - 72)),
+        height: math.min(600, mediaSize.height * 0.68),
+        child: ListView(
+          key: const ValueKey('file_properties_list'),
+          children: [
+            _FilePropertySection(
+              title: '常规',
+              rows: [
+                _FilePropertyData('名称', fileName),
+                _FilePropertyData('相对路径', file.path),
+                _FilePropertyData(
+                  '所在目录',
+                  _parentPath(file.path).isEmpty
+                      ? '根目录'
+                      : _parentPath(file.path),
+                ),
+                _FilePropertyData(
+                  '大小',
+                  size == null ? '-' : '${_formatBytes(size)} ($size 字节)',
+                ),
+                _FilePropertyData('修改时间', _fileDateText(file)),
+                _FilePropertyData('本地路径', task?.localPath ?? '-'),
+              ],
+            ),
+            _FilePropertySection(
+              title: '同步状态',
+              rows: [
+                _FilePropertyData('当前状态', statusLabel),
+                _FilePropertyData('服务器备份', backup == null ? '无' : '有'),
+                _FilePropertyData(
+                  '清理策略',
+                  _cleanupPolicyLabel(rootView.root.cleanupPolicy),
+                ),
+                _FilePropertyData('本地任务状态', task?.status ?? '-'),
+                _FilePropertyData(
+                  '上传进度',
+                  _uploadProgressText(uploadedBytes, uploadTotal),
+                ),
+                _FilePropertyData('尝试次数', task?.attempts.toString() ?? '-'),
+                _FilePropertyData('最后错误', _notEmpty(task?.lastError)),
+              ],
+            ),
+            _FilePropertySection(
+              title: '来源与保护',
+              rows: [
+                _FilePropertyData('来源类型', _sourceTypeText(task?.sourceType)),
+                _FilePropertyData('媒体类型', _notEmpty(task?.assetMediaType)),
+                _FilePropertyData('媒体资源 ID', _notEmpty(task?.assetId)),
+                _FilePropertyData(
+                  '客户端加密',
+                  task == null ? '-' : (task.encryptionEnabled ? '已启用' : '未启用'),
+                ),
+                _FilePropertyData(
+                  '远端可解密',
+                  backup == null ? '-' : (backup.decryptable ? '是' : '否'),
+                ),
+              ],
+            ),
+            _FilePropertySection(
+              title: '服务器信息',
+              rows: [
+                _FilePropertyData('设备 ID', rootView.root.deviceId),
+                _FilePropertyData('同步目录 ID', rootView.root.id),
+                _FilePropertyData('对象 ID', backup?.objectId ?? '-'),
+                _FilePropertyData('版本 ID', backup?.versionId ?? '-'),
+                _FilePropertyData('服务器更新时间', _notEmpty(backup?.updatedAt)),
+                _FilePropertyData('内容哈希', _notEmpty(backup?.clientContentHash)),
+                _FilePropertyData('远端对象名', _notEmpty(backup?.encryptedName)),
+              ],
+            ),
+            _FilePropertySection(
+              title: '任务信息',
+              rows: [
+                _FilePropertyData('任务 ID', task?.id ?? '-'),
+                _FilePropertyData(
+                  '创建时间',
+                  task == null ? '-' : _formatDateTime(task.createdAt),
+                ),
+                _FilePropertyData('上传会话 ID', _notEmpty(task?.uploadSessionId)),
+                _FilePropertyData('上传载荷哈希', _notEmpty(task?.uploadPayloadHash)),
+                _FilePropertyData('分片大小', _byteDetail(task?.uploadChunkSize)),
+              ],
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('关闭'),
+        ),
+      ],
+    );
+  }
+
+  String _notEmpty(String? value) {
+    final normalized = value?.trim() ?? '';
+    return normalized.isEmpty ? '-' : normalized;
+  }
+
+  String _byteDetail(int? value) {
+    if (value == null || value <= 0) {
+      return '-';
+    }
+    return '${_formatBytes(value)} ($value 字节)';
+  }
+
+  String _uploadProgressText(int uploadedBytes, int totalBytes) {
+    if (totalBytes <= 0) {
+      return '-';
+    }
+    final percent = (uploadedBytes * 100 / totalBytes)
+        .clamp(0, 100)
+        .toStringAsFixed(0);
+    return '$percent% (${_formatBytes(uploadedBytes)} / ${_formatBytes(totalBytes)})';
+  }
+
+  String _sourceTypeText(String? sourceType) {
+    return switch (sourceType) {
+      'file' => '本地文件',
+      'media_asset' => '系统相册资源',
+      null || '' => '-',
+      _ => sourceType,
+    };
+  }
+
+  String _parentPath(String path) {
+    final parts = _pathParts(path);
+    return parts.length <= 1 ? '' : parts.take(parts.length - 1).join('/');
+  }
+
+  String _fileTypeText(String fileName) {
+    final dotIndex = fileName.lastIndexOf('.');
+    if (dotIndex <= 0 || dotIndex == fileName.length - 1) {
+      return '文件';
+    }
+    return '${fileName.substring(dotIndex + 1).toUpperCase()} 文件';
+  }
+}
+
+class _FilePropertySection extends StatelessWidget {
+  final String title;
+  final List<_FilePropertyData> rows;
+
+  const _FilePropertySection({required this.title, required this.rows});
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 6),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              border: Border.all(color: colorScheme.outlineVariant),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              children: [
+                for (var index = 0; index < rows.length; index += 1) ...[
+                  _FilePropertyRow(data: rows[index]),
+                  if (index < rows.length - 1)
+                    Divider(height: 1, color: colorScheme.outlineVariant),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FilePropertyRow extends StatelessWidget {
+  final _FilePropertyData data;
+
+  const _FilePropertyRow({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 112,
+            child: Text(
+              data.label,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(child: SelectableText(data.value)),
+        ],
+      ),
+    );
+  }
+}
+
+class _FilePropertyData {
+  final String label;
+  final String value;
+
+  const _FilePropertyData(this.label, this.value);
 }
 
 class _FileTreeSubtitle extends StatelessWidget {
@@ -6703,7 +7004,7 @@ class _FileTreeSubtitle extends StatelessWidget {
   }
 }
 
-enum _FileTreeAction { preview, download, delete }
+enum _FileTreeAction { details, preview, download, delete }
 
 enum _FolderTreeAction { delete }
 
@@ -7012,6 +7313,19 @@ class _UnifiedFileRecord {
         remoteBackup.decryptable &&
         remoteBackup.encryptedName.isNotEmpty &&
         remoteBackup.metadataJson.isNotEmpty;
+  }
+
+  String? get localImageThumbnailPath {
+    final localTask = task;
+    final previewName = backup?.name ?? path;
+    if (localTask == null ||
+        localTask.sourceType != 'file' ||
+        localTask.localPath.trim().isEmpty ||
+        localTask.status == 'deleted_local' ||
+        remoteFilePreviewKindFor(previewName) != RemoteFilePreviewKind.image) {
+      return null;
+    }
+    return localTask.localPath;
   }
 
   String get detailsSubtitle {

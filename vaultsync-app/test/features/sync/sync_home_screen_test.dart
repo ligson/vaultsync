@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -99,7 +100,9 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('a.jpg'), findsOneWidget);
-    expect(find.text('待续传 50%'), findsOneWidget);
+    expect(find.text('待续传 50%'), findsNothing);
+    expect(find.byTooltip('待续传 50%'), findsOneWidget);
+    expect(find.textContaining('2.0 KB'), findsNothing);
     expect(find.textContaining('2026/a.jpg'), findsNothing);
     expect(find.byKey(const ValueKey('file_tree_up_button')), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('file_tree_up_button')));
@@ -107,10 +110,7 @@ void main() {
     expect(find.text('2026'), findsOneWidget);
     await tester.tap(find.text('2026'));
     await tester.pumpAndSettle();
-    expect(
-      find.textContaining('2.0 KB · ${_formatLocalTestDateTime(modifiedAt)}'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('2.0 KB'), findsNothing);
     expect(find.text('清理策略：上传后删除'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('file_tree_view_mode_button')));
@@ -120,11 +120,105 @@ void main() {
     expect(find.text('大小'), findsOneWidget);
     expect(find.text('修改时间'), findsOneWidget);
     expect(find.text('状态'), findsOneWidget);
+    expect(find.text('2.0 KB'), findsOneWidget);
+    expect(find.text(_formatLocalTestDateTime(modifiedAt)), findsOneWidget);
+    expect(find.text('待续传 50%'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('文件操作').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('详细信息'));
+    await tester.pumpAndSettle();
+    expect(find.text('常规'), findsOneWidget);
+    expect(find.text('同步状态'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('任务信息'),
+      240,
+      scrollable: find
+          .descendant(
+            of: find.byKey(const ValueKey('file_properties_list')),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    expect(find.text('任务信息'), findsOneWidget);
+    expect(find.text('root-1:2026/a.jpg'), findsOneWidget);
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('图标').last);
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.grid_view_outlined), findsOneWidget);
     expect(find.text('a.jpg'), findsOneWidget);
+  });
+
+  testWidgets('icon view renders a bounded local image thumbnail', (
+    tester,
+  ) async {
+    final tempDir = Directory.systemTemp.createTempSync(
+      'vaultsync-grid-thumbnail-',
+    );
+    addTearDown(() => tempDir.deleteSync(recursive: true));
+    final imageFile = File('${tempDir.path}/a.png');
+    imageFile.writeAsBytesSync(
+      base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore([
+            LocalSyncRootMapping(
+              syncRootId: 'root-1',
+              localPath: tempDir.path,
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+            ),
+          ]),
+          uploadTasks: FakeUploadTaskStore([
+            LocalUploadTask(
+              id: 'root-1:a.png',
+              syncRootId: 'root-1',
+              localPath: imageFile.path,
+              relativePath: 'a.png',
+              sizeBytes: imageFile.lengthSync(),
+              modifiedAt: DateTime.utc(2026, 8, 4, 10),
+              status: 'pending',
+              attempts: 0,
+              createdAt: DateTime.utc(2026, 8, 4, 10),
+            ),
+          ]),
+          syncRoots: FakeSyncRootGateway(const [
+            SyncRoot(
+              id: 'root-1',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-08-04T00:00:00Z',
+            ),
+          ]),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('file_tree_view_mode_button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('图标').last);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('file_grid_thumbnail_a.png')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('sync home shows empty state when no sync roots exist', (
@@ -197,7 +291,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('服务器已备份，待删除本地'), findsOneWidget);
+    expect(find.text('服务器已备份，待删除本地'), findsNothing);
+    expect(find.byTooltip('服务器已备份，待删除本地'), findsOneWidget);
   });
 
   testWidgets('sync home keeps a compact action bar in landscape', (
@@ -1183,7 +1278,8 @@ void main() {
     expect(find.text('本地已清理：1'), findsOneWidget);
     await tester.tap(find.text('2026'));
     await tester.pumpAndSettle();
-    expect(find.text('服务器已备份，本地已删除'), findsOneWidget);
+    expect(find.text('服务器已备份，本地已删除'), findsNothing);
+    expect(find.byTooltip('服务器已备份，本地已删除'), findsOneWidget);
     expect(find.text('删除策略下，1 个文件已完成服务器备份，本地已按策略清理。'), findsOneWidget);
   });
 
@@ -1339,7 +1435,15 @@ void main() {
     await tester.tap(find.text('2026'));
     await tester.pumpAndSettle();
     expect(find.text('a.jpg'), findsOneWidget);
-    expect(find.textContaining('4.0 KB'), findsOneWidget);
+    expect(find.textContaining('4.0 KB'), findsNothing);
+    expect(find.text('服务器已备份，本地已删除'), findsNothing);
+    expect(find.byTooltip('服务器已备份，本地已删除'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('file_tree_view_mode_button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('详细').last);
+    await tester.pumpAndSettle();
+    expect(find.text('4.0 KB'), findsOneWidget);
     expect(find.text('服务器已备份，本地已删除'), findsOneWidget);
   });
 
@@ -1419,7 +1523,18 @@ void main() {
       final fileNameText = tester.widget<Text>(fileName);
       expect(fileNameText.maxLines, 1);
       expect(fileNameText.overflow, TextOverflow.ellipsis);
-      expect(find.text('服务器已备份'), findsOneWidget);
+      expect(find.text('服务器已备份'), findsNothing);
+      expect(find.byTooltip('服务器已备份'), findsOneWidget);
+      await tester.tap(find.byTooltip('文件操作'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('详细信息'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('file_properties_dialog')),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('关闭'));
+      await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
     },
   );
@@ -1637,6 +1752,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('file-179.txt'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('file_tree_view_mode_button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('图标').last);
+    await tester.pumpAndSettle();
+    expect(find.text('继续显示 48 项'), findsOneWidget);
   });
 
   testWidgets('sync home marks other device roots readonly', (tester) async {
@@ -1718,7 +1839,26 @@ void main() {
       find.byKey(const ValueKey('manage_sync_root_root-remote')),
       findsNothing,
     );
-    expect(find.byTooltip('文件操作'), findsNothing);
+    expect(find.byTooltip('文件操作'), findsOneWidget);
+    await tester.tap(find.byTooltip('文件操作'));
+    await tester.pumpAndSettle();
+    expect(find.text('详细信息'), findsOneWidget);
+    expect(find.text('删除服务器备份'), findsNothing);
+    await tester.tap(find.text('详细信息'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('object-remote'),
+      240,
+      scrollable: find
+          .descendant(
+            of: find.byKey(const ValueKey('file_properties_list')),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    expect(find.text('object-remote'), findsOneWidget);
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
 
     await tester.tap(
       find.byKey(const ValueKey('sync_root_quick_actions_root-remote')),

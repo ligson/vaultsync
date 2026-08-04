@@ -313,7 +313,18 @@ jobs:
             exit 1
           fi
           "$apksigner" verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk
-          jarsigner -verify -strict build/app/outputs/bundle/release/app-release.aab
+          aab_verification="$RUNNER_TEMP/vaultsync-aab-verification.txt"
+          if ! LC_ALL=C jarsigner -verify -verbose -certs \
+            build/app/outputs/bundle/release/app-release.aab \
+            > "$aab_verification" 2>&1; then
+            cat "$aab_verification"
+            exit 1
+          fi
+          cat "$aab_verification"
+          if ! grep -Fq 'jar verified.' "$aab_verification"; then
+            echo 'Android App Bundle does not contain a valid JAR signature.' >&2
+            exit 1
+          fi
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-release.apk "dist/vaultsync-app-${ARTIFACT_VERSION}-android.apk"
           cp build/app/outputs/bundle/release/app-release.aab "dist/vaultsync-app-${ARTIFACT_VERSION}-android.aab"

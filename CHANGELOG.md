@@ -4,6 +4,7 @@
 
 ## 2026-08-04
 
+- 已将本机当前 Android 正式 keystore 的 4 项配置安全写入仓库 GitHub Actions Secrets，未在日志或仓库中暴露签名值；`v1.0.0+2026080403` attempt 2 已通过签名准备并成功编译 APK/AAB，随后发现 `jarsigner -verify -strict` 会把 AAB 内嵌依赖的 JarFile/JarInputStream 签名差异告警当成 exit 4。工作流改用标准 `jarsigner -verify -verbose -certs`，并额外强制检查 `jar verified.`，既避免该误判，也继续拒绝未签名 AAB。iOS/macOS 仍因缺少 Apple Developer 材料保持失败，不生成不完整 Release；本次不修改 App 签名身份、NAS 数据、SQLite、服务端对象或客户端本地数据。
 - 第二次 tag 发版演练 `v1.0.0+2026080403` 已通过 tag/commit 校验、后端测试、前端构建、Flutter analyze 和 222 项 Flutter 测试，并成功生成前端 zip 与 Linux/macOS amd64/arm64 四种后端制品；Android、iOS、macOS 签名 job 因仓库尚未配置任何 GitHub Actions Secrets 而按设计失败，Publish job 被跳过，未创建不完整的 GitHub Release。本机存在当前 Android 正式 keystore，可在用户确认后安全写入 GitHub Secrets；本机没有 Apple codesigning identity 或 iOS provisioning profile，因此 iOS 签名和 macOS notarization 仍需有效 Apple Developer 材料。本次未上传任何本机签名材料，未修改 NAS 数据、SQLite、服务端对象或客户端本地数据。
 - 首次 tag 发版演练保留失败 tag `v1.0.0+2026080402`：tag 与 commit 校验、后端测试和前端构建均通过，Flutter 验证因用例硬编码 Asia/Shanghai 展示时间而在 UTC runner 上出现 1 项失败，因此未进入签名构建且未创建 GitHub Release。已将断言改为按 runner 本地时区计算，并将 `subosito/flutter-action` 从 `v2.9.1` 升级到 `v2.23.0`，消除其旧 `actions/cache@v3` 的 Node.js 20 弃用警告；修复后使用新 build number 发版，不移动或复用失败 tag。本次不修改 NAS 数据、SQLite、服务端对象、客户端目录绑定、上传队列、同步历史或加密密钥。
 - 新增基于 GitHub tag 的统一发版工作流：固定从 `v<semver>+<build-number>` tag 指向的 commit 构建，产出 Android 签名 APK/AAB、iOS 签名 IPA、macOS x64/arm64 签名公证包、前端 zip，以及 Linux/macOS amd64/arm64 后端 tar.gz，并在同一 GitHub Release 附带 SHA-256 校验文件。所有移动端和桌面端签名材料缺失时均直接失败，不回退到 debug 或未签名包；本次仅新增 CI 与文档，不修改 NAS 数据、SQLite、服务端对象、客户端目录绑定、上传队列、同步历史或加密密钥。

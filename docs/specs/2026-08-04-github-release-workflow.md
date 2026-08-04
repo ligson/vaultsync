@@ -6,7 +6,7 @@ VaultSync 使用 `.github/workflows/release.yml` 统一构建并发布 GitHub Re
 
 一次成功发版包含三组制品：
 
-- App：Android 签名 APK、Android 签名 AAB、iOS 签名 IPA、macOS x64 和 arm64 签名公证包。
+- App：Android 签名 APK、Android 签名 AAB，以及 iOS、macOS x64、macOS arm64 客户端包。Apple Developer 凭据完整时自动签名；完全未配置时发布明确标注 `unsigned` 的包。
 - 前端：包含构建后静态文件及 Docker 配置的 zip。
 - 后端：Linux 和 macOS 的 amd64、arm64 二进制 tar.gz。
 
@@ -38,9 +38,9 @@ v1.0.0+2026080402
 ```text
 vaultsync-app-1.0.0+2026080402-android.apk
 vaultsync-app-1.0.0+2026080402-android.aab
-vaultsync-app-1.0.0+2026080402-ios.ipa
-vaultsync-app-1.0.0+2026080402-macos-x64.zip
-vaultsync-app-1.0.0+2026080402-macos-arm64.zip
+vaultsync-app-1.0.0+2026080402-ios-unsigned.ipa
+vaultsync-app-1.0.0+2026080402-macos-x64-unsigned.zip
+vaultsync-app-1.0.0+2026080402-macos-arm64-unsigned.zip
 vaultsync-fe-1.0.0+2026080402.zip
 vaultsync-be-1.0.0+2026080402-linux-amd64.tar.gz
 vaultsync-be-1.0.0+2026080402-linux-arm64.tar.gz
@@ -49,7 +49,13 @@ vaultsync-be-1.0.0+2026080402-macos-arm64.tar.gz
 SHA256SUMS.txt
 ```
 
-工作流会在发布前校验 10 个构建制品是否全部存在。任何平台构建、签名、验签或公证失败，整个 Release 都不会发布。
+工作流会在发布前校验 10 个构建制品是否全部存在。Apple 凭据完整时，iOS 和 macOS 使用不带 `unsigned` 后缀的正式文件名。任何平台构建失败，或已启用的签名、验签、公证失败，整个 Release 都不会发布。
+
+无签名 Apple 制品的边界：
+
+- iOS `*-unsigned.ipa` 只供后续重签名或开发测试，普通 iPhone 不能直接安装。
+- macOS `*-unsigned.zip` 未使用 Developer ID 签名、未经过 Apple 公证，用户首次打开时可能被 Gatekeeper 阻止。
+- `unsigned` 只描述 Apple 分发身份，不影响应用业务功能；工作流不会使用临时证书伪装成正式发布包。
 
 ## GitHub 签名配置
 
@@ -79,6 +85,8 @@ Android 必须使用当前已发布 App 的同一 keystore。更换 keystore 会
 
 当前 iOS bundle ID 为 `com.example.vaultsyncApp`，provisioning profile 必须与它一致。后续如需改成正式 bundle ID，应单独评估应用身份、Keychain 和客户端数据迁移，不能在常规发版时直接替换。
 
+iOS 的 4 项必填 Secret 完全未配置时，工作流自动执行 `flutter build ios --release --no-codesign` 并发布 `*-ios-unsigned.ipa`。如果只配置了一部分，工作流会直接失败并指出凭据不完整，避免把误配置静默降级为无签名包。
+
 ### macOS Secrets
 
 | 名称 | 内容 |
@@ -91,6 +99,8 @@ Android 必须使用当前已发布 App 的同一 keystore。更换 keystore 会
 | `APPLE_TEAM_ID` | Apple Developer Team ID |
 
 macOS x64 和 arm64 分别在对应架构的 GitHub runner 构建，完成 Developer ID 签名、Apple notarization、staple 和 Gatekeeper 检查后才打包。
+
+macOS 的 6 项 Secret 完全未配置时，工作流仍构建两个架构，但文件名标注 `*-unsigned.zip`，且不执行 Developer ID 签名、公证、staple 或 Gatekeeper 放行检查。如果只配置了一部分，工作流会直接失败。未来补齐全部 Apple 凭据后无需再改工作流，会自动恢复正式签名和公证。
 
 ## 标准发版过程
 
@@ -109,7 +119,7 @@ macOS x64 和 arm64 分别在对应架构的 GitHub runner 构建，完成 Devel
 
 - 构建失败：修复代码后创建更高 build number 的新 tag，不移动旧 tag。
 - 上传制品失败但 tag 代码没有问题：对原 tag 手动重跑 workflow。
-- 签名或公证失败：修正 GitHub Secrets/Variables 后对原 tag 手动重跑；不得降级为 debug 签名或未签名包。
+- 签名或公证失败：修正 GitHub Secrets/Variables 后对原 tag 手动重跑；不得自动降级为 debug 签名。只有全部 Apple 凭据都未配置时，才允许走文件名明确标注 `unsigned` 的预定分支。
 - 已发布版本有问题：保留原 Release 和 tag，回滚代码后以新 build number 再发版。
 
 CI 构建和 GitHub Release 本身不修改 NAS `data/`、SQLite、密文对象、下载目录或客户端本地状态。后续 NAS 部署仍必须先备份并按仓库数据安全规则单独验证。

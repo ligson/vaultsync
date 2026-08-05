@@ -1,15 +1,41 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:photo_manager/photo_manager.dart';
 
 import 'media_backup_gateway.dart';
 import 'media_backup_models.dart';
 
-class PhotoManagerMediaGateway
-    implements MediaBackupGateway, MediaAssetFileResolver {
-  static const _assetPageSize = 200;
+typedef MediaAssetDeleteDelegate =
+    Future<List<String>> Function(List<String> assetIds);
+typedef MediaAssetExistsDelegate = Future<bool> Function(String assetId);
 
-  const PhotoManagerMediaGateway();
+class PhotoManagerMediaGateway
+    implements
+        MediaBackupGateway,
+        MediaAssetFileResolver,
+        MediaAssetThumbnailGateway {
+  static const _assetPageSize = 200;
+  static const _deleteBatchSize = 500;
+
+  final MediaAssetDeleteDelegate _deleteAssets;
+  final MediaAssetExistsDelegate _assetExists;
+
+  const PhotoManagerMediaGateway({
+    MediaAssetDeleteDelegate deleteAssets = _deleteAssetsWithPhotoManager,
+    MediaAssetExistsDelegate assetExists = _assetExistsWithPhotoManager,
+  }) : _deleteAssets = deleteAssets,
+       _assetExists = assetExists;
+
+  static Future<List<String>> _deleteAssetsWithPhotoManager(
+    List<String> assetIds,
+  ) {
+    return PhotoManager.editor.deleteWithIds(assetIds);
+  }
+
+  static Future<bool> _assetExistsWithPhotoManager(String assetId) async {
+    return (await AssetEntity.fromId(assetId)) != null;
+  }
 
   static String assetTypeFor(String mediaTypes) {
     return switch (mediaTypes) {
@@ -97,6 +123,22 @@ class PhotoManagerMediaGateway
   }
 
   @override
+  Future<Uint8List?> loadThumbnail(
+    String assetId, {
+    int width = 360,
+    int height = 240,
+  }) async {
+    final entity = await AssetEntity.fromId(assetId);
+    if (entity == null) {
+      return null;
+    }
+    return entity.thumbnailDataWithSize(
+      ThumbnailSize(width, height),
+      quality: 82,
+    );
+  }
+
+  @override
   Future<MediaAssetCleanupResult> deleteAsset(String assetId) async {
     final result = await deleteAssets([assetId]);
     if (result.deletedAssetIds.contains(assetId)) {
@@ -119,10 +161,66 @@ class PhotoManagerMediaGateway
     if (ids.isEmpty) {
       return const MediaAssetBatchCleanupResult();
     }
-    final deletedIds = await PhotoManager.editor.deleteWithIds(ids.toList());
+    final orderedIds = ids.toList(growable: false);
+    final deletedIds = <String>{};
+    var hadPartialResult = false;
+    var skippedMissingCount = 0;
+    for (var start = 0; start < orderedIds.length; start += _deleteBatchSize) {
+      final end = (start + _deleteBatchSize).clamp(0, orderedIds.length);
+      final batch = orderedIds.sublist(start, end);
+      final batchNumber = start ~/ _deleteBatchSize + 1;
+      final existingBatch = <String>[];
+      for (final assetId in batch) {
+        bool exists;
+        try {
+          exists = await _assetExists(assetId);
+        } catch (_) {
+          exists = false;
+        }
+        if (exists) {
+          existingBatch.add(assetId);
+        } else {
+          deletedIds.add(assetId);
+          skippedMissingCount += 1;
+        }
+      }
+      if (existingBatch.isEmpty) {
+        continue;
+      }
+      List<String> result;
+      try {
+        result = await _deleteAssets(existingBatch);
+      } catch (_) {
+        return MediaAssetBatchCleanupResult(
+          deletedAssetIds: deletedIds,
+          message: deletedIds.isEmpty
+              ? '第 $batchNumber 批本地相册资源删除失败，请保持 App 前台并确认系统删除弹窗后重试'
+              : '已清理 ${deletedIds.length} 个，第 $batchNumber 批删除失败，剩余项目可稍后重试',
+        );
+      }
+
+      final batchIds = existingBatch.toSet();
+      final deletedInBatch = result.where(batchIds.contains).toSet();
+      deletedIds.addAll(deletedInBatch);
+      if (deletedInBatch.isEmpty) {
+        return MediaAssetBatchCleanupResult(
+          deletedAssetIds: deletedIds,
+          message: deletedIds.isEmpty
+              ? '系统未允许删除本地相册资源'
+              : '已清理 ${deletedIds.length} 个，后续批次已取消，剩余项目可稍后重试',
+        );
+      }
+      if (deletedInBatch.length < existingBatch.length) {
+        hadPartialResult = true;
+      }
+    }
     return MediaAssetBatchCleanupResult(
-      deletedAssetIds: deletedIds.toSet(),
-      message: deletedIds.isEmpty ? '系统未允许删除本地相册资源' : '',
+      deletedAssetIds: deletedIds,
+      message: hadPartialResult
+          ? '部分本地相册资源未被系统删除，可稍后重试'
+          : skippedMissingCount > 0
+          ? '已跳过 $skippedMissingCount 个本地已不存在的相册资源'
+          : '',
     );
   }
 

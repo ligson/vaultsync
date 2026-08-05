@@ -445,6 +445,24 @@ void main() {
     expect(await storage.loadSyncHistory(), isEmpty);
   });
 
+  test('AppStorage saves file browser preferences', () async {
+    SharedPreferences.setMockInitialValues({});
+    const storage = AppStorage();
+
+    await storage.saveFileBrowserPreferences(
+      const FileBrowserPreferences(
+        viewMode: 'grid',
+        sortMode: 'updated',
+        sortAscending: false,
+      ),
+    );
+
+    final loaded = await storage.loadFileBrowserPreferences();
+    expect(loaded.viewMode, 'grid');
+    expect(loaded.sortMode, 'updated');
+    expect(loaded.sortAscending, isFalse);
+  });
+
   test('AppStorage requires upload encryption keys before sync', () async {
     SharedPreferences.setMockInitialValues({});
     const storage = AppStorage();

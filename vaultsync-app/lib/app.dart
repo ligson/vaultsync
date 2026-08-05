@@ -381,6 +381,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
               ? widget.storage as MediaBackupSourceStore
               : null,
           mediaGateway: mediaGateway,
+          mediaThumbnails: mediaGateway,
           currentDeviceDisplayName: deviceProfile.name,
           autoSyncEnabled: widget.autoSyncEnabled,
           serverAddress: _apiBaseUrl.toString(),

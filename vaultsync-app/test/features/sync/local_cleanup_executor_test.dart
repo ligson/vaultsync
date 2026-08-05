@@ -60,6 +60,133 @@ void main() {
   });
 
   test(
+    'cleanup removes empty parent directories but keeps sync root',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('vaultsync_cleanup_');
+      addTearDown(() => dir.delete(recursive: true));
+      final root = Directory('${dir.path}/root');
+      final nested = Directory('${root.path}/photos/2026/08');
+      await nested.create(recursive: true);
+      final file = File('${nested.path}/a.jpg');
+      await file.writeAsString('abc');
+      final modifiedAt = await file.lastModified();
+      final uploadTasks = FakeUploadTaskStore([
+        _uploadedTask(file.path, modifiedAt: modifiedAt),
+      ]);
+
+      final executor = LocalCleanupExecutor(
+        mappings: FakeSyncRootMappingStore(
+          cleanupPolicy: 'delete',
+          archivePath: '',
+          localPath: root.path,
+        ),
+        uploadTasks: uploadTasks,
+      );
+
+      final result = await executor.cleanupUploadedTasks();
+
+      expect(result.cleanedCount, 1);
+      expect(await file.exists(), isFalse);
+      expect(await nested.exists(), isFalse);
+      expect(await Directory('${root.path}/photos').exists(), isFalse);
+      expect(await root.exists(), isTrue);
+    },
+  );
+
+  test('cleanup stops pruning at the first non-empty parent', () async {
+    final dir = await Directory.systemTemp.createTemp('vaultsync_cleanup_');
+    addTearDown(() => dir.delete(recursive: true));
+    final root = Directory('${dir.path}/root');
+    final album = Directory('${root.path}/album');
+    final nested = Directory('${album.path}/nested');
+    await nested.create(recursive: true);
+    final file = File('${nested.path}/a.jpg');
+    final retained = File('${album.path}/keep.txt');
+    await file.writeAsString('abc');
+    await retained.writeAsString('keep');
+    final modifiedAt = await file.lastModified();
+    final uploadTasks = FakeUploadTaskStore([
+      _uploadedTask(file.path, modifiedAt: modifiedAt),
+    ]);
+
+    final executor = LocalCleanupExecutor(
+      mappings: FakeSyncRootMappingStore(
+        cleanupPolicy: 'delete',
+        archivePath: '',
+        localPath: root.path,
+      ),
+      uploadTasks: uploadTasks,
+    );
+
+    await executor.cleanupUploadedTasks();
+
+    expect(await nested.exists(), isFalse);
+    expect(await album.exists(), isTrue);
+    expect(await retained.exists(), isTrue);
+    expect(await root.exists(), isTrue);
+  });
+
+  test('cleanup never prunes a directory outside the sync root', () async {
+    final dir = await Directory.systemTemp.createTemp('vaultsync_cleanup_');
+    addTearDown(() => dir.delete(recursive: true));
+    final root = Directory('${dir.path}/root');
+    final outside = Directory('${dir.path}/outside/nested');
+    await root.create(recursive: true);
+    await outside.create(recursive: true);
+    final file = File('${outside.path}/a.jpg');
+    await file.writeAsString('abc');
+    final modifiedAt = await file.lastModified();
+    final uploadTasks = FakeUploadTaskStore([
+      _uploadedTask(file.path, modifiedAt: modifiedAt),
+    ]);
+
+    final executor = LocalCleanupExecutor(
+      mappings: FakeSyncRootMappingStore(
+        cleanupPolicy: 'delete',
+        archivePath: '',
+        localPath: root.path,
+      ),
+      uploadTasks: uploadTasks,
+    );
+
+    await executor.cleanupUploadedTasks();
+
+    expect(await file.exists(), isFalse);
+    expect(await outside.exists(), isTrue);
+    expect(await root.exists(), isTrue);
+  });
+
+  test(
+    'cleanup prunes empty parents when backed-up file is already missing',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('vaultsync_cleanup_');
+      addTearDown(() => dir.delete(recursive: true));
+      final root = Directory('${dir.path}/root');
+      final nested = Directory('${root.path}/old/empty');
+      await nested.create(recursive: true);
+      final missingPath = '${nested.path}/already-gone.jpg';
+      final uploadTasks = FakeUploadTaskStore([
+        _uploadedTask(missingPath, modifiedAt: DateTime.utc(2026, 8, 5)),
+      ]);
+
+      final executor = LocalCleanupExecutor(
+        mappings: FakeSyncRootMappingStore(
+          cleanupPolicy: 'delete',
+          archivePath: '',
+          localPath: root.path,
+        ),
+        uploadTasks: uploadTasks,
+      );
+
+      await executor.cleanupUploadedTasks();
+
+      expect(await nested.exists(), isFalse);
+      expect(await Directory('${root.path}/old').exists(), isFalse);
+      expect(await root.exists(), isTrue);
+    },
+  );
+
+  test(
     'cleanup deletes previously retained task after policy changes',
     () async {
       final dir = await Directory.systemTemp.createTemp('vaultsync_cleanup_');
@@ -657,10 +784,12 @@ LocalUploadTask _mediaTask({
 class FakeSyncRootMappingStore implements SyncRootMappingStore {
   final String cleanupPolicy;
   final String archivePath;
+  final String localPath;
 
   const FakeSyncRootMappingStore({
     required this.cleanupPolicy,
     required this.archivePath,
+    this.localPath = '/local/root',
   });
 
   @override
@@ -668,7 +797,7 @@ class FakeSyncRootMappingStore implements SyncRootMappingStore {
     return [
       LocalSyncRootMapping(
         syncRootId: 'root-1',
-        localPath: '/local/root',
+        localPath: localPath,
         encryptedPath: 'vaultsync-path:v1:root',
         cleanupPolicy: cleanupPolicy,
         archivePath: archivePath,

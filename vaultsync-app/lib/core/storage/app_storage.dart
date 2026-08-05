@@ -163,6 +163,24 @@ abstract interface class SyncHistoryStore {
   Future<void> clearSyncHistory();
 }
 
+class FileBrowserPreferences {
+  final String viewMode;
+  final String sortMode;
+  final bool sortAscending;
+
+  const FileBrowserPreferences({
+    this.viewMode = 'list',
+    this.sortMode = 'name',
+    this.sortAscending = true,
+  });
+}
+
+abstract interface class FileBrowserPreferenceStore {
+  Future<FileBrowserPreferences> loadFileBrowserPreferences();
+
+  Future<void> saveFileBrowserPreferences(FileBrowserPreferences preferences);
+}
+
 class AppStorage
     implements
         ServerSettingsStore,
@@ -179,6 +197,7 @@ class AppStorage
         AutoSyncStatusStore,
         SyncOperationStatusStore,
         SyncHistoryStore,
+        FileBrowserPreferenceStore,
         LocalSessionCleaner {
   final PasswordUploadKeyDeriver uploadKeyDeriver;
   final UploadTaskDirectoryProvider uploadTaskDirectoryProvider;
@@ -211,6 +230,10 @@ class AppStorage
   static const _autoSyncStatusKey = 'vaultsync.sync.auto_status';
   static const _syncOperationStatusesKey = 'vaultsync.sync.operation_statuses';
   static const _syncHistoryKey = 'vaultsync.sync.history';
+  static const _fileBrowserViewModeKey = 'vaultsync.file_browser.view_mode';
+  static const _fileBrowserSortModeKey = 'vaultsync.file_browser.sort_mode';
+  static const _fileBrowserSortAscendingKey =
+      'vaultsync.file_browser.sort_ascending';
   static const _maxSyncHistoryItems = 200;
 
   @override
@@ -750,6 +773,28 @@ class AppStorage
   Future<void> clearSyncHistory() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_syncHistoryKey);
+  }
+
+  @override
+  Future<FileBrowserPreferences> loadFileBrowserPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    return FileBrowserPreferences(
+      viewMode: prefs.getString(_fileBrowserViewModeKey) ?? 'list',
+      sortMode: prefs.getString(_fileBrowserSortModeKey) ?? 'name',
+      sortAscending: prefs.getBool(_fileBrowserSortAscendingKey) ?? true,
+    );
+  }
+
+  @override
+  Future<void> saveFileBrowserPreferences(
+    FileBrowserPreferences preferences,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await Future.wait([
+      prefs.setString(_fileBrowserViewModeKey, preferences.viewMode),
+      prefs.setString(_fileBrowserSortModeKey, preferences.sortMode),
+      prefs.setBool(_fileBrowserSortAscendingKey, preferences.sortAscending),
+    ]);
   }
 
   @override

@@ -258,6 +258,7 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
 
     if (!await File(task.localPath).exists()) {
       if (policy == 'delete') {
+        await _pruneEmptyParentDirectories(task, mapping);
         return const _TaskCleanupResult(
           status: 'deleted_local',
           cleaned: true,
@@ -280,7 +281,7 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
     }
 
     if (policy == 'delete') {
-      return _deleteLocalFile(task);
+      return _deleteLocalFile(task, mapping);
     }
     if (policy == 'archive') {
       return _archiveLocalFile(task, mapping);
@@ -422,9 +423,13 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
     return stat.size == task.sizeBytes && modifiedDiff <= 2;
   }
 
-  Future<_TaskCleanupResult> _deleteLocalFile(LocalUploadTask task) async {
+  Future<_TaskCleanupResult> _deleteLocalFile(
+    LocalUploadTask task,
+    LocalSyncRootMapping? mapping,
+  ) async {
     try {
       await File(task.localPath).delete();
+      await _pruneEmptyParentDirectories(task, mapping);
       return const _TaskCleanupResult(status: 'deleted_local', cleaned: true);
     } catch (_) {
       return const _TaskCleanupResult(
@@ -432,6 +437,57 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
         pending: true,
         message: '删除本地文件失败，请检查文件权限或是否被占用',
       );
+    }
+  }
+
+  Future<void> _pruneEmptyParentDirectories(
+    LocalUploadTask task,
+    LocalSyncRootMapping? mapping,
+  ) async {
+    final rootPath = mapping?.localPath.trim() ?? '';
+    final localPath = task.localPath.trim();
+    if (rootPath.isEmpty || localPath.isEmpty) {
+      return;
+    }
+
+    try {
+      final rootDirectory = Directory(rootPath);
+      if (!await rootDirectory.exists()) {
+        return;
+      }
+      final resolvedRoot = Directory(
+        await rootDirectory.resolveSymbolicLinks(),
+      );
+      final rootKey = _pathComparisonKey(resolvedRoot.path);
+      if (rootKey == _pathComparisonKey(resolvedRoot.parent.path)) {
+        return;
+      }
+
+      var current = File(localPath).parent;
+      if (!await current.exists()) {
+        return;
+      }
+      current = Directory(await current.resolveSymbolicLinks());
+      var currentKey = _pathComparisonKey(current.path);
+      if (!_isPathWithinRoot(currentKey, rootKey)) {
+        return;
+      }
+
+      while (currentKey != rootKey) {
+        if (!await current.list(followLinks: false).isEmpty) {
+          return;
+        }
+        final parent = current.parent;
+        await current.delete();
+        current = parent;
+        currentKey = _pathComparisonKey(current.path);
+        if (!_isPathWithinRoot(currentKey, rootKey)) {
+          return;
+        }
+      }
+    } catch (_) {
+      // The file is already safely removed; a concurrent write or directory
+      // permission change should only stop optional empty-directory pruning.
     }
   }
 
@@ -557,3 +613,21 @@ const _invalidFileNameCleanupMessage = '文件名编码异常，为避免无法�
 
 bool _hasInvalidFileName(String relativePath) =>
     relativePath.contains('\uFFFD');
+
+String _pathComparisonKey(String path) {
+  var value = path;
+  while (value.length > 1 && value.endsWith(Platform.pathSeparator)) {
+    value = value.substring(0, value.length - 1);
+  }
+  return Platform.isWindows ? value.toLowerCase() : value;
+}
+
+bool _isPathWithinRoot(String path, String rootPath) {
+  if (path == rootPath) {
+    return true;
+  }
+  final prefix = rootPath.endsWith(Platform.pathSeparator)
+      ? rootPath
+      : '$rootPath${Platform.pathSeparator}';
+  return path.startsWith(prefix);
+}

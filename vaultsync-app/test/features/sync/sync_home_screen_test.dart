@@ -221,6 +221,149 @@ void main() {
     );
   });
 
+  testWidgets('icon view renders an album image thumbnail', (tester) async {
+    final thumbnailGateway = FakeMediaThumbnailGateway({
+      'asset-1': Uint8List.fromList(
+        base64Decode(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        ),
+      ),
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          mediaThumbnails: thumbnailGateway,
+          syncRootMappings: FakeSyncRootMappingStore([
+            const LocalSyncRootMapping(
+              syncRootId: 'root-1',
+              localPath: '',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+            ),
+          ]),
+          uploadTasks: FakeUploadTaskStore([
+            LocalUploadTask(
+              id: 'root-1:asset-1',
+              syncRootId: 'root-1',
+              localPath: '',
+              relativePath: 'photo.jpg',
+              sizeBytes: 12,
+              modifiedAt: DateTime.utc(2026, 8, 5, 10),
+              status: 'pending',
+              attempts: 0,
+              createdAt: DateTime.utc(2026, 8, 5, 10),
+              sourceType: 'media_asset',
+              assetId: 'asset-1',
+              assetMediaType: 'image',
+            ),
+          ]),
+          syncRoots: FakeSyncRootGateway(const [
+            SyncRoot(
+              id: 'root-1',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-08-05T00:00:00Z',
+            ),
+          ]),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('file_tree_view_mode_button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('图标').last);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('file_grid_thumbnail_photo.jpg')),
+      findsOneWidget,
+    );
+    expect(thumbnailGateway.requestedAssetIds, ['asset-1']);
+  });
+
+  testWidgets('file browser restores and saves view preferences', (
+    tester,
+  ) async {
+    final storage = FakeFileBrowserSessionStore(
+      preferences: const FileBrowserPreferences(
+        viewMode: 'grid',
+        sortMode: 'updated',
+        sortAscending: false,
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: storage,
+          syncRootMappings: FakeSyncRootMappingStore([
+            const LocalSyncRootMapping(
+              syncRootId: 'root-1',
+              localPath: '/Users/alice/Documents',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+            ),
+          ]),
+          uploadTasks: FakeUploadTaskStore([
+            LocalUploadTask(
+              id: 'root-1:a.txt',
+              syncRootId: 'root-1',
+              localPath: '/Users/alice/Documents/a.txt',
+              relativePath: 'a.txt',
+              sizeBytes: 12,
+              modifiedAt: DateTime.utc(2026, 8, 5, 10),
+              status: 'pending',
+              attempts: 0,
+              createdAt: DateTime.utc(2026, 8, 5, 10),
+            ),
+          ]),
+          syncRoots: FakeSyncRootGateway(const [
+            SyncRoot(
+              id: 'root-1',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'base64:path',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-08-05T00:00:00Z',
+            ),
+          ]),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('file_grid_icon_a.txt')), findsOneWidget);
+    expect(find.byTooltip('当前降序，点击切换为升序'), findsOneWidget);
+
+    await tester.tap(find.text('列表').last);
+    await tester.pumpAndSettle();
+    expect(storage.preferences.viewMode, 'list');
+
+    await tester.tap(find.text('a.txt'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('file_properties_dialog')),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey('file_tree_sort_direction_button')),
+    );
+    await tester.pumpAndSettle();
+    expect(storage.preferences.sortAscending, isTrue);
+  });
+
   testWidgets('sync home shows empty state when no sync roots exist', (
     tester,
   ) async {
@@ -1430,7 +1573,7 @@ void main() {
 
     expect(remoteBackups.token, 'server-token');
     expect(remoteBackups.syncRootId, 'root-1');
-    expect(find.text('1 个文件'), findsWidgets);
+    expect(find.textContaining('共 1 个文件'), findsOneWidget);
     expect(find.text('2026'), findsOneWidget);
     await tester.tap(find.text('2026'));
     await tester.pumpAndSettle();
@@ -1444,7 +1587,13 @@ void main() {
     await tester.tap(find.text('详细').last);
     await tester.pumpAndSettle();
     expect(find.text('4.0 KB'), findsOneWidget);
-    expect(find.text('服务器已备份，本地已删除'), findsOneWidget);
+    expect(find.text('仅云端'), findsOneWidget);
+    expect(
+      find.text(
+        _formatLocalTestDateTime(DateTime.parse('2026-07-01T10:00:00Z')),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets(
@@ -4474,6 +4623,26 @@ class FakeSessionStore implements SessionStore {
   Future<void> saveDevice(RegisteredDevice device) async {}
 }
 
+class FakeFileBrowserSessionStore extends FakeSessionStore
+    implements FileBrowserPreferenceStore {
+  FileBrowserPreferences preferences;
+
+  FakeFileBrowserSessionStore({required this.preferences})
+    : super(token: 'server-token', deviceId: 'device-1');
+
+  @override
+  Future<FileBrowserPreferences> loadFileBrowserPreferences() async {
+    return preferences;
+  }
+
+  @override
+  Future<void> saveFileBrowserPreferences(
+    FileBrowserPreferences preferences,
+  ) async {
+    this.preferences = preferences;
+  }
+}
+
 class FakeSyncRootMappingStore implements SyncRootMappingStore {
   final List<LocalSyncRootMapping> saved;
 
@@ -4592,6 +4761,23 @@ class FakeMediaBackupGateway implements MediaBackupGateway {
       deletedAssetIds: deleted,
       message: message,
     );
+  }
+}
+
+class FakeMediaThumbnailGateway implements MediaAssetThumbnailGateway {
+  final Map<String, Uint8List> thumbnails;
+  final List<String> requestedAssetIds = [];
+
+  FakeMediaThumbnailGateway(this.thumbnails);
+
+  @override
+  Future<Uint8List?> loadThumbnail(
+    String assetId, {
+    int width = 360,
+    int height = 240,
+  }) async {
+    requestedAssetIds.add(assetId);
+    return thumbnails[assetId];
   }
 }
 

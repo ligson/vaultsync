@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'media_backup_models.dart';
 
@@ -34,6 +35,14 @@ abstract interface class MediaAssetCleaner {
 
 abstract interface class MediaAssetFileResolver {
   Future<File?> resolveAssetFile(String assetId);
+}
+
+abstract interface class MediaAssetThumbnailGateway {
+  Future<Uint8List?> loadThumbnail(
+    String assetId, {
+    int width = 360,
+    int height = 240,
+  });
 }
 
 abstract interface class MediaBackupGateway implements MediaAssetCleaner {

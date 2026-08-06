@@ -187,6 +187,42 @@ void main() {
   );
 
   test(
+    'cleanup prunes empty parents left by historical deleted local tasks',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('vaultsync_cleanup_');
+      addTearDown(() => dir.delete(recursive: true));
+      final root = Directory('${dir.path}/root');
+      final nested = Directory('${root.path}/history/empty');
+      await nested.create(recursive: true);
+      final missingPath = '${nested.path}/already-deleted.jpg';
+      final uploadTasks = FakeUploadTaskStore([
+        _uploadedTask(
+          missingPath,
+          modifiedAt: DateTime.utc(2026, 8, 5),
+          status: 'deleted_local',
+        ),
+      ]);
+
+      final executor = LocalCleanupExecutor(
+        mappings: FakeSyncRootMappingStore(
+          cleanupPolicy: 'delete',
+          archivePath: '',
+          localPath: root.path,
+        ),
+        uploadTasks: uploadTasks,
+      );
+
+      final prunedCount = await executor.cleanupDeletedLocalEmptyDirectories();
+
+      expect(prunedCount, 2);
+      expect(await nested.exists(), isFalse);
+      expect(await Directory('${root.path}/history').exists(), isFalse);
+      expect(await root.exists(), isTrue);
+      expect(uploadTasks.saved.single.status, 'deleted_local');
+    },
+  );
+
+  test(
     'cleanup deletes previously retained task after policy changes',
     () async {
       final dir = await Directory.systemTemp.createTemp('vaultsync_cleanup_');

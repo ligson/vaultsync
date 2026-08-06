@@ -29,6 +29,8 @@ abstract interface class LocalPostUploadCleaner {
   Future<Object> cleanupUploadedTasks();
 
   Future<LocalUploadTask> cleanupUploadedTask(LocalUploadTask task);
+
+  Future<int> cleanupDeletedLocalEmptyDirectories({String? syncRootId});
 }
 
 class PreparedUploadPayload {
@@ -573,6 +575,15 @@ class LocalUploadExecutor
     }
     if (uploadTasks is! IncrementalUploadTaskStore) {
       await uploadTasks.saveUploadTasks(updatedTasks);
+    }
+    try {
+      await postUploadCleaner?.cleanupDeletedLocalEmptyDirectories(
+        syncRootId: syncRootId,
+      );
+    } catch (_) {
+      // Empty-directory pruning is an optional follow-up after confirmed upload
+      // cleanup. A concurrent write or permission change should not turn an
+      // otherwise successful upload round into a failed upload round.
     }
     _reportProgress(
       phase: UploadProgressPhase.completed,

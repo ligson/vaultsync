@@ -37,6 +37,20 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
     return _cleanupTasks();
   }
 
+  @override
+  Future<int> cleanupDeletedLocalEmptyDirectories({String? syncRootId}) async {
+    final mappingItems = await mappings.loadSyncRootMappings();
+    final mappingsByRoot = {
+      for (final mapping in mappingItems) mapping.syncRootId: mapping,
+    };
+    final tasks = await uploadTasks.loadUploadTasks();
+    return _pruneDeletedLocalTaskEmptyDirectories(
+      tasks,
+      mappingsByRoot,
+      syncRootId: syncRootId,
+    );
+  }
+
   Future<LocalCleanupResult> cleanupNewlyUploadedMediaTasks() async {
     return _cleanupTasks(onlyNewMedia: true);
   }
@@ -218,6 +232,11 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
     }
 
     await uploadTasks.saveUploadTasks(updatedTasks);
+    await _pruneDeletedLocalTaskEmptyDirectories(
+      updatedTasks,
+      mappingsByRoot,
+      taskId: taskId,
+    );
     return LocalCleanupResult(
       cleanedCount: cleanedCount,
       pendingCount: pendingCount,
@@ -440,55 +459,119 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
     }
   }
 
-  Future<void> _pruneEmptyParentDirectories(
+  Future<int> _pruneEmptyParentDirectories(
     LocalUploadTask task,
     LocalSyncRootMapping? mapping,
   ) async {
+    return _pruneEmptyParentDirectoryPath(
+      File(task.localPath).parent.path,
+      mapping,
+    );
+  }
+
+  Future<int> _pruneEmptyParentDirectoryPath(
+    String parentPath,
+    LocalSyncRootMapping? mapping,
+  ) async {
     final rootPath = mapping?.localPath.trim() ?? '';
-    final localPath = task.localPath.trim();
-    if (rootPath.isEmpty || localPath.isEmpty) {
-      return;
+    final candidatePath = parentPath.trim();
+    if (rootPath.isEmpty || candidatePath.isEmpty) {
+      return 0;
     }
 
     try {
       final rootDirectory = Directory(rootPath);
       if (!await rootDirectory.exists()) {
-        return;
+        return 0;
       }
       final resolvedRoot = Directory(
         await rootDirectory.resolveSymbolicLinks(),
       );
       final rootKey = _pathComparisonKey(resolvedRoot.path);
       if (rootKey == _pathComparisonKey(resolvedRoot.parent.path)) {
-        return;
+        return 0;
       }
 
-      var current = File(localPath).parent;
+      var current = Directory(candidatePath);
       if (!await current.exists()) {
-        return;
+        return 0;
       }
       current = Directory(await current.resolveSymbolicLinks());
       var currentKey = _pathComparisonKey(current.path);
       if (!_isPathWithinRoot(currentKey, rootKey)) {
-        return;
+        return 0;
       }
 
+      var prunedCount = 0;
       while (currentKey != rootKey) {
         if (!await current.list(followLinks: false).isEmpty) {
-          return;
+          return prunedCount;
         }
         final parent = current.parent;
         await current.delete();
+        prunedCount += 1;
         current = parent;
         currentKey = _pathComparisonKey(current.path);
         if (!_isPathWithinRoot(currentKey, rootKey)) {
-          return;
+          return prunedCount;
         }
       }
+      return prunedCount;
     } catch (_) {
       // The file is already safely removed; a concurrent write or directory
       // permission change should only stop optional empty-directory pruning.
+      return 0;
     }
+  }
+
+  Future<int> _pruneDeletedLocalTaskEmptyDirectories(
+    List<LocalUploadTask> tasks,
+    Map<String, LocalSyncRootMapping> mappingsByRoot, {
+    String? syncRootId,
+    String? taskId,
+  }) async {
+    final seen = <String>{};
+    final candidates = <_EmptyDirectoryPruneCandidate>[];
+    for (final task in tasks) {
+      if (task.status != 'deleted_local' ||
+          task.sourceType == 'media_asset' ||
+          (syncRootId != null && task.syncRootId != syncRootId) ||
+          (taskId != null && task.id != taskId)) {
+        continue;
+      }
+      final mapping = mappingsByRoot[task.syncRootId];
+      if (mapping == null ||
+          mapping.cleanupPolicy != 'delete' ||
+          task.localPath.trim().isEmpty) {
+        continue;
+      }
+      final sourceFile = File(task.localPath);
+      if (await sourceFile.exists()) {
+        continue;
+      }
+      final parentPath = sourceFile.parent.path;
+      final key = '${task.syncRootId}\n${_pathComparisonKey(parentPath)}';
+      if (!seen.add(key)) {
+        continue;
+      }
+      candidates.add(
+        _EmptyDirectoryPruneCandidate(parentPath: parentPath, mapping: mapping),
+      );
+    }
+
+    candidates.sort(
+      (left, right) =>
+          _pathDepth(right.parentPath).compareTo(_pathDepth(left.parentPath)),
+    );
+
+    var prunedCount = 0;
+    for (final candidate in candidates) {
+      prunedCount += await _pruneEmptyParentDirectoryPath(
+        candidate.parentPath,
+        candidate.mapping,
+      );
+    }
+    return prunedCount;
   }
 
   Future<_TaskCleanupResult> _archiveLocalFile(
@@ -609,6 +692,16 @@ class _MediaBatchDeleteResult {
   });
 }
 
+class _EmptyDirectoryPruneCandidate {
+  final String parentPath;
+  final LocalSyncRootMapping mapping;
+
+  const _EmptyDirectoryPruneCandidate({
+    required this.parentPath,
+    required this.mapping,
+  });
+}
+
 const _invalidFileNameCleanupMessage = '文件名编码异常，为避免无法恢复原始名称，已保留本地文件，请先重命名后重新扫描';
 
 bool _hasInvalidFileName(String relativePath) =>
@@ -631,3 +724,6 @@ bool _isPathWithinRoot(String path, String rootPath) {
       : '$rootPath${Platform.pathSeparator}';
   return path.startsWith(prefix);
 }
+
+int _pathDepth(String path) =>
+    path.split(Platform.pathSeparator).where((part) => part.isNotEmpty).length;

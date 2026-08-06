@@ -113,6 +113,45 @@ void main() {
   });
 
   test(
+    'executePendingUploads prunes historical empty directories with no pending uploads',
+    () async {
+      final uploadTasks = FakeUploadTaskStore([
+        LocalUploadTask(
+          id: 'root-1:old.txt',
+          syncRootId: 'root-1',
+          localPath: '/Users/alice/Downloads/old.txt',
+          relativePath: 'old.txt',
+          sizeBytes: 3,
+          modifiedAt: DateTime.utc(2026, 8, 5),
+          status: 'deleted_local',
+          attempts: 0,
+          createdAt: DateTime.utc(2026, 8, 5, 10),
+        ),
+      ]);
+      final cleaner = FakePostUploadCleaner();
+      final executor = LocalUploadExecutor(
+        sessionStore: FakeSessionStore(
+          token: 'server-token',
+          deviceId: 'device-1',
+        ),
+        uploadTasks: uploadTasks,
+        uploads: FakeUploadGateway(),
+        payloadPreparer: const FakeUploadPayloadPreparer(),
+        postUploadCleaner: cleaner,
+        objectIdForTask: (_) => 'object-1',
+        versionIdForTask: (_) => 'version-1',
+        chunkSize: 3,
+      );
+
+      final result = await executor.executePendingUploads(syncRootId: 'root-1');
+
+      expect(result.uploadedCount, 0);
+      expect(cleaner.emptyDirectoryCleanupCount, 1);
+      expect(cleaner.emptyDirectoryCleanupSyncRootId, 'root-1');
+    },
+  );
+
+  test(
     'executePendingUploads splits prepared ciphertext into chunks',
     () async {
       final uploadTasks = FakeUploadTaskStore([
@@ -809,6 +848,8 @@ class FakeSyncRootMappingStore implements SyncRootMappingStore {
 
 class FakePostUploadCleaner implements LocalPostUploadCleaner {
   int callCount = 0;
+  int emptyDirectoryCleanupCount = 0;
+  String? emptyDirectoryCleanupSyncRootId;
   final List<String> cleanedTaskIds = [];
 
   @override
@@ -822,6 +863,13 @@ class FakePostUploadCleaner implements LocalPostUploadCleaner {
     callCount += 1;
     cleanedTaskIds.add(task.id);
     return task;
+  }
+
+  @override
+  Future<int> cleanupDeletedLocalEmptyDirectories({String? syncRootId}) async {
+    emptyDirectoryCleanupCount += 1;
+    emptyDirectoryCleanupSyncRootId = syncRootId;
+    return 0;
   }
 }
 

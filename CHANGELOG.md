@@ -2,6 +2,10 @@
 
 所有有意义的项目变更都应记录在这里。
 
+## 2026-08-07
+
+- `v1.0.0+2026080601` 已完成 GitHub Release 并同步到 NAS 下载页：发布包含 Android APK/AAB、iOS 未签名 IPA、macOS arm64/x64 未签名 zip、Windows x64 未签名 zip、前端 zip、四个后端 tar.gz 和 `SHA256SUMS.txt` 共 12 个制品，Actions run `31102653108` 全部 job 成功。NAS 已先备份 `data/vaultsync.db` 与旧 5 个客户端包到 `data/backups/client-downloads-20260807-083233-2026080601/`，随后原子替换下载文件并将 `download_releases` 更新为 `1.0.0+2026080601`；数据库 `PRAGMA quick_check` 为 `ok`，`files.ligson.xyz/api/v1/health` 正常，公网下载头已回查到新文件大小。本次不清空用户、设备、目录绑定、上传队列、相册记录或加密密钥。
+
 ## 2026-08-06
 
 - 修复 macOS/桌面端“上传后删除本地文件”历史空目录残留：上传执行器每轮结束后会回收 `deleted_local` 历史任务对应路径留下的空父目录，即使本轮没有新上传任务也会执行；清理范围仅限当前同步根内部、对应已备份任务的父目录，永不删除同步根，也不会扫描删除任意无任务关联的用户空目录。已在当前 Mac 的 `/Users/ligson/Downloads` 按同样规则回收 3052 个历史空目录，未删除任何文件。

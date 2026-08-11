@@ -53,6 +53,7 @@ class XChaCha20RemoteMetadataDecrypter implements RemoteMetadataDecrypter {
           relativePath: plainMetadata['relative_path'] as String? ?? name,
           sizeBytes: object.sizeBytes,
           updatedAt: object.updatedAt,
+          contentHash: object.contentHash,
           clientContentHash:
               plainMetadata['client_content_hash'] as String? ?? '',
         );
@@ -67,6 +68,7 @@ class XChaCha20RemoteMetadataDecrypter implements RemoteMetadataDecrypter {
         relativePath: metadata['relative_path'] as String? ?? name,
         sizeBytes: object.sizeBytes,
         updatedAt: object.updatedAt,
+        contentHash: object.contentHash,
         clientContentHash: metadata['client_content_hash'] as String? ?? '',
       );
     } catch (_) {
@@ -79,6 +81,7 @@ class XChaCha20RemoteMetadataDecrypter implements RemoteMetadataDecrypter {
         sizeBytes: object.sizeBytes,
         updatedAt: object.updatedAt,
         decryptable: false,
+        contentHash: object.contentHash,
       );
     }
   }

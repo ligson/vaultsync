@@ -1906,7 +1906,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('图标').last);
     await tester.pumpAndSettle();
-    expect(find.text('继续显示 48 项'), findsOneWidget);
+    expect(find.text('继续显示 24 项'), findsOneWidget);
   });
 
   testWidgets('sync home marks other device roots readonly', (tester) async {

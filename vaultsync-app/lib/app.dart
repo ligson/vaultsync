@@ -17,6 +17,7 @@ import 'features/download/remote_file_download.dart';
 import 'features/media_backup/media_upload_content_reader.dart';
 import 'features/media_backup/photo_manager_media_gateway.dart';
 import 'features/preview/remote_file_preview.dart';
+import 'features/preview/remote_file_thumbnail.dart';
 import 'features/profile/authenticated_shell.dart';
 import 'features/profile/app_permission_gateway.dart';
 import 'features/sync/encrypted_download_payload_decrypter.dart';
@@ -287,6 +288,17 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
       downloads: resolvedDownloads,
       decrypter: resolvedDownloadDecrypter,
     );
+    final resolvedRemoteFileThumbnails = CachedRemoteFileThumbnailLoader(
+      sessionStore: widget.storage,
+      downloads: resolvedDownloads,
+      decrypter: resolvedDownloadDecrypter,
+      cacheDirectoryProvider: () async {
+        final temporaryDirectory = await getTemporaryDirectory();
+        return Directory(
+          '${temporaryDirectory.path}/vaultsync-remote-thumbnails',
+        );
+      },
+    );
     final deviceProfile = _deviceProfile;
     final mediaGateway = const PhotoManagerMediaGateway();
     final resolvedUploadExecutor =
@@ -377,6 +389,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
           remoteMetadataDecrypter: resolvedRemoteMetadataDecrypter,
           remoteFilePreviews: resolvedFilePreviews,
           remoteFileDownloads: resolvedFileDownloads,
+          remoteFileThumbnails: resolvedRemoteFileThumbnails,
           mediaBackupSources: widget.storage is MediaBackupSourceStore
               ? widget.storage as MediaBackupSourceStore
               : null,

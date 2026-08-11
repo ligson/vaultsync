@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/network/api_exception.dart';
 import '../../core/storage/app_storage.dart';
+import '../media_backup/media_backup_gateway.dart';
 import 'sync_models.dart';
 import 'upload_api_service.dart';
 
@@ -603,11 +604,11 @@ class LocalUploadExecutor
   }
 
   bool _isMissingLocalUploadSource(LocalUploadTask task, Object error) {
-    if (task.sourceType == 'media_asset' || error is! FileSystemException) {
-      return false;
+    if (task.sourceType == 'media_asset' &&
+        error is MissingMediaAssetException) {
+      return true;
     }
-    final errorPath = error.path;
-    if (errorPath == null || errorPath.trim().isEmpty) {
+    if (error is! FileSystemException) {
       return false;
     }
     final isMissingError =
@@ -615,6 +616,13 @@ class LocalUploadExecutor
         error.osError?.errorCode == 2 ||
         error.osError?.errorCode == 3;
     if (!isMissingError) {
+      return false;
+    }
+    if (task.sourceType == 'media_asset') {
+      return true;
+    }
+    final errorPath = error.path;
+    if (errorPath == null || errorPath.trim().isEmpty) {
       return false;
     }
     return _normalizedLocalPath(errorPath) ==

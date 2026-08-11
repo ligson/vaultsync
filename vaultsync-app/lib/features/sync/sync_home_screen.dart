@@ -15,6 +15,7 @@ import '../media_backup/media_backup_gateway.dart';
 import '../media_backup/media_backup_scanner.dart';
 import '../preview/file_preview_screen.dart';
 import '../preview/remote_file_preview.dart';
+import '../preview/remote_file_thumbnail.dart';
 import 'android_sync_keep_alive.dart';
 import 'file_access_permission.dart';
 import 'folder_picker.dart';
@@ -69,6 +70,7 @@ class SyncHomeScreen extends StatefulWidget {
   final RemoteMetadataDecrypter? remoteMetadataDecrypter;
   final RemoteFilePreviewGateway? remoteFilePreviews;
   final RemoteFileDownloadGateway? remoteFileDownloads;
+  final RemoteFileThumbnailGateway? remoteFileThumbnails;
   final RemoteFileSaveGateway remoteFileSaver;
   final bool autoSyncEnabled;
   final Duration autoSyncInterval;
@@ -104,6 +106,7 @@ class SyncHomeScreen extends StatefulWidget {
     this.remoteMetadataDecrypter,
     this.remoteFilePreviews,
     this.remoteFileDownloads,
+    this.remoteFileThumbnails,
     this.remoteFileSaver = const PlatformRemoteFileSaveGateway(),
     this.autoSyncEnabled = false,
     this.autoSyncInterval = const Duration(minutes: 5),
@@ -1844,11 +1847,11 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
+      floatingActionButton: FloatingActionButton.small(
         key: const ValueKey('add_sync_root_button'),
+        tooltip: '新增目录',
         onPressed: _openCreateSyncRootDialog,
-        label: const Text('新增目录'),
-        icon: const Icon(Icons.add),
+        child: const Icon(Icons.add),
       ),
       body: FutureBuilder<_SyncHomeData>(
         future: _homeFuture,
@@ -1956,6 +1959,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
             rootView: rootView,
             initiallyExpanded: rootViews.length == 1,
             mediaThumbnails: widget.mediaThumbnails,
+            remoteFileThumbnails: widget.remoteFileThumbnails,
             fileBrowserPreferences: widget.storage is FileBrowserPreferenceStore
                 ? widget.storage as FileBrowserPreferenceStore
                 : null,
@@ -5133,6 +5137,7 @@ class _SyncRootPanel extends StatelessWidget {
   final bool initiallyExpanded;
   final FileBrowserPreferenceStore? fileBrowserPreferences;
   final MediaAssetThumbnailGateway? mediaThumbnails;
+  final RemoteFileThumbnailGateway? remoteFileThumbnails;
   final VoidCallback? onManage;
   final VoidCallback? onScan;
   final VoidCallback? onBind;
@@ -5148,6 +5153,7 @@ class _SyncRootPanel extends StatelessWidget {
     required this.initiallyExpanded,
     required this.fileBrowserPreferences,
     required this.mediaThumbnails,
+    required this.remoteFileThumbnails,
     required this.onManage,
     required this.onScan,
     required this.onBind,
@@ -5315,6 +5321,7 @@ class _SyncRootPanel extends StatelessWidget {
               rootView: rootView,
               preferences: fileBrowserPreferences,
               mediaThumbnails: mediaThumbnails,
+              remoteFileThumbnails: remoteFileThumbnails,
               onDeleteFile: onDeleteFile,
               onDeleteFolder: onDeleteFolder,
               onPreviewFile: onPreviewFile,
@@ -5436,6 +5443,7 @@ class _UnifiedFileTree extends StatefulWidget {
   final _SyncRootViewData rootView;
   final FileBrowserPreferenceStore? preferences;
   final MediaAssetThumbnailGateway? mediaThumbnails;
+  final RemoteFileThumbnailGateway? remoteFileThumbnails;
   final ValueChanged<_UnifiedFileRecord>? onDeleteFile;
   final ValueChanged<String>? onDeleteFolder;
   final ValueChanged<_UnifiedFileRecord>? onPreviewFile;
@@ -5445,6 +5453,7 @@ class _UnifiedFileTree extends StatefulWidget {
     required this.rootView,
     required this.preferences,
     required this.mediaThumbnails,
+    required this.remoteFileThumbnails,
     required this.onDeleteFile,
     required this.onDeleteFolder,
     required this.onPreviewFile,
@@ -5457,7 +5466,7 @@ class _UnifiedFileTree extends StatefulWidget {
 
 class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
   static const _entryBatchSize = 150;
-  static const _gridEntryBatchSize = 48;
+  static const _gridEntryBatchSize = 24;
 
   final _queryController = TextEditingController();
   var _visibleEntryLimit = _entryBatchSize;
@@ -5893,6 +5902,7 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
                       entry: entry,
                       statusLabel: widget.rootView.fileStatusLabel(entry.file),
                       mediaThumbnails: widget.mediaThumbnails,
+                      remoteFileThumbnails: widget.remoteFileThumbnails,
                       onPreview:
                           entry.file.canPreview && widget.onPreviewFile != null
                           ? () => widget.onPreviewFile?.call(entry.file)
@@ -6700,6 +6710,7 @@ class _UnifiedGridFileTile extends StatelessWidget {
   final _UnifiedFileEntry entry;
   final String statusLabel;
   final MediaAssetThumbnailGateway? mediaThumbnails;
+  final RemoteFileThumbnailGateway? remoteFileThumbnails;
   final VoidCallback? onPreview;
   final VoidCallback? onDownload;
   final VoidCallback? onDelete;
@@ -6709,6 +6720,7 @@ class _UnifiedGridFileTile extends StatelessWidget {
     required this.entry,
     required this.statusLabel,
     required this.mediaThumbnails,
+    required this.remoteFileThumbnails,
     required this.onPreview,
     required this.onDownload,
     required this.onDelete,
@@ -6735,6 +6747,7 @@ class _UnifiedGridFileTile extends StatelessWidget {
                     file: file,
                     path: entry.path,
                     mediaThumbnails: mediaThumbnails,
+                    remoteFileThumbnails: remoteFileThumbnails,
                   ),
                   Positioned(
                     top: 0,
@@ -6781,11 +6794,13 @@ class _GridFileVisual extends StatefulWidget {
   final _UnifiedFileRecord file;
   final String path;
   final MediaAssetThumbnailGateway? mediaThumbnails;
+  final RemoteFileThumbnailGateway? remoteFileThumbnails;
 
   const _GridFileVisual({
     required this.file,
     required this.path,
     required this.mediaThumbnails,
+    required this.remoteFileThumbnails,
   });
 
   @override
@@ -6794,11 +6809,13 @@ class _GridFileVisual extends StatefulWidget {
 
 class _GridFileVisualState extends State<_GridFileVisual> {
   Future<Uint8List?>? _mediaThumbnailFuture;
+  Future<Uint8List?>? _remoteThumbnailFuture;
 
   @override
   void initState() {
     super.initState();
     _mediaThumbnailFuture = _loadMediaThumbnail();
+    _remoteThumbnailFuture = _loadRemoteThumbnail();
   }
 
   @override
@@ -6806,10 +6823,15 @@ class _GridFileVisualState extends State<_GridFileVisual> {
     super.didUpdateWidget(oldWidget);
     final oldAssetId = oldWidget.file.task?.assetId.trim() ?? '';
     final nextAssetId = widget.file.task?.assetId.trim() ?? '';
+    final oldVersionId = oldWidget.file.backup?.versionId ?? '';
+    final nextVersionId = widget.file.backup?.versionId ?? '';
     if (oldWidget.path != widget.path ||
         oldAssetId != nextAssetId ||
-        oldWidget.mediaThumbnails != widget.mediaThumbnails) {
+        oldVersionId != nextVersionId ||
+        oldWidget.mediaThumbnails != widget.mediaThumbnails ||
+        oldWidget.remoteFileThumbnails != widget.remoteFileThumbnails) {
       _mediaThumbnailFuture = _loadMediaThumbnail();
+      _remoteThumbnailFuture = _loadRemoteThumbnail();
     }
   }
 
@@ -6825,6 +6847,19 @@ class _GridFileVisualState extends State<_GridFileVisual> {
       return null;
     }
     return gateway.loadThumbnail(task.assetId.trim());
+  }
+
+  Future<Uint8List?>? _loadRemoteThumbnail() {
+    if (widget.file.localImageThumbnailPath != null ||
+        _mediaThumbnailFuture != null) {
+      return null;
+    }
+    final backup = widget.file.backup;
+    final gateway = widget.remoteFileThumbnails;
+    if (backup == null || gateway == null) {
+      return null;
+    }
+    return gateway.load(backup);
   }
 
   @override
@@ -6853,27 +6888,87 @@ class _GridFileVisualState extends State<_GridFileVisual> {
         errorBuilder: (_, _, _) => fallback,
       );
     } else {
-      visual = FutureBuilder<Uint8List?>(
-        future: _mediaThumbnailFuture,
-        builder: (context, snapshot) {
-          final bytes = snapshot.data;
-          if (bytes == null || bytes.isEmpty) {
-            return fallback;
-          }
-          return Image.memory(
-            bytes,
-            key: ValueKey('file_grid_thumbnail_${widget.path}'),
-            fit: BoxFit.cover,
-            cacheWidth: 360,
-            filterQuality: FilterQuality.low,
-            errorBuilder: (_, _, _) => fallback,
-          );
-        },
+      visual = _FutureThumbnailImage(
+        path: widget.path,
+        primary: _mediaThumbnailFuture,
+        secondary: _remoteThumbnailFuture,
+        fallback: fallback,
       );
     }
     return ClipRRect(
       borderRadius: BorderRadius.circular(6),
       child: SizedBox(width: double.infinity, height: 96, child: visual),
+    );
+  }
+}
+
+class _FutureThumbnailImage extends StatelessWidget {
+  final String path;
+  final Future<Uint8List?>? primary;
+  final Future<Uint8List?>? secondary;
+  final Widget fallback;
+
+  const _FutureThumbnailImage({
+    required this.path,
+    required this.primary,
+    required this.secondary,
+    required this.fallback,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Uint8List?>(
+      future: primary ?? secondary,
+      builder: (context, snapshot) {
+        final bytes = snapshot.data;
+        if (bytes != null && bytes.isNotEmpty) {
+          return _MemoryThumbnail(path: path, bytes: bytes);
+        }
+        if (primary != null && secondary != null) {
+          return FutureBuilder<Uint8List?>(
+            future: secondary,
+            builder: (context, secondarySnapshot) {
+              final secondaryBytes = secondarySnapshot.data;
+              if (secondaryBytes == null || secondaryBytes.isEmpty) {
+                return fallback;
+              }
+              return _MemoryThumbnail(path: path, bytes: secondaryBytes);
+            },
+          );
+        }
+        return fallback;
+      },
+    );
+  }
+}
+
+class _MemoryThumbnail extends StatelessWidget {
+  final String path;
+  final Uint8List bytes;
+
+  const _MemoryThumbnail({required this.path, required this.bytes});
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.memory(
+      bytes,
+      key: ValueKey('file_grid_thumbnail_$path'),
+      fit: BoxFit.cover,
+      cacheWidth: 360,
+      filterQuality: FilterQuality.low,
+      errorBuilder: (_, _, _) {
+        final colorScheme = Theme.of(context).colorScheme;
+        return ColoredBox(
+          color: colorScheme.surfaceContainerHighest,
+          child: Center(
+            child: Icon(
+              _fileIcon(path),
+              size: 44,
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+        );
+      },
     );
   }
 }

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vaultsync_app/core/storage/app_storage.dart';
+import 'package:vaultsync_app/features/media_backup/media_backup_gateway.dart';
 import 'package:vaultsync_app/features/sync/local_cleanup_executor.dart';
 import 'package:vaultsync_app/features/sync/local_upload_executor.dart';
 import 'package:vaultsync_app/features/sync/sync_models.dart';
@@ -656,6 +657,52 @@ void main() {
             localPath,
             OSError('No such file or directory', 2),
           ),
+        ),
+        objectIdForTask: (_) => 'object-1',
+        versionIdForTask: (_) => 'version-1',
+        chunkSize: 3,
+      );
+
+      final result = await executor.executePendingUploads();
+
+      expect(result.uploadedCount, 0);
+      expect(result.failedCount, 0);
+      expect(result.removedCount, 1);
+      expect(uploadTasks.saved, isEmpty);
+      expect(uploads.createCount, 0);
+    },
+  );
+
+  test(
+    'executePendingUploads removes media task when asset no longer exists',
+    () async {
+      final uploadTasks = FakeUploadTaskStore([
+        LocalUploadTask(
+          id: 'media-root:asset-1',
+          syncRootId: 'media-root',
+          localPath: '',
+          relativePath: 'Recent/2026/08/wx_camera_1786366228742.jpg',
+          sizeBytes: 3,
+          modifiedAt: DateTime.utc(2026, 8, 11, 9),
+          status: 'failed',
+          attempts: 15,
+          createdAt: DateTime.utc(2026, 8, 11, 10),
+          lastError: '无法读取该照片或视频',
+          sourceType: 'media_asset',
+          assetId: 'asset-1',
+          assetMediaType: 'image',
+        ),
+      ]);
+      final uploads = FakeUploadGateway();
+      final executor = LocalUploadExecutor(
+        sessionStore: FakeSessionStore(
+          token: 'server-token',
+          deviceId: 'device-1',
+        ),
+        uploadTasks: uploadTasks,
+        uploads: uploads,
+        payloadPreparer: const ThrowingUploadPayloadPreparer(
+          MissingMediaAssetException('asset-1'),
         ),
         objectIdForTask: (_) => 'object-1',
         versionIdForTask: (_) => 'version-1',

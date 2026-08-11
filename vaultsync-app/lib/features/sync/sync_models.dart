@@ -600,6 +600,7 @@ class RemoteBackupEntry {
   final bool decryptable;
   final String encryptedName;
   final String metadataJson;
+  final String contentHash;
   final String clientContentHash;
 
   const RemoteBackupEntry({
@@ -613,6 +614,7 @@ class RemoteBackupEntry {
     this.decryptable = true,
     this.encryptedName = '',
     this.metadataJson = '',
+    this.contentHash = '',
     this.clientContentHash = '',
   });
 
@@ -631,6 +633,7 @@ class RemoteBackupEntry {
       decryptable: decryptable,
       encryptedName: encryptedName,
       metadataJson: metadataJson,
+      contentHash: contentHash,
       clientContentHash: clientContentHash,
     );
   }

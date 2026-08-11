@@ -111,7 +111,7 @@ class PhotoManagerMediaGateway
   Future<List<int>> readAssetBytes(String assetId) async {
     final file = await resolveAssetFile(assetId);
     if (file == null) {
-      throw Exception('无法读取该照片或视频');
+      throw MissingMediaAssetException(assetId);
     }
     return file.readAsBytes();
   }

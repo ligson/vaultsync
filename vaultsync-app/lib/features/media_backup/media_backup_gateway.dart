@@ -27,6 +27,15 @@ class MediaAssetBatchCleanupResult {
   });
 }
 
+class MissingMediaAssetException implements Exception {
+  final String assetId;
+
+  const MissingMediaAssetException(this.assetId);
+
+  @override
+  String toString() => '无法读取该照片或视频';
+}
+
 abstract interface class MediaAssetCleaner {
   Future<MediaAssetCleanupResult> deleteAsset(String assetId);
 

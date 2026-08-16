@@ -261,6 +261,12 @@ class EncryptedUploadPayloadPreparer implements UploadPayloadPreparer {
       sourceStat: sourceStat,
     );
     if (cached != null) {
+      final cachedSourceStat = await sourceFile.stat();
+      if (cachedSourceStat.size != sourceStat.size ||
+          cachedSourceStat.modified.millisecondsSinceEpoch !=
+              sourceStat.modified.millisecondsSinceEpoch) {
+        throw const UploadSourceChangedException();
+      }
       final metadata = await _metadataJson(
         task,
         objectId,
@@ -315,6 +321,15 @@ class EncryptedUploadPayloadPreparer implements UploadPayloadPreparer {
       await sink.flush();
     } finally {
       await sink.close();
+    }
+    final finalSourceStat = await sourceFile.stat();
+    if (finalSourceStat.size != sourceStat.size ||
+        finalSourceStat.modified.millisecondsSinceEpoch !=
+            sourceStat.modified.millisecondsSinceEpoch) {
+      if (await partFile.exists()) {
+        await partFile.delete();
+      }
+      throw const UploadSourceChangedException();
     }
     if (await payloadFile.exists()) {
       await payloadFile.delete();

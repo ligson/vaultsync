@@ -2,12 +2,16 @@ import '../../core/storage/app_storage.dart';
 import 'sync_models.dart';
 
 class LocalUploadPlanner {
+  static const stabilityWindow = Duration(seconds: 60);
+
   final UploadTaskStore uploadTasks;
   final DateTime Function() now;
+  final Duration requiredStability;
 
   const LocalUploadPlanner({
     required this.uploadTasks,
     this.now = DateTime.now,
+    this.requiredStability = stabilityWindow,
   });
 
   Future<List<LocalUploadTask>> enqueueScannedFiles(
@@ -15,14 +19,24 @@ class LocalUploadPlanner {
   ) async {
     final existingTasks = await uploadTasks.loadUploadTasks();
     final tasksById = {for (final task in existingTasks) task.id: task};
-    final createdAt = now().toUtc();
+    final observedAt = now().toUtc();
     final enqueuedTasks = <LocalUploadTask>[];
 
     for (var index = 0; index < files.length; index += 1) {
       final file = files[index];
       final id = _taskId(file);
       final existingTask = tasksById[id];
-      final status = _nextStatus(existingTask, file);
+      final sameFile = _isSameFile(existingTask, file);
+      final firstStableObservation =
+          sameFile && _canContinueStabilityObservation(existingTask?.status)
+          ? existingTask?.stabilityObservedAt ?? observedAt
+          : observedAt;
+      final status = _nextStatus(
+        existingTask,
+        file,
+        observedAt: observedAt,
+        firstStableObservation: firstStableObservation,
+      );
       final task = LocalUploadTask(
         id: id,
         syncRootId: file.syncRootId,
@@ -32,7 +46,11 @@ class LocalUploadPlanner {
         modifiedAt: file.modifiedAt.toUtc(),
         status: status,
         attempts: 0,
-        createdAt: existingTask?.createdAt ?? createdAt,
+        createdAt: existingTask?.createdAt ?? observedAt,
+        stabilityObservedAt: firstStableObservation,
+        sourceContentHash: sameFile
+            ? existingTask?.sourceContentHash ?? ''
+            : '',
         lastError: status == existingTask?.status
             ? existingTask?.lastError ?? ''
             : '',
@@ -70,13 +88,30 @@ class LocalUploadPlanner {
     return '${file.syncRootId}:${file.relativePath}';
   }
 
-  String _nextStatus(LocalUploadTask? existingTask, LocalSyncFile file) {
+  String _nextStatus(
+    LocalUploadTask? existingTask,
+    LocalSyncFile file, {
+    required DateTime observedAt,
+    required DateTime firstStableObservation,
+  }) {
     if (existingTask == null) {
-      return 'pending';
+      return 'waiting_stable';
     }
     if (_isSameFile(existingTask, file) &&
         _isStableUploadedStatus(existingTask.status)) {
       return existingTask.status;
+    }
+    if (!_isSameFile(existingTask, file)) {
+      return 'waiting_stable';
+    }
+    final stableLongEnough =
+        observedAt.difference(firstStableObservation) >= requiredStability &&
+        observedAt.difference(file.modifiedAt.toUtc()) >= requiredStability;
+    if (!stableLongEnough) {
+      return 'waiting_stable';
+    }
+    if (existingTask.status == 'failed') {
+      return 'failed';
     }
     return 'pending';
   }
@@ -92,5 +127,11 @@ class LocalUploadPlanner {
 
   bool _isStableUploadedStatus(String status) {
     return status == 'uploaded' || status == 'clean' || status == 'archived';
+  }
+
+  bool _canContinueStabilityObservation(String? status) {
+    return status == 'waiting_stable' ||
+        status == 'pending' ||
+        status == 'failed';
   }
 }

@@ -121,6 +121,34 @@ void main() {
 
     expect(files.map((file) => file.relativePath), ['visible.txt']);
   });
+
+  test('scanMappedRoots skips incomplete download files', () async {
+    final rootDir = await Directory.systemTemp.createTemp(
+      'vaultsync_scan_downloads_',
+    );
+    addTearDown(() => rootDir.delete(recursive: true));
+    await File('${rootDir.path}/ready.zip').writeAsString('ready');
+    await File('${rootDir.path}/chrome.zip.crdownload').writeAsString('part');
+    await File('${rootDir.path}/firefox.zip.part').writeAsString('part');
+    await File('${rootDir.path}/safari.zip.download').writeAsString('part');
+    await File('${rootDir.path}/torrent.iso.!qB').writeAsString('part');
+
+    final scanner = LocalSyncScanner(
+      mappings: FakeSyncRootMappingStore([
+        LocalSyncRootMapping(
+          syncRootId: 'root-1',
+          localPath: rootDir.path,
+          encryptedPath: 'vaultsync-path:v1:abc',
+          cleanupPolicy: 'delete',
+          archivePath: '',
+        ),
+      ]),
+    );
+
+    final files = await scanner.scanMappedRoots();
+
+    expect(files.map((file) => file.relativePath), ['ready.zip']);
+  });
 }
 
 class FakeSyncRootMappingStore implements SyncRootMappingStore {

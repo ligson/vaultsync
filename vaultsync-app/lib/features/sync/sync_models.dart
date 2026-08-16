@@ -104,6 +104,8 @@ class LocalUploadTask {
   final String status;
   final int attempts;
   final DateTime createdAt;
+  final DateTime? stabilityObservedAt;
+  final String sourceContentHash;
   final String lastError;
   final String uploadSessionId;
   final String uploadPayloadHash;
@@ -125,6 +127,8 @@ class LocalUploadTask {
     required this.status,
     required this.attempts,
     required this.createdAt,
+    this.stabilityObservedAt,
+    this.sourceContentHash = '',
     this.lastError = '',
     this.uploadSessionId = '',
     this.uploadPayloadHash = '',
@@ -148,6 +152,8 @@ class LocalUploadTask {
       status: json['status'] as String,
       attempts: json['attempts'] as int,
       createdAt: DateTime.parse(json['created_at'] as String),
+      stabilityObservedAt: _optionalDateTime(json['stability_observed_at']),
+      sourceContentHash: json['source_content_hash'] as String? ?? '',
       lastError: json['last_error'] as String? ?? '',
       uploadSessionId: json['upload_session_id'] as String? ?? '',
       uploadPayloadHash: json['upload_payload_hash'] as String? ?? '',
@@ -172,6 +178,8 @@ class LocalUploadTask {
       'status': status,
       'attempts': attempts,
       'created_at': createdAt.toIso8601String(),
+      'stability_observed_at': stabilityObservedAt?.toIso8601String(),
+      'source_content_hash': sourceContentHash,
       'last_error': lastError,
       'upload_session_id': uploadSessionId,
       'upload_payload_hash': uploadPayloadHash,

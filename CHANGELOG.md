@@ -2,6 +2,11 @@
 
 所有有意义的项目变更都应记录在这里。
 
+## 2026-08-16
+
+- 普通同步文件增加写入稳定性保护：首次扫描进入“等待写入完成”，大小和修改时间连续稳定至少 60 秒后才允许上传；扫描忽略 `.crdownload`、`.download`、`.part`、`.partial`、`.tmp`、`.aria2`、`.opdownload` 和 `.!qB` 等常见下载临时文件。流式密文生成后和提交上传完成前都会再次校验源文件，期间发生变化会回到等待状态、清除旧分片进度且不计为上传失败；新上传任务保存明文 SHA-256，“上传后删除/归档”清理前会复核内容哈希，内容变化即使大小相同也不会删除。额外整文件读取只用于本地清理安全校验，保留本地策略无此开销；没有哈希的历史任务继续使用原大小和修改时间规则。本次只扩展客户端任务 JSON 的可选字段，旧任务、目录绑定、服务器备份、密文和密钥均不清空。
+- 明确系统文件管理器占位方案：Windows 后续可把原目录注册为 Cloud Files 同步根；macOS 必须使用系统管理的 `~/Library/CloudStorage/VaultSync` 并通过迁移和 Finder 别名保留旧入口；iOS/Android 分别使用 File Provider 和 DocumentsProvider。普通软链接或空文件不作为云占位实现，避免打开失败和重复上传。详见 `docs/specs/2026-08-16-file-stability-and-cloud-placeholders.md`。
+
 ## 2026-08-11
 
 - `v1.0.0+2026081101` 已完成 GitHub Release 并同步到 NAS 下载页：发布包含 Android APK/AAB、iOS 未签名 IPA、macOS arm64/x64 未签名 zip、Windows x64 未签名 zip、前端 zip、四个后端 tar.gz 和 `SHA256SUMS.txt` 共 12 个制品，Actions run `31482050008` 全部 job 成功。本地下载的 Release 制品已按 `SHA256SUMS.txt` 校验通过；NAS 更新前已备份 `data/vaultsync.db` 与旧 5 个客户端包到 `data/backups/client-downloads-20260811-184341-2026081101/`，随后替换 Android/iOS/macOS arm64/macOS x64/Windows x64 下载文件，并将 `download_releases` 更新为 `1.0.0+2026081101`。NAS 数据库 `PRAGMA quick_check` 为 `ok`，`files.ligson.xyz/api/v1/health` 正常，6 个平台版本接口和 5 个公网下载文件大小均已回查。本次只替换客户端下载制品和下载元数据，后端、前端容器未重建或重启，也未清理用户数据、同步任务、目录绑定、密文文件或加密密钥。

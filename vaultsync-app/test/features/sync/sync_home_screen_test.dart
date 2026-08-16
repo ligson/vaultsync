@@ -2383,8 +2383,8 @@ void main() {
     expect(scanner.callCount, 1);
     expect(scanner.syncRootId, 'root-1');
     expect(uploadTasks.saved, hasLength(2));
-    expect(uploadTasks.saved.first.status, 'pending');
-    expect(find.text('扫描发现 2 个本地文件，生成 2 个待上传任务'), findsOneWidget);
+    expect(uploadTasks.saved.first.status, 'waiting_stable');
+    expect(find.text('扫描发现 2 个本地文件，2 个正在等待写入完成'), findsOneWidget);
   });
 
   testWidgets('android downloads scan asks for all files access first', (
@@ -2500,9 +2500,12 @@ void main() {
     expect(scanner.syncRootId, 'root-2');
     expect(uploadTasks.saved.single.syncRootId, 'root-2');
     expect(history.entries.single.title, '扫描单个同步目录');
-    expect(history.entries.single.message, '发现 1 个本地文件，生成 1 个待上传任务');
+    expect(
+      history.entries.single.message,
+      '发现 1 个本地文件，记录 1 个同步任务，其中 1 个等待写入完成',
+    );
     expect(history.entries.single.syncRootId, 'root-2');
-    expect(find.text('扫描此目录发现 1 个本地文件，生成 1 个待上传任务'), findsOneWidget);
+    expect(find.text('扫描此目录发现 1 个本地文件，1 个正在等待写入完成'), findsOneWidget);
   });
 
   testWidgets('repeated scan reports the active directory task', (

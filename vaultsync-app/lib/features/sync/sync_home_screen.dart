@@ -664,6 +664,9 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
       );
       final scannedCount = files.length + mediaResult.scannedCount;
       final createdTaskCount = tasks.length + mediaResult.createdTaskCount;
+      final waitingStableCount = tasks
+          .where((task) => task.status == 'waiting_stable')
+          .length;
       await _saveOperationStatuses(
         syncRootIds: actionSyncRootIds,
         operation: 'scan',
@@ -677,7 +680,8 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
         type: 'scan',
         result: 'success',
         title: syncRootId == null ? '扫描全部同步目录' : '扫描单个同步目录',
-        message: '发现 $scannedCount 个本地文件，生成 $createdTaskCount 个待上传任务',
+        message:
+            '发现 $scannedCount 个本地文件，记录 $createdTaskCount 个同步任务，其中 $waitingStableCount 个等待写入完成',
         syncRootId: syncRootId ?? '',
       );
       if (!mounted) {
@@ -688,7 +692,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '扫描$scope发现 $scannedCount 个本地文件，生成 $createdTaskCount 个待上传任务',
+            '扫描$scope发现 $scannedCount 个本地文件，$waitingStableCount 个正在等待写入完成',
           ),
         ),
       );
@@ -2569,6 +2573,8 @@ LocalUploadTask _copyUploadTask(
     status: status ?? task.status,
     attempts: attempts ?? task.attempts,
     createdAt: task.createdAt,
+    stabilityObservedAt: task.stabilityObservedAt,
+    sourceContentHash: task.sourceContentHash,
     lastError: lastError ?? task.lastError,
     uploadSessionId: uploadSessionId ?? task.uploadSessionId,
     uploadPayloadHash: uploadPayloadHash ?? task.uploadPayloadHash,
@@ -2725,6 +2731,10 @@ class _SyncHomeData {
     return uploadTasks.where((task) => task.status == 'pending').length;
   }
 
+  int get waitingStableTaskCount {
+    return uploadTasks.where((task) => task.status == 'waiting_stable').length;
+  }
+
   int get failedTaskCount {
     return uploadTasks.where((task) => task.status == 'failed').length;
   }
@@ -2759,7 +2769,7 @@ class _SyncHomeData {
   }
 
   int get activeTaskCount {
-    return pendingTaskCount + cleanupPendingTaskCount;
+    return pendingTaskCount + waitingStableTaskCount + cleanupPendingTaskCount;
   }
 
   int get backedUpDeletedLocalCount {
@@ -3955,7 +3965,7 @@ class _DeviceSyncStatusGroup extends StatelessWidget {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        '待上传 ${root.pendingTaskCount} · 失败 ${root.failedTaskCount} · 问题 ${root.issues.length}',
+                        '等待稳定 ${root.waitingStableTaskCount} · 待上传 ${root.pendingTaskCount} · 失败 ${root.failedTaskCount}',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                       if (root.operations.isNotEmpty) ...[
@@ -4058,6 +4068,11 @@ class _SyncStatusCenter extends StatelessWidget {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               _StatusMetric(
+                icon: Icons.hourglass_top_outlined,
+                label: '等待写入完成',
+                value: data.waitingStableTaskCount,
+              ),
+              _StatusMetric(
                 icon: Icons.cloud_upload_outlined,
                 label: '待上传',
                 value: data.pendingTaskCount,
@@ -4118,6 +4133,9 @@ class _SyncStatusCenter extends StatelessWidget {
     }
     if (data.openIssues.isNotEmpty) {
       return '有待处理问题';
+    }
+    if (data.waitingStableTaskCount > 0) {
+      return '等待文件写入完成';
     }
     if (data.pendingTaskCount > 0) {
       return '等待上传';
@@ -5364,6 +5382,11 @@ class _RootMetaRow extends StatelessWidget {
           _MetaChip(
             icon: Icons.cloud_upload_outlined,
             label: '待上传：${rootView.pendingTaskCount}',
+          ),
+        if (rootView.waitingStableTaskCount > 0)
+          _MetaChip(
+            icon: Icons.hourglass_top_outlined,
+            label: '等待写入：${rootView.waitingStableTaskCount}',
           ),
         if (rootView.failedTaskCount > 0)
           _MetaChip(
@@ -7777,6 +7800,10 @@ class _SyncRootViewData {
     return tasks.where((task) => task.status == 'pending').length;
   }
 
+  int get waitingStableTaskCount {
+    return tasks.where((task) => task.status == 'waiting_stable').length;
+  }
+
   int get failedTaskCount {
     return tasks.where((task) => task.status == 'failed').length;
   }
@@ -7816,6 +7843,9 @@ class _SyncRootViewData {
         return '待续传 $percent%';
       }
       return '待上传';
+    }
+    if (task?.status == 'waiting_stable') {
+      return '等待写入完成';
     }
     if (task?.status == 'failed') {
       return '上传失败';
@@ -7858,6 +7888,9 @@ class _SyncRootViewData {
     }
     if (tasks.any((task) => task.status == 'pending')) {
       return '待上传';
+    }
+    if (tasks.any((task) => task.status == 'waiting_stable')) {
+      return '等待写入完成';
     }
     if (tasks.any((task) => _taskNeedsLocalCleanup(task, root.cleanupPolicy))) {
       return '待清理';
@@ -7975,6 +8008,12 @@ _FileStatusPresentation _fileStatusPresentation(String label) {
       icon: Icons.cloud_upload_outlined,
       tone: _FileStatusTone.pending,
     ),
+    '等待写入完成' => const _FileStatusPresentation(
+      label: '等待写入完成',
+      shortLabel: '等待写入',
+      icon: Icons.hourglass_top_outlined,
+      tone: _FileStatusTone.pending,
+    ),
     '待清理' || '服务器已备份，待删除本地' => _FileStatusPresentation(
       label: label,
       shortLabel: '待清理',
@@ -8064,6 +8103,7 @@ String _syncIssueTypeLabel(String type) {
 String _taskStatusLabel(String status) {
   return switch (status) {
     'pending' => '待上传',
+    'waiting_stable' => '等待写入完成',
     'failed' => '上传失败',
     'uploaded' => '已上传',
     'clean' => '已同步',
@@ -8130,6 +8170,7 @@ int _fileStatusPriority(String status) {
     '无法解密' => 80,
     '上传失败' => 75,
     '待上传' => 70,
+    '等待写入完成' => 65,
     '待清理' => 60,
     '服务器已备份，待删除本地' => 60,
     '已上传，服务器待确认' => 50,
@@ -8150,6 +8191,7 @@ String _folderStatusLabel(String fileStatusLabel) {
     '无法解密' => '无法解密',
     '上传失败' => '上传失败',
     '待上传' => '待上传',
+    '等待写入完成' => '等待写入',
     '待清理' => '待清理',
     '服务器已备份，待删除本地' => '待清理',
     '已上传，服务器待确认' => '待确认',

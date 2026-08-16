@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:crypto/crypto.dart' as crypto;
+
 import '../../core/storage/app_storage.dart';
 import '../media_backup/media_backup_gateway.dart';
 import 'local_upload_executor.dart';
@@ -437,9 +439,17 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
     final modifiedDiff = stat.modified
         .toUtc()
         .difference(task.modifiedAt.toUtc())
-        .abs()
-        .inSeconds;
-    return stat.size == task.sizeBytes && modifiedDiff <= 2;
+        .abs();
+    if (stat.size != task.sizeBytes ||
+        modifiedDiff > const Duration(seconds: 2)) {
+      return false;
+    }
+    final expectedHash = task.sourceContentHash.trim();
+    if (expectedHash.isEmpty) {
+      return true;
+    }
+    final currentHash = await crypto.sha256.bind(file.openRead()).first;
+    return currentHash.toString() == expectedHash;
   }
 
   Future<_TaskCleanupResult> _deleteLocalFile(
@@ -654,6 +664,8 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
       status: status,
       attempts: task.attempts,
       createdAt: task.createdAt,
+      stabilityObservedAt: task.stabilityObservedAt,
+      sourceContentHash: task.sourceContentHash,
       lastError: lastError,
       uploadSessionId: task.uploadSessionId,
       uploadPayloadHash: task.uploadPayloadHash,

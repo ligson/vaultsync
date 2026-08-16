@@ -10,7 +10,22 @@ abstract interface class LocalSyncScanGateway {
 bool isIgnoredLocalSyncRelativePath(String path) {
   final normalized = path.replaceAll('\\', '/');
   final segments = normalized.split('/');
-  return segments.any((segment) => segment == '.drive_sync');
+  if (segments.any((segment) => segment == '.drive_sync')) {
+    return true;
+  }
+  final fileName = segments.isEmpty ? normalized : segments.last;
+  final lowerName = fileName.toLowerCase();
+  const temporarySuffixes = <String>{
+    '.crdownload',
+    '.download',
+    '.part',
+    '.partial',
+    '.tmp',
+    '.aria2',
+    '.opdownload',
+    '.!qb',
+  };
+  return temporarySuffixes.any(lowerName.endsWith);
 }
 
 class LocalSyncScanner implements LocalSyncScanGateway {

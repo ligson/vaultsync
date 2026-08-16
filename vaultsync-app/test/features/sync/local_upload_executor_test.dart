@@ -60,6 +60,113 @@ void main() {
     },
   );
 
+  test(
+    'executePendingUploads waits until an ordinary file is stable',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'vaultsync_upload_stability_',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}/download.zip');
+      await file.writeAsBytes([1, 2, 3]);
+      final modifiedAt = (await file.stat()).modified.toUtc();
+      var currentTime = modifiedAt.add(const Duration(seconds: 30));
+      final uploadTasks = FakeUploadTaskStore([
+        LocalUploadTask(
+          id: 'root-1:download.zip',
+          syncRootId: 'root-1',
+          localPath: file.path,
+          relativePath: 'download.zip',
+          sizeBytes: 3,
+          modifiedAt: modifiedAt,
+          status: 'waiting_stable',
+          attempts: 0,
+          createdAt: modifiedAt,
+          stabilityObservedAt: modifiedAt,
+        ),
+      ]);
+      final uploads = FakeUploadGateway();
+      final executor = LocalUploadExecutor(
+        sessionStore: FakeSessionStore(
+          token: 'server-token',
+          deviceId: 'device-1',
+        ),
+        uploadTasks: uploadTasks,
+        uploads: uploads,
+        payloadPreparer: const FakeUploadPayloadPreparer(),
+        sourceStabilityWindow: const Duration(seconds: 60),
+        now: () => currentTime,
+        objectIdForTask: (_) => 'object-1',
+        versionIdForTask: (_) => 'version-1',
+        chunkSize: 3,
+      );
+
+      final waitingResult = await executor.executePendingUploads();
+
+      expect(waitingResult.uploadedCount, 0);
+      expect(uploadTasks.saved.single.status, 'waiting_stable');
+      expect(uploads.uploadedParts, isEmpty);
+
+      currentTime = modifiedAt.add(const Duration(seconds: 61));
+      final uploadedResult = await executor.executePendingUploads();
+
+      expect(uploadedResult.uploadedCount, 1);
+      expect(uploadTasks.saved.single.status, 'uploaded');
+      expect(uploads.uploadedParts, [
+        [1, 2, 3],
+      ]);
+    },
+  );
+
+  test('executePendingUploads defers a file changed while preparing', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'vaultsync_upload_changing_',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/download.zip');
+    await file.writeAsBytes([1, 2, 3]);
+    final modifiedAt = (await file.stat()).modified.toUtc();
+    final currentTime = modifiedAt.add(const Duration(seconds: 61));
+    final uploadTasks = FakeUploadTaskStore([
+      LocalUploadTask(
+        id: 'root-1:download.zip',
+        syncRootId: 'root-1',
+        localPath: file.path,
+        relativePath: 'download.zip',
+        sizeBytes: 3,
+        modifiedAt: modifiedAt,
+        status: 'pending',
+        attempts: 0,
+        createdAt: modifiedAt,
+        stabilityObservedAt: modifiedAt,
+      ),
+    ]);
+    final uploads = FakeUploadGateway();
+    final executor = LocalUploadExecutor(
+      sessionStore: FakeSessionStore(
+        token: 'server-token',
+        deviceId: 'device-1',
+      ),
+      uploadTasks: uploadTasks,
+      uploads: uploads,
+      payloadPreparer: MutatingUploadPayloadPreparer(file),
+      sourceStabilityWindow: const Duration(seconds: 60),
+      now: () => currentTime,
+      objectIdForTask: (_) => 'object-1',
+      versionIdForTask: (_) => 'version-1',
+      chunkSize: 3,
+    );
+
+    final result = await executor.executePendingUploads();
+
+    expect(result.uploadedCount, 0);
+    expect(result.failedCount, 0);
+    expect(uploadTasks.saved.single.status, 'waiting_stable');
+    expect(uploadTasks.saved.single.sizeBytes, 4);
+    expect(uploadTasks.saved.single.attempts, 0);
+    expect(uploads.uploadedParts, isEmpty);
+  });
+
   test('executePendingUploads deletes each local file after upload', () async {
     final directory = await Directory.systemTemp.createTemp(
       'vaultsync_upload_cleanup_',
@@ -88,7 +195,10 @@ void main() {
       ),
       uploadTasks: uploadTasks,
       uploads: FakeUploadGateway(),
-      payloadPreparer: const FakeUploadPayloadPreparer(),
+      payloadPreparer: const FakeUploadPayloadPreparer(
+        sourceContentHash:
+            '039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81',
+      ),
       postUploadCleaner: LocalCleanupExecutor(
         mappings: const FakeSyncRootMappingStore([
           LocalSyncRootMapping(
@@ -836,6 +946,26 @@ class ThrowingUploadPayloadPreparer implements UploadPayloadPreparer {
     required String versionId,
   }) async {
     throw error;
+  }
+}
+
+class MutatingUploadPayloadPreparer implements UploadPayloadPreparer {
+  final File file;
+
+  const MutatingUploadPayloadPreparer(this.file);
+
+  @override
+  Future<PreparedUploadPayload> prepare(
+    LocalUploadTask task, {
+    required String objectId,
+    required String versionId,
+  }) async {
+    await file.writeAsBytes([4], mode: FileMode.append, flush: true);
+    return const PreparedUploadPayload(
+      bytes: [1, 2, 3],
+      encryptedName: 'enc:download.zip',
+      metadataJson: '{"relative_path":"download.zip"}',
+    );
   }
 }
 

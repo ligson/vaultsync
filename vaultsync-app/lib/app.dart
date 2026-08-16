@@ -26,6 +26,7 @@ import 'features/sync/local_cleanup_executor.dart';
 import 'features/sync/local_download_writer.dart';
 import 'features/sync/local_remote_delete_handler.dart';
 import 'features/sync/local_upload_executor.dart';
+import 'features/sync/local_upload_planner.dart';
 import 'features/sync/remote_metadata_decrypter.dart';
 import 'features/sync/sync_home_screen.dart';
 import 'features/sync/sync_pull_executor.dart';
@@ -309,6 +310,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
           uploadTasks: widget.uploadTasks,
           remoteVersions: widget.remoteVersions,
           uploads: resolvedUploads,
+          sourceStabilityWindow: LocalUploadPlanner.stabilityWindow,
           payloadPreparer: StoredEncryptedUploadPayloadPreparer(
             keyStore: widget.uploadKeys,
             cacheDirectoryProvider: () async {

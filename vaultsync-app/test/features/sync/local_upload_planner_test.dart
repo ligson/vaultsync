@@ -4,7 +4,7 @@ import 'package:vaultsync_app/features/sync/local_upload_planner.dart';
 import 'package:vaultsync_app/features/sync/sync_models.dart';
 
 void main() {
-  test('enqueueScannedFiles creates pending upload tasks', () async {
+  test('enqueueScannedFiles waits for a second stable observation', () async {
     final store = FakeUploadTaskStore();
     final planner = LocalUploadPlanner(
       uploadTasks: store,
@@ -23,9 +23,32 @@ void main() {
 
     expect(tasks, hasLength(1));
     expect(tasks.single.id, 'root-1:a.jpg');
-    expect(tasks.single.status, 'pending');
+    expect(tasks.single.status, 'waiting_stable');
     expect(tasks.single.attempts, 0);
     expect(store.saved.single.localPath, '/Users/alice/Photos/a.jpg');
+  });
+
+  test('enqueueScannedFiles promotes an unchanged stable file', () async {
+    final store = FakeUploadTaskStore();
+    var currentTime = DateTime.utc(2026, 6, 27, 10);
+    final planner = LocalUploadPlanner(
+      uploadTasks: store,
+      now: () => currentTime,
+    );
+    final file = LocalSyncFile(
+      syncRootId: 'root-1',
+      localPath: '/Users/alice/Photos/a.jpg',
+      relativePath: 'a.jpg',
+      sizeBytes: 3,
+      modifiedAt: DateTime.utc(2026, 6, 27, 9),
+    );
+
+    await planner.enqueueScannedFiles([file]);
+    currentTime = currentTime.add(const Duration(seconds: 61));
+    final tasks = await planner.enqueueScannedFiles([file]);
+
+    expect(tasks.single.status, 'pending');
+    expect(tasks.single.stabilityObservedAt, DateTime.utc(2026, 6, 27, 10));
   });
 
   test('enqueueScannedFiles upserts existing task for same file', () async {

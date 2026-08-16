@@ -48,7 +48,7 @@ void main() {
 
     final task = await resolver.enqueueConflictForUpload(issues.issues.single);
 
-    expect(task.status, 'pending');
+    expect(task.status, 'waiting_stable');
     expect(task.syncRootId, 'root-1');
     expect(
       task.relativePath,

@@ -18,6 +18,13 @@ abstract interface class UploadPayloadPreparer {
   });
 }
 
+class UploadSourceChangedException implements Exception {
+  const UploadSourceChangedException();
+
+  @override
+  String toString() => '文件仍在写入，等待稳定后再上传';
+}
+
 abstract interface class LocalUploadExecutionGateway {
   Future<UploadExecutionResult> executePendingUploads({String? syncRootId});
 }
@@ -187,6 +194,8 @@ class LocalUploadExecutor
   final UploadTaskIDFactory versionIdForTask;
   final int chunkSize;
   final UploadProgressChannel? progress;
+  final Duration sourceStabilityWindow;
+  final DateTime Function() now;
 
   const LocalUploadExecutor({
     required this.sessionStore,
@@ -200,6 +209,8 @@ class LocalUploadExecutor
     this.versionIdForTask = _defaultVersionId,
     this.chunkSize = 1024 * 1024,
     this.progress,
+    this.sourceStabilityWindow = Duration.zero,
+    this.now = DateTime.now,
   });
 
   @override
@@ -318,9 +329,18 @@ class LocalUploadExecutor
         task,
         mappingsByRootId[task.syncRootId],
       );
-      final objectId = objectIdForTask(currentTask);
-      final versionId = versionIdForTask(currentTask);
       try {
+        currentTask = await _prepareStableSourceTask(currentTask);
+        if (currentTask.status == 'waiting_stable') {
+          updatedTasks.add(currentTask);
+          if (uploadTasks
+              case final IncrementalUploadTaskStore incrementalStore) {
+            await incrementalStore.saveUploadTask(currentTask);
+          }
+          continue;
+        }
+        final objectId = objectIdForTask(currentTask);
+        final versionId = versionIdForTask(currentTask);
         final uploadTimer = Stopwatch();
         _reportProgress(
           phase: UploadProgressPhase.preparing,
@@ -362,6 +382,7 @@ class LocalUploadExecutor
           objectId: objectId,
           versionId: versionId,
         );
+        await _ensureSourceUnchanged(currentTask);
         final payloadHash = await _uploadPayloadFingerprint(payload);
         _reportProgress(
           phase: UploadProgressPhase.connecting,
@@ -409,6 +430,7 @@ class LocalUploadExecutor
           currentTask = _withStatus(
             currentTask,
             'uploaded',
+            sourceContentHash: payload.sourceContentHash,
             uploadSessionId: session.id,
             uploadPayloadHash: payloadHash,
             uploadTotalSize: payload.length,
@@ -506,6 +528,7 @@ class LocalUploadExecutor
           failedCount: failedCount,
           speedBytesPerSecond: lastSpeedBytesPerSecond,
         );
+        await _ensureSourceUnchanged(currentTask);
         final completedVersion = await uploads.completeUploadSession(
           token: token,
           sessionId: session.id,
@@ -519,6 +542,7 @@ class LocalUploadExecutor
         currentTask = _withStatus(
           currentTask,
           'uploaded',
+          sourceContentHash: payload.sourceContentHash,
           uploadSessionId: session.id,
           uploadPayloadHash: payloadHash,
           uploadTotalSize: payload.length,
@@ -534,6 +558,14 @@ class LocalUploadExecutor
         updatedTasks.add(currentTask);
         await payload.cleanupAfterSuccess();
         uploadedCount += 1;
+      } on UploadSourceChangedException {
+        currentTask = await _markSourceChanged(currentTask);
+        updatedTasks.add(currentTask);
+        if (uploadTasks
+            case final IncrementalUploadTaskStore incrementalStore) {
+          await incrementalStore.saveUploadTask(currentTask);
+        }
+        continue;
       } catch (error) {
         if (_isMissingLocalUploadSource(currentTask, error)) {
           removedCount += 1;
@@ -635,9 +667,113 @@ class LocalUploadExecutor
   }
 
   bool _shouldUploadTask(LocalUploadTask task, {String? syncRootId}) {
-    final hasUploadStatus = task.status == 'pending' || task.status == 'failed';
+    final hasUploadStatus =
+        task.status == 'pending' ||
+        task.status == 'failed' ||
+        task.status == 'waiting_stable';
     return hasUploadStatus &&
         (syncRootId == null || task.syncRootId == syncRootId);
+  }
+
+  Future<LocalUploadTask> _prepareStableSourceTask(LocalUploadTask task) async {
+    if (sourceStabilityWindow <= Duration.zero || task.sourceType != 'file') {
+      return task;
+    }
+    final file = File(task.localPath);
+    if (!await file.exists()) {
+      return task.status == 'waiting_stable'
+          ? _withStatus(task, 'pending')
+          : task;
+    }
+    final stat = await file.stat();
+    final currentTime = now().toUtc();
+    final sameSnapshot =
+        stat.size == task.sizeBytes &&
+        stat.modified.toUtc().isAtSameMomentAs(task.modifiedAt.toUtc());
+    final firstObservation = sameSnapshot
+        ? task.stabilityObservedAt
+        : currentTime;
+    final stableLongEnough =
+        firstObservation != null &&
+        currentTime.difference(firstObservation) >= sourceStabilityWindow &&
+        currentTime.difference(stat.modified.toUtc()) >= sourceStabilityWindow;
+    if (!sameSnapshot || !stableLongEnough) {
+      return _withSourceSnapshot(
+        task,
+        sizeBytes: stat.size,
+        modifiedAt: stat.modified.toUtc(),
+        status: 'waiting_stable',
+        stabilityObservedAt: firstObservation ?? currentTime,
+        lastError: '文件仍在写入，等待稳定后再上传',
+        resetUploadProgress: !sameSnapshot,
+      );
+    }
+    return task.status == 'waiting_stable'
+        ? _withStatus(task, 'pending')
+        : task;
+  }
+
+  LocalUploadTask _withSourceSnapshot(
+    LocalUploadTask task, {
+    int? sizeBytes,
+    DateTime? modifiedAt,
+    required String status,
+    required DateTime stabilityObservedAt,
+    required String lastError,
+    bool resetUploadProgress = false,
+  }) {
+    return LocalUploadTask(
+      id: task.id,
+      syncRootId: task.syncRootId,
+      localPath: task.localPath,
+      relativePath: task.relativePath,
+      sizeBytes: sizeBytes ?? task.sizeBytes,
+      modifiedAt: modifiedAt ?? task.modifiedAt,
+      status: status,
+      attempts: task.attempts,
+      createdAt: task.createdAt,
+      stabilityObservedAt: stabilityObservedAt,
+      sourceContentHash: resetUploadProgress ? '' : task.sourceContentHash,
+      lastError: lastError,
+      uploadSessionId: resetUploadProgress ? '' : task.uploadSessionId,
+      uploadPayloadHash: resetUploadProgress ? '' : task.uploadPayloadHash,
+      uploadTotalSize: resetUploadProgress ? 0 : task.uploadTotalSize,
+      uploadChunkSize: resetUploadProgress ? 0 : task.uploadChunkSize,
+      uploadedBytes: resetUploadProgress ? 0 : task.uploadedBytes,
+      sourceType: task.sourceType,
+      assetId: task.assetId,
+      assetMediaType: task.assetMediaType,
+      encryptionEnabled: task.encryptionEnabled,
+    );
+  }
+
+  Future<void> _ensureSourceUnchanged(LocalUploadTask task) async {
+    if (sourceStabilityWindow <= Duration.zero || task.sourceType != 'file') {
+      return;
+    }
+    final stat = await File(task.localPath).stat();
+    if (stat.size != task.sizeBytes ||
+        !stat.modified.toUtc().isAtSameMomentAs(task.modifiedAt.toUtc())) {
+      throw const UploadSourceChangedException();
+    }
+  }
+
+  Future<LocalUploadTask> _markSourceChanged(LocalUploadTask task) async {
+    FileStat? stat;
+    try {
+      stat = await File(task.localPath).stat();
+    } on FileSystemException {
+      // The next execution removes a task whose source disappeared entirely.
+    }
+    return _withSourceSnapshot(
+      task,
+      sizeBytes: stat?.size,
+      modifiedAt: stat?.modified.toUtc(),
+      status: 'waiting_stable',
+      stabilityObservedAt: now().toUtc(),
+      lastError: '文件仍在写入，等待稳定后再上传',
+      resetUploadProgress: true,
+    );
   }
 
   void _reportProgress({
@@ -725,6 +861,8 @@ class LocalUploadExecutor
       status: task.status,
       attempts: task.attempts,
       createdAt: task.createdAt,
+      stabilityObservedAt: task.stabilityObservedAt,
+      sourceContentHash: task.sourceContentHash,
       lastError: task.lastError,
       uploadSessionId: '',
       uploadPayloadHash: '',
@@ -878,6 +1016,7 @@ class LocalUploadExecutor
     int? uploadTotalSize,
     int? uploadChunkSize,
     int? uploadedBytes,
+    String? sourceContentHash,
   }) {
     return LocalUploadTask(
       id: task.id,
@@ -889,6 +1028,8 @@ class LocalUploadExecutor
       status: status,
       attempts: attempts ?? task.attempts,
       createdAt: task.createdAt,
+      stabilityObservedAt: task.stabilityObservedAt,
+      sourceContentHash: sourceContentHash ?? task.sourceContentHash,
       lastError: lastError,
       uploadSessionId: uploadSessionId ?? task.uploadSessionId,
       uploadPayloadHash: uploadPayloadHash ?? task.uploadPayloadHash,

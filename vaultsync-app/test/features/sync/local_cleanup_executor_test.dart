@@ -59,6 +59,40 @@ void main() {
     expect(uploadTasks.saved.single.status, 'deleted_local');
   });
 
+  test('cleanup keeps a same-size file whose modified time changed', () async {
+    final dir = await Directory.systemTemp.createTemp('vaultsync_cleanup_');
+    addTearDown(() => dir.delete(recursive: true));
+    final file = File('${dir.path}/download.bin');
+    await file.writeAsString('abc');
+    final uploadedModifiedAt = await file.lastModified();
+    await file.writeAsString('xyz');
+    await file.setLastModified(
+      uploadedModifiedAt.add(const Duration(seconds: 1)),
+    );
+    final uploadTasks = FakeUploadTaskStore([
+      _uploadedTask(
+        file.path,
+        modifiedAt: uploadedModifiedAt,
+        sourceContentHash:
+            'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+      ),
+    ]);
+    final executor = LocalCleanupExecutor(
+      mappings: FakeSyncRootMappingStore(
+        cleanupPolicy: 'delete',
+        archivePath: '',
+      ),
+      uploadTasks: uploadTasks,
+    );
+
+    final result = await executor.cleanupUploadedTasks();
+
+    expect(result.cleanedCount, 0);
+    expect(result.pendingCount, 1);
+    expect(await file.exists(), isTrue);
+    expect(uploadTasks.saved.single.status, 'cleanup_pending');
+  });
+
   test(
     'cleanup removes empty parent directories but keeps sync root',
     () async {
@@ -768,6 +802,7 @@ LocalUploadTask _uploadedTask(
   required DateTime modifiedAt,
   String status = 'uploaded',
   String lastError = '',
+  String sourceContentHash = '',
 }) {
   return LocalUploadTask(
     id: id,
@@ -779,6 +814,7 @@ LocalUploadTask _uploadedTask(
     status: status,
     attempts: 0,
     createdAt: DateTime.utc(2026, 6, 27, 10),
+    sourceContentHash: sourceContentHash,
     lastError: lastError,
   );
 }

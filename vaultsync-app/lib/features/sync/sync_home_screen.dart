@@ -8982,31 +8982,35 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
                     alignment: Alignment.centerLeft,
                     child: Text('备份范围'),
                   ),
-                  RadioListTile<String>(
-                    key: const ValueKey('wechat_archive_mode_option'),
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    value: 'archive',
+                  RadioGroup<String>(
                     groupValue: _wechatMode,
-                    onChanged: (value) => setState(() {
-                      _wechatMode = value ?? 'archive';
-                    }),
-                    title: const Text('完整数据归档'),
-                    subtitle: const Text(
-                      '包含微信数据库、图片、视频、语音和文件；数据库保持原始加密格式，首次归档可能较大',
+                    onChanged: (value) {
+                      setState(() {
+                        _wechatMode = value ?? 'archive';
+                      });
+                    },
+                    child: Column(
+                      children: [
+                        RadioListTile<String>(
+                          key: const ValueKey('wechat_archive_mode_option'),
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          value: 'archive',
+                          title: const Text('完整数据归档'),
+                          subtitle: const Text(
+                            '包含微信数据库、图片、视频、语音和文件；数据库保持原始加密格式，首次归档可能较大',
+                          ),
+                        ),
+                        RadioListTile<String>(
+                          key: const ValueKey('wechat_files_mode_option'),
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          value: 'files',
+                          title: const Text('仅备份微信文件'),
+                          subtitle: const Text('只上传图片、视频和文档，不包含数据库'),
+                        ),
+                      ],
                     ),
-                  ),
-                  RadioListTile<String>(
-                    key: const ValueKey('wechat_files_mode_option'),
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    value: 'files',
-                    groupValue: _wechatMode,
-                    onChanged: (value) => setState(() {
-                      _wechatMode = value ?? 'files';
-                    }),
-                    title: const Text('仅备份微信文件'),
-                    subtitle: const Text('只上传图片、视频和文档，不包含数据库'),
                   ),
                 ] else
                   const Align(

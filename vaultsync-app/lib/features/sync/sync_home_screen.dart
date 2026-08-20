@@ -30,10 +30,15 @@ import 'remote_metadata_decrypter.dart';
 import 'sync_models.dart';
 import 'sync_pull_executor.dart';
 import 'sync_service.dart';
+import 'wechat_folder_discovery.dart';
 
 const _androidDownloadsPath = '/storage/emulated/0/Download';
 
-enum _HomeAction { mediaBackup, history, scan, upload, pull }
+bool _isWechatBackupSource(String sourceType) {
+  return sourceType == 'wechat' || sourceType == 'wechat_archive';
+}
+
+enum _HomeAction { mediaBackup, wechatBackup, history, scan, upload, pull }
 
 class _HomeActionLabel extends StatelessWidget {
   final IconData icon;
@@ -59,6 +64,7 @@ class SyncHomeScreen extends StatefulWidget {
   final SyncRootGateway syncRoots;
   final FolderPicker folderPicker;
   final FileAccessPermissionGateway fileAccessPermission;
+  final WechatFolderDiscoveryGateway wechatFolderDiscovery;
   final LocalPathProtector pathProtector;
   final LocalSyncScanGateway? localScanner;
   final LocalUploadExecutionGateway? uploadExecutor;
@@ -95,6 +101,7 @@ class SyncHomeScreen extends StatefulWidget {
     required this.syncRoots,
     this.folderPicker = const FileSelectorFolderPicker(),
     this.fileAccessPermission = const PermissionHandlerFileAccessGateway(),
+    this.wechatFolderDiscovery = const LocalWechatFolderDiscovery(),
     this.pathProtector = const Sha256LocalPathProtector(),
     this.localScanner,
     this.uploadExecutor,
@@ -386,9 +393,12 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     if (root == null) {
       return mapping;
     }
+    final cleanupPolicy = _isWechatBackupSource(mapping.sourceType)
+        ? 'keep'
+        : root.cleanupPolicy;
     if (mapping.encryptedPath == root.encryptedPath &&
         mapping.encryptionEnabled == root.encryptionEnabled &&
-        mapping.cleanupPolicy == root.cleanupPolicy &&
+        mapping.cleanupPolicy == cleanupPolicy &&
         mapping.archivePath == root.archivePath) {
       return mapping;
     }
@@ -397,8 +407,10 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
       localPath: mapping.localPath,
       encryptedPath: root.encryptedPath,
       encryptionEnabled: root.encryptionEnabled,
-      cleanupPolicy: root.cleanupPolicy,
+      cleanupPolicy: cleanupPolicy,
       archivePath: root.archivePath,
+      sourceType: mapping.sourceType,
+      includedFileTypes: mapping.includedFileTypes,
     );
   }
 
@@ -457,6 +469,11 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
           encryptionEnabled: root.encryptionEnabled,
           cleanupPolicy: root.cleanupPolicy,
           archivePath: root.archivePath,
+          sourceType: root.encryptedPath.startsWith('wechat-backup:v1:archive:')
+              ? 'wechat_archive'
+              : root.encryptedPath.startsWith('wechat-backup:v1:')
+              ? 'wechat'
+              : 'folder',
         ),
       );
       mappedRootIds.add(root.id);
@@ -549,16 +566,34 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
-  Future<void> _openCreateSyncRootDialog() async {
+  Future<void> _openCreateSyncRootDialog({bool wechatOnly = false}) async {
+    final existingWechat = wechatOnly
+        ? await _currentDeviceSpecialRoot(
+            (root) => root.encryptedPath.startsWith('wechat-backup:v1:'),
+          )
+        : null;
+    final existingMapping = existingWechat == null
+        ? null
+        : (await widget.syncRootMappings.loadSyncRootMappings())
+              .where((mapping) => mapping.syncRootId == existingWechat.id)
+              .firstOrNull;
+    if (!mounted) {
+      return;
+    }
     final draft = await showDialog<_SyncRootDraft>(
       context: context,
       builder: (context) => _CreateSyncRootDialog(
         folderPicker: widget.folderPicker,
         fileAccessPermission: widget.fileAccessPermission,
+        wechatFolderDiscovery: widget.wechatFolderDiscovery,
         pathProtector: widget.pathProtector,
+        devicePlatform:
+            widget.devicePlatform ?? DeviceProfile.current().platform,
         showAndroidFileAccessGuide:
             (widget.devicePlatform ?? DeviceProfile.current().platform) ==
             'android',
+        wechatOnly: wechatOnly,
+        existingMapping: existingMapping,
       ),
     );
     if (draft == null || !mounted) {
@@ -573,10 +608,38 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
       if (deviceId == null || deviceId.isEmpty) {
         throw Exception('设备状态已失效');
       }
+      if (existingWechat != null) {
+        await widget.syncRootMappings.saveSyncRootMapping(
+          LocalSyncRootMapping(
+            syncRootId: existingWechat.id,
+            localPath: draft.localPath,
+            encryptedPath: existingWechat.encryptedPath,
+            encryptionEnabled: existingWechat.encryptionEnabled,
+            cleanupPolicy: 'keep',
+            archivePath: existingWechat.archivePath,
+            sourceType: draft.sourceType,
+            includedFileTypes: draft.includedFileTypes,
+          ),
+        );
+        await _addHistory(
+          type: 'sync_root',
+          result: 'success',
+          title: '更新微信文件备份',
+          message: '已更新微信文件备份目录 ${draft.localPath}',
+          syncRootId: existingWechat.id,
+        );
+        if (!mounted) {
+          return;
+        }
+        _reloadSyncRoots();
+        return;
+      }
       final root = await widget.syncRoots.createSyncRoot(
         token: token,
         deviceId: deviceId,
-        encryptedPath: draft.encryptedPath,
+        encryptedPath: _isWechatBackupSource(draft.sourceType)
+            ? 'wechat-backup:v1:${draft.sourceType == 'wechat_archive' ? 'archive' : 'files'}-${DateTime.now().microsecondsSinceEpoch}'
+            : draft.encryptedPath,
         encryptionEnabled: draft.encryptionEnabled,
         cleanupPolicy: draft.cleanupPolicy,
         archivePath: draft.archivePath,
@@ -589,13 +652,17 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
           encryptionEnabled: root.encryptionEnabled,
           cleanupPolicy: root.cleanupPolicy,
           archivePath: root.archivePath,
+          sourceType: draft.sourceType,
+          includedFileTypes: draft.includedFileTypes,
         ),
       );
       await _addHistory(
         type: 'sync_root',
         result: 'success',
-        title: '新增同步目录',
-        message: '已添加同步目录 ${draft.localPath}',
+        title: _isWechatBackupSource(draft.sourceType) ? '新增微信电脑备份' : '新增同步目录',
+        message: _isWechatBackupSource(draft.sourceType)
+            ? '已添加微信电脑备份目录 ${draft.localPath}'
+            : '已添加同步目录 ${draft.localPath}',
         syncRootId: root.id,
       );
       if (!mounted) {
@@ -648,6 +715,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
         syncRootId,
         allowedSyncRootIds: actionSyncRootIds,
       );
+      await _validateLocalMappingsForScan(actionSyncRootIds);
       final scanner =
           widget.localScanner ??
           LocalSyncScanner(mappings: widget.syncRootMappings);
@@ -884,14 +952,47 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
       throw Exception('设备状态已失效');
     }
     final roots = await widget.syncRoots.listSyncRoots(token: token);
-    final currentDeviceRootIds = {
-      for (final root in roots)
-        if (root.deviceId == currentDeviceId) root.id,
-    };
+    final currentDeviceRoots = roots
+        .where((root) => root.deviceId == currentDeviceId)
+        .toList();
+    final currentDeviceRootIds = _canonicalSyncRootIds(currentDeviceRoots);
     if (syncRootId != null && !currentDeviceRootIds.contains(syncRootId)) {
-      throw Exception('该同步目录属于其他设备，只能查看，不能在当前设备执行同步');
+      final isCurrentDeviceDuplicate = currentDeviceRoots.any(
+        (root) => root.id == syncRootId,
+      );
+      throw Exception(
+        isCurrentDeviceDuplicate
+            ? '这是历史重复备份配置，已停止继续扫描。请使用当前设备的主备份配置。'
+            : '该同步目录属于其他设备，只能查看，不能在当前设备执行同步',
+      );
     }
     return syncRootId == null ? currentDeviceRootIds : {syncRootId};
+  }
+
+  Set<String> _canonicalSyncRootIds(List<SyncRoot> roots) {
+    final sorted = [...roots]
+      ..sort((left, right) => left.createdAt.compareTo(right.createdAt));
+    String? mediaRootId;
+    String? wechatRootId;
+    final result = <String>{};
+    for (final root in sorted) {
+      if (_isMediaBackupEncryptedPath(root.encryptedPath)) {
+        mediaRootId ??= root.id;
+        continue;
+      }
+      if (root.encryptedPath.startsWith('wechat-backup:v1:')) {
+        wechatRootId ??= root.id;
+        continue;
+      }
+      result.add(root.id);
+    }
+    if (mediaRootId != null) {
+      result.add(mediaRootId);
+    }
+    if (wechatRootId != null) {
+      result.add(wechatRootId);
+    }
+    return result;
   }
 
   Future<List<LocalSyncFile>> _scanMappedRootsForSyncRootIds({
@@ -903,6 +1004,46 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
       files.addAll(await scanner.scanMappedRoots(syncRootId: syncRootId));
     }
     return files;
+  }
+
+  /// A remote root can survive an app reinstall while its local path mapping
+  /// is intentionally kept only on the client. Do not report a successful
+  /// zero-file scan when a WeChat mapping is missing or no longer readable.
+  Future<void> _validateLocalMappingsForScan(Set<String> syncRootIds) async {
+    if (syncRootIds.isEmpty) {
+      return;
+    }
+    final token = await widget.storage.loadAuthToken();
+    if (token == null || token.isEmpty) {
+      throw Exception('登录状态已失效');
+    }
+    final roots = await widget.syncRoots.listSyncRoots(token: token);
+    final mappings = await widget.syncRootMappings.loadSyncRootMappings();
+    final mappingsById = {
+      for (final mapping in mappings) mapping.syncRootId: mapping,
+    };
+    final missingWechat = <String>[];
+    for (final root in roots) {
+      if (!syncRootIds.contains(root.id) ||
+          _isMediaBackupEncryptedPath(root.encryptedPath)) {
+        continue;
+      }
+      final mapping = mappingsById[root.id];
+      final localPath = mapping?.localPath.trim() ?? '';
+      if (localPath.isEmpty) {
+        if (root.encryptedPath.startsWith('wechat-backup:v1:')) {
+          missingWechat.add(root.id);
+        }
+        continue;
+      }
+      if (root.encryptedPath.startsWith('wechat-backup:v1:') &&
+          !await Directory(localPath).exists()) {
+        throw Exception('无法访问微信目录：$localPath。请重新选择目录并授予 VaultSync 访问权限');
+      }
+    }
+    if (missingWechat.isNotEmpty) {
+      throw Exception('微信目录尚未绑定。请点击“更多”→“微信文件备份”，自动查找或选择微信目录后保存');
+    }
   }
 
   Future<void> _ensureAndroidSharedMediaDirectoryPermission(
@@ -975,7 +1116,8 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
       if (_isMediaBackupEncryptedPath(mapping.encryptedPath)) {
         return false;
       }
-      return _isAndroidDownloadsPath(mapping.localPath);
+      return _isWechatBackupSource(mapping.sourceType) ||
+          _isAndroidDownloadsPath(mapping.localPath);
     });
     if (!needsFileAccess) {
       return;
@@ -1720,10 +1862,58 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     return null;
   }
 
+  Future<SyncRoot?> _currentDeviceSpecialRoot(
+    bool Function(SyncRoot root) matches,
+  ) async {
+    final token = await widget.storage.loadAuthToken();
+    final deviceId = await widget.storage.loadDeviceId();
+    if (token == null ||
+        token.isEmpty ||
+        deviceId == null ||
+        deviceId.isEmpty) {
+      return null;
+    }
+    final roots = await widget.syncRoots.listSyncRoots(token: token);
+    final candidates =
+        roots
+            .where((root) => root.deviceId == deviceId && matches(root))
+            .toList()
+          ..sort((left, right) => left.createdAt.compareTo(right.createdAt));
+    return candidates.firstOrNull;
+  }
+
   Future<void> _openMediaBackupScreen() async {
+    final existingRoot = await _currentDeviceSpecialRoot(
+      (root) => _isMediaBackupEncryptedPath(root.encryptedPath),
+    );
+    LocalMediaBackupSource? existingSource;
+    final mediaSources = _mediaBackupSourcesStore;
+    if (existingRoot != null && mediaSources != null) {
+      existingSource = (await mediaSources.loadMediaBackupSources())
+          .where((source) => source.syncRootId == existingRoot.id)
+          .firstOrNull;
+      existingSource ??= (await _fallbackMediaBackupSources(
+        const [],
+      )).where((source) => source.syncRootId == existingRoot.id).firstOrNull;
+    }
+    if (!mounted) {
+      return;
+    }
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => MediaBackupScreen(onSave: _saveMediaBackupDraft),
+        builder: (_) => MediaBackupScreen(
+          onSave: _saveMediaBackupDraft,
+          initialDraft: existingSource == null
+              ? null
+              : MediaBackupDraft(
+                  mediaTypes: existingSource.mediaTypes,
+                  cleanupPolicy: existingSource.cleanupPolicy,
+                  encryptionEnabled: existingRoot!.encryptionEnabled,
+                  wifiOnly: existingSource.wifiOnly,
+                  autoBackupEnabled: existingSource.autoBackupEnabled,
+                ),
+          encryptionLocked: existingRoot != null,
+        ),
       ),
     );
     if (mounted) {
@@ -1744,7 +1934,63 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     if (deviceId == null || deviceId.isEmpty) {
       throw Exception('设备状态已失效');
     }
+    final existingRoot = await _currentDeviceSpecialRoot(
+      (root) => _isMediaBackupEncryptedPath(root.encryptedPath),
+    );
+    final sources = await mediaSources.loadMediaBackupSources();
     final now = DateTime.now().toUtc();
+    if (existingRoot != null) {
+      final existingSource = sources
+          .where((source) => source.syncRootId == existingRoot.id)
+          .firstOrNull;
+      final sourceId =
+          existingSource?.id ??
+          _mediaBackupSourceId(existingRoot.encryptedPath);
+      final updated = LocalMediaBackupSource(
+        id: sourceId,
+        syncRootId: existingRoot.id,
+        name: '相册备份',
+        mediaTypes: draft.mediaTypes,
+        albumScope: existingSource?.albumScope ?? 'all',
+        albumIds: existingSource?.albumIds ?? const [],
+        cleanupPolicy: draft.cleanupPolicy,
+        encryptionEnabled: existingRoot.encryptionEnabled,
+        wifiOnly: draft.wifiOnly,
+        autoBackupEnabled: draft.autoBackupEnabled,
+        createdAt: existingSource?.createdAt ?? now,
+        updatedAt: now,
+      );
+      await mediaSources.saveMediaBackupSources([
+        for (final source in sources)
+          if (source.syncRootId != existingRoot.id) source,
+        updated,
+      ]);
+      if (existingRoot.cleanupPolicy != draft.cleanupPolicy) {
+        await widget.syncRoots.updateSyncRootCleanupPolicy(
+          token: token,
+          syncRootId: existingRoot.id,
+          cleanupPolicy: draft.cleanupPolicy,
+        );
+      }
+      await widget.syncRootMappings.saveSyncRootMapping(
+        LocalSyncRootMapping(
+          syncRootId: existingRoot.id,
+          localPath: '',
+          encryptedPath: existingRoot.encryptedPath,
+          encryptionEnabled: existingRoot.encryptionEnabled,
+          cleanupPolicy: draft.cleanupPolicy,
+          archivePath: existingRoot.archivePath,
+        ),
+      );
+      await _addHistory(
+        type: 'media_backup',
+        result: 'success',
+        title: '更新相册备份',
+        message: '已更新当前设备的相册备份配置',
+        syncRootId: existingRoot.id,
+      );
+      return;
+    }
     final sourceId = 'media-${now.microsecondsSinceEpoch}';
     final root = await widget.syncRoots.createSyncRoot(
       token: token,
@@ -1754,7 +2000,6 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
       cleanupPolicy: draft.cleanupPolicy,
       archivePath: '',
     );
-    final sources = await mediaSources.loadMediaBackupSources();
     await mediaSources.saveMediaBackupSources([
       ...sources,
       LocalMediaBackupSource(
@@ -1818,6 +2063,14 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
                     label: '相册备份',
                   ),
                 ),
+              const PopupMenuItem(
+                key: ValueKey('open_wechat_backup_button'),
+                value: _HomeAction.wechatBackup,
+                child: _HomeActionLabel(
+                  icon: Icons.chat_bubble_outline,
+                  label: '微信文件备份',
+                ),
+              ),
               const PopupMenuItem(
                 key: ValueKey('open_sync_history_button'),
                 value: _HomeAction.history,
@@ -1904,6 +2157,8 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     switch (action) {
       case _HomeAction.mediaBackup:
         _openMediaBackupScreen();
+      case _HomeAction.wechatBackup:
+        _openCreateSyncRootDialog(wechatOnly: true);
       case _HomeAction.history:
         _openSyncHistoryPage();
       case _HomeAction.scan:
@@ -1960,6 +2215,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
       else
         for (final rootView in rootViews)
           _SyncRootPanel(
+            key: ValueKey('sync_root_panel_${rootView.root.id}'),
             rootView: rootView,
             initiallyExpanded: rootViews.length == 1,
             mediaThumbnails: widget.mediaThumbnails,
@@ -1974,7 +2230,9 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
                 ? () => _scanLocalFiles(syncRootId: rootView.root.id)
                 : null,
             onBind: rootView.isCurrentDeviceRoot
-                ? () => _bindLocalFolder(rootView)
+                ? rootView.isWechatBackupRoot
+                      ? () => _openCreateSyncRootDialog(wechatOnly: true)
+                      : () => _bindLocalFolder(rootView)
                 : null,
             onUpload: widget.uploadExecutor == null || !rootView.canRunLocalSync
                 ? null
@@ -2420,6 +2678,14 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
   }
 
   Future<void> _openManageSyncRootDialog(_SyncRootViewData rootView) async {
+    // WeChat roots use the dedicated dialog so automatic discovery and the
+    // source classification are preserved when a mapping is missing.
+    if (rootView.isWechatBackupRoot &&
+        (rootView.mapping == null ||
+            rootView.mapping!.localPath.trim().isEmpty)) {
+      await _openCreateSyncRootDialog(wechatOnly: true);
+      return;
+    }
     final action = await showDialog<_ManagedSyncRootAction>(
       context: context,
       builder: (context) => _ManageSyncRootDialog(rootView: rootView),
@@ -2440,6 +2706,9 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     String cleanupPolicy,
   ) async {
     try {
+      if (rootView.isWechatBackupRoot && cleanupPolicy != 'keep') {
+        throw Exception('微信文件备份固定保留本地文件，不能启用上传后删除');
+      }
       final retainedCount = rootView.tasks
           .where((task) => task.status == 'clean')
           .length;
@@ -2488,6 +2757,8 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
               encryptedPath: mapping.encryptedPath,
               cleanupPolicy: updated.cleanupPolicy,
               archivePath: updated.archivePath,
+              sourceType: mapping.sourceType,
+              includedFileTypes: mapping.includedFileTypes,
             )
           else
             mapping,
@@ -2511,16 +2782,24 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     String syncRootId, {
     required bool deleteRemote,
   }) async {
+    var remoteDeleted = false;
+    final cancellationGateway =
+        widget.uploadExecutor is LocalUploadCancellationGateway
+        ? widget.uploadExecutor as LocalUploadCancellationGateway
+        : null;
     try {
       final token = await widget.storage.loadAuthToken();
       if (token == null || token.isEmpty) {
         throw Exception('登录状态已失效');
       }
+      cancellationGateway?.pauseSyncRootUploads(syncRootId);
       await widget.syncRoots.deleteSyncRoot(
         token: token,
         syncRootId: syncRootId,
         deleteRemote: deleteRemote,
       );
+      remoteDeleted = true;
+      cancellationGateway?.confirmSyncRootDeleted(syncRootId);
       final mappings = await widget.syncRootMappings.loadSyncRootMappings();
       await widget.syncRootMappings.saveSyncRootMappings([
         for (final mapping in mappings)
@@ -2536,6 +2815,9 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
       }
       _reloadSyncRoots();
     } catch (error) {
+      if (!remoteDeleted) {
+        cancellationGateway?.resumeSyncRootUploads(syncRootId);
+      }
       if (!mounted) {
         return;
       }
@@ -2603,7 +2885,9 @@ bool _sameSyncRootMappings(
         a.encryptedPath != b.encryptedPath ||
         a.encryptionEnabled != b.encryptionEnabled ||
         a.cleanupPolicy != b.cleanupPolicy ||
-        a.archivePath != b.archivePath) {
+        a.archivePath != b.archivePath ||
+        a.sourceType != b.sourceType ||
+        a.includedFileTypes != b.includedFileTypes) {
       return false;
     }
   }
@@ -5150,7 +5434,7 @@ class _StatusMetric extends StatelessWidget {
   }
 }
 
-class _SyncRootPanel extends StatelessWidget {
+class _SyncRootPanel extends StatefulWidget {
   final _SyncRootViewData rootView;
   final bool initiallyExpanded;
   final FileBrowserPreferenceStore? fileBrowserPreferences;
@@ -5167,6 +5451,7 @@ class _SyncRootPanel extends StatelessWidget {
   final ValueChanged<_UnifiedFileRecord>? onDownloadFile;
 
   const _SyncRootPanel({
+    super.key,
     required this.rootView,
     required this.initiallyExpanded,
     required this.fileBrowserPreferences,
@@ -5184,6 +5469,79 @@ class _SyncRootPanel extends StatelessWidget {
   });
 
   @override
+  State<_SyncRootPanel> createState() => _SyncRootPanelState();
+}
+
+class _SyncRootPanelState extends State<_SyncRootPanel> {
+  static const _contentLoadDelay = Duration(milliseconds: 220);
+
+  Timer? _contentLoadTimer;
+  var _contentReady = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initiallyExpanded) {
+      _scheduleContentLoad();
+    }
+  }
+
+  _SyncRootViewData get rootView => widget.rootView;
+  bool get initiallyExpanded => widget.initiallyExpanded;
+  FileBrowserPreferenceStore? get fileBrowserPreferences =>
+      widget.fileBrowserPreferences;
+  MediaAssetThumbnailGateway? get mediaThumbnails => widget.mediaThumbnails;
+  RemoteFileThumbnailGateway? get remoteFileThumbnails =>
+      widget.remoteFileThumbnails;
+  VoidCallback? get onManage => widget.onManage;
+  VoidCallback? get onScan => widget.onScan;
+  VoidCallback? get onBind => widget.onBind;
+  VoidCallback? get onUpload => widget.onUpload;
+  VoidCallback? get onRetryFailed => widget.onRetryFailed;
+  ValueChanged<_UnifiedFileRecord>? get onDeleteFile => widget.onDeleteFile;
+  ValueChanged<String>? get onDeleteFolder => widget.onDeleteFolder;
+  ValueChanged<_UnifiedFileRecord>? get onPreviewFile => widget.onPreviewFile;
+  ValueChanged<_UnifiedFileRecord>? get onDownloadFile => widget.onDownloadFile;
+
+  @override
+  void didUpdateWidget(covariant _SyncRootPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initiallyExpanded &&
+        !_contentReady &&
+        _contentLoadTimer == null) {
+      _scheduleContentLoad();
+    }
+  }
+
+  @override
+  void dispose() {
+    _contentLoadTimer?.cancel();
+    super.dispose();
+  }
+
+  void _handleExpansionChanged(bool expanded) {
+    if (!expanded) {
+      _contentLoadTimer?.cancel();
+      _contentLoadTimer = null;
+      return;
+    }
+    if (_contentReady || _contentLoadTimer != null) {
+      return;
+    }
+    _scheduleContentLoad();
+  }
+
+  void _scheduleContentLoad() {
+    _contentLoadTimer = Timer(_contentLoadDelay, () {
+      _contentLoadTimer = null;
+      if (!mounted) {
+        return;
+      }
+      setState(() => _contentReady = true);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     return Card(
@@ -5191,6 +5549,7 @@ class _SyncRootPanel extends StatelessWidget {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       child: ExpansionTile(
         initiallyExpanded: initiallyExpanded,
+        onExpansionChanged: _handleExpansionChanged,
         leading: Icon(
           rootView.isCurrentDeviceRoot
               ? Icons.folder_outlined
@@ -5268,14 +5627,16 @@ class _SyncRootPanel extends StatelessWidget {
                   ];
                 }
                 return [
-                  if (rootView.isUnbound)
+                  if (rootView.canBindLocalPath)
                     PopupMenuItem(
                       value: _SyncRootQuickAction.bind,
                       enabled: onBind != null,
-                      child: const ListTile(
+                      child: ListTile(
                         dense: true,
                         leading: Icon(Icons.folder_open_outlined),
-                        title: Text('绑定本地目录'),
+                        title: Text(
+                          rootView.isWechatBackupRoot ? '绑定微信目录' : '绑定本地目录',
+                        ),
                       ),
                     ),
                   PopupMenuItem(
@@ -5320,31 +5681,62 @@ class _SyncRootPanel extends StatelessWidget {
         ),
         childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
         children: [
-          _RootMetaRow(rootView: rootView),
-          if (!rootView.isCurrentDeviceRoot) ...[
+          if (!_contentReady)
+            const _DeferredRootContentIndicator()
+          else ...[
+            _RootMetaRow(rootView: rootView),
+            if (!rootView.isCurrentDeviceRoot) ...[
+              const SizedBox(height: 8),
+              _ReadOnlyDeviceNotice(deviceLine: rootView.deviceLine),
+            ],
+            if (rootView.shouldShowDeletePolicyNotice) ...[
+              const SizedBox(height: 8),
+              _DeletePolicyNotice(
+                backedUpCount: rootView.backedUpDeletedLocalCount,
+              ),
+            ],
             const SizedBox(height: 8),
-            _ReadOnlyDeviceNotice(deviceLine: rootView.deviceLine),
+            if (rootView.fileEntries.isEmpty)
+              _EmptyFileHint(
+                message: rootView.canBindLocalPath
+                    ? '尚未绑定本机目录，请先绑定微信目录后再扫描。'
+                    : null,
+              )
+            else
+              _UnifiedFileTree(
+                rootView: rootView,
+                preferences: fileBrowserPreferences,
+                mediaThumbnails: mediaThumbnails,
+                remoteFileThumbnails: remoteFileThumbnails,
+                onDeleteFile: onDeleteFile,
+                onDeleteFolder: onDeleteFolder,
+                onPreviewFile: onPreviewFile,
+                onDownloadFile: onDownloadFile,
+              ),
           ],
-          if (rootView.shouldShowDeletePolicyNotice) ...[
-            const SizedBox(height: 8),
-            _DeletePolicyNotice(
-              backedUpCount: rootView.backedUpDeletedLocalCount,
-            ),
-          ],
-          const SizedBox(height: 8),
-          if (rootView.fileEntries.isEmpty)
-            const _EmptyFileHint()
-          else
-            _UnifiedFileTree(
-              rootView: rootView,
-              preferences: fileBrowserPreferences,
-              mediaThumbnails: mediaThumbnails,
-              remoteFileThumbnails: remoteFileThumbnails,
-              onDeleteFile: onDeleteFile,
-              onDeleteFolder: onDeleteFolder,
-              onPreviewFile: onPreviewFile,
-              onDownloadFile: onDownloadFile,
-            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DeferredRootContentIndicator extends StatelessWidget {
+  const _DeferredRootContentIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 18),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SizedBox(width: 10),
+          Text('正在加载目录…'),
         ],
       ),
     );
@@ -5488,7 +5880,7 @@ class _UnifiedFileTree extends StatefulWidget {
 }
 
 class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
-  static const _entryBatchSize = 150;
+  static const _entryBatchSize = 80;
   static const _gridEntryBatchSize = 24;
 
   final _queryController = TextEditingController();
@@ -5499,6 +5891,9 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
   var _preferencesChanged = false;
   var _query = '';
   var _currentDirectory = '';
+  List<_UnifiedFileRecord>? _cachedFilteredFiles;
+  _UnifiedFolderSummaries? _cachedFolderSummaries;
+  List<_UnifiedTreeEntry>? _cachedDirectoryEntries;
 
   @override
   void initState() {
@@ -5523,6 +5918,7 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
       _sortMode = _fileSortModeFromName(preferences.sortMode);
       _sortAscending = hasValidSortMode ? preferences.sortAscending : true;
       _visibleEntryLimit = _batchSizeFor(_viewMode);
+      _invalidateSortedEntries();
     });
   }
 
@@ -5552,6 +5948,7 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
         _sortAscending = mode == _FileSortMode.name;
       }
       _visibleEntryLimit = _batchSizeFor(_viewMode);
+      _invalidateSortedEntries();
     });
     _savePreferences();
   }
@@ -5560,6 +5957,7 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
     setState(() {
       _sortAscending = !_sortAscending;
       _visibleEntryLimit = _batchSizeFor(_viewMode);
+      _invalidateSortedEntries();
     });
     _savePreferences();
   }
@@ -5570,12 +5968,36 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(covariant _UnifiedFileTree oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.rootView, widget.rootView)) {
+      _cachedFilteredFiles = null;
+      _cachedFolderSummaries = null;
+      _cachedDirectoryEntries = null;
+    }
+  }
+
+  void _invalidateSortedEntries() {
+    _cachedFilteredFiles = null;
+    _cachedDirectoryEntries = null;
+  }
+
+  void _invalidateDirectoryEntries() {
+    _cachedDirectoryEntries = null;
+  }
+
   void _openDirectory(String path) {
+    final queryChanged = _query.trim().isNotEmpty;
     setState(() {
       _currentDirectory = path;
       _query = '';
       _queryController.clear();
       _visibleEntryLimit = _batchSizeFor(_viewMode);
+      if (queryChanged) {
+        _cachedFilteredFiles = null;
+      }
+      _invalidateDirectoryEntries();
     });
   }
 
@@ -5594,6 +6016,10 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
   }
 
   List<_UnifiedFileRecord> _filteredSortedFiles() {
+    final cached = _cachedFilteredFiles;
+    if (cached != null) {
+      return cached;
+    }
     final query = _query.trim().toLowerCase();
     final files = widget.rootView.fileEntries.where((file) {
       if (query.isEmpty) {
@@ -5601,25 +6027,27 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
       }
       return file.path.toLowerCase().contains(query);
     }).toList();
-    files.sort((left, right) {
-      final result = switch (_sortMode) {
-        _FileSortMode.name => left.path.compareTo(right.path),
-        _FileSortMode.size =>
-          (right.backup?.sizeBytes ?? right.task?.sizeBytes ?? 0).compareTo(
-            left.backup?.sizeBytes ?? left.task?.sizeBytes ?? 0,
-          ),
-        _FileSortMode.updated => _fileUpdatedAt(
-          right,
-        ).compareTo(_fileUpdatedAt(left)),
-        _FileSortMode.status =>
-          widget.rootView
-              .fileStatusLabel(left)
-              .compareTo(widget.rootView.fileStatusLabel(right)),
-      };
-      final compared = result == 0 ? left.path.compareTo(right.path) : result;
-      return _sortAscending ? compared : -compared;
-    });
-    return files;
+    if (_sortMode != _FileSortMode.name || !_sortAscending) {
+      files.sort((left, right) {
+        final result = switch (_sortMode) {
+          _FileSortMode.name => left.path.compareTo(right.path),
+          _FileSortMode.size =>
+            (right.backup?.sizeBytes ?? right.task?.sizeBytes ?? 0).compareTo(
+              left.backup?.sizeBytes ?? left.task?.sizeBytes ?? 0,
+            ),
+          _FileSortMode.updated => _fileUpdatedAt(
+            right,
+          ).compareTo(_fileUpdatedAt(left)),
+          _FileSortMode.status =>
+            widget.rootView
+                .fileStatusLabel(left)
+                .compareTo(widget.rootView.fileStatusLabel(right)),
+        };
+        final compared = result == 0 ? left.path.compareTo(right.path) : result;
+        return _sortAscending ? compared : -compared;
+      });
+    }
+    return _cachedFilteredFiles = files;
   }
 
   DateTime _fileUpdatedAt(_UnifiedFileRecord file) {
@@ -5641,8 +6069,12 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
     List<_UnifiedFileRecord> files,
     _UnifiedFolderSummaries folderSummaries,
   ) {
+    final cached = _cachedDirectoryEntries;
+    if (cached != null) {
+      return cached;
+    }
     if (_query.trim().isNotEmpty) {
-      return [
+      return _cachedDirectoryEntries = [
         for (final file in files)
           _UnifiedFileEntry(
             name: _pathParts(file.path).last,
@@ -5652,38 +6084,9 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
           ),
       ];
     }
-    final currentParts = _pathParts(_currentDirectory);
-    final folders = <String, _UnifiedFolderEntry>{};
-    final directFiles = <_UnifiedFileEntry>[];
-    for (final file in files) {
-      final parts = _pathParts(file.path);
-      if (parts.length <= currentParts.length ||
-          !_hasPathPrefix(parts, currentParts)) {
-        continue;
-      }
-      final remainder = parts.sublist(currentParts.length);
-      if (remainder.length == 1) {
-        directFiles.add(
-          _UnifiedFileEntry(
-            name: remainder.first,
-            path: file.path,
-            depth: 0,
-            file: file,
-          ),
-        );
-        continue;
-      }
-      final folderPath = [...currentParts, remainder.first].join('/');
-      folders.putIfAbsent(
-        folderPath,
-        () => _UnifiedFolderEntry(
-          name: remainder.first,
-          path: folderPath,
-          depth: 0,
-        ),
-      );
-    }
-    final entries = <_UnifiedTreeEntry>[...folders.values, ...directFiles];
+    final entries = <_UnifiedTreeEntry>[
+      ...(folderSummaries.entriesByDirectory[_currentDirectory] ?? const []),
+    ];
     entries.sort((left, right) {
       final leftFolder = left is _UnifiedFolderEntry;
       final rightFolder = right is _UnifiedFolderEntry;
@@ -5708,7 +6111,7 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
       final compared = result == 0 ? left.path.compareTo(right.path) : result;
       return _sortAscending ? compared : -compared;
     });
-    return entries;
+    return _cachedDirectoryEntries = entries;
   }
 
   int _entrySize(
@@ -5745,10 +6148,11 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
   @override
   Widget build(BuildContext context) {
     final files = _filteredSortedFiles();
-    final folderSummaries = _UnifiedFolderSummaries.fromFiles(
-      files,
-      widget.rootView,
-    );
+    final folderSummaries = _cachedFolderSummaries ??=
+        _UnifiedFolderSummaries.fromFiles(
+          widget.rootView.fileEntries,
+          widget.rootView,
+        );
     final allVisibleEntries = _directoryEntries(files, folderSummaries);
     final visibleEntries = allVisibleEntries
         .take(_visibleEntryLimit)
@@ -5777,6 +6181,7 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
             setState(() {
               _query = query;
               _visibleEntryLimit = _batchSizeFor(_viewMode);
+              _invalidateSortedEntries();
             });
           },
           onViewModeChanged: (mode) {
@@ -6356,18 +6761,45 @@ class _UnifiedFileEntry extends _UnifiedTreeEntry {
 
 class _UnifiedFolderSummaries {
   final Map<String, _UnifiedFolderSummary> byPath;
+  final Map<String, List<_UnifiedTreeEntry>> entriesByDirectory;
 
-  const _UnifiedFolderSummaries({required this.byPath});
+  const _UnifiedFolderSummaries({
+    required this.byPath,
+    required this.entriesByDirectory,
+  });
 
   factory _UnifiedFolderSummaries.fromFiles(
     List<_UnifiedFileRecord> files,
     _SyncRootViewData rootView,
   ) {
     final summaries = <String, _UnifiedFolderSummary>{};
+    final childrenByDirectory = <String, Map<String, _UnifiedTreeEntry>>{};
     for (final file in files) {
       final parts = _pathParts(file.path);
+      final parentPath = parts.length <= 1
+          ? ''
+          : parts.take(parts.length - 1).join('/');
+      childrenByDirectory.putIfAbsent(
+        parentPath,
+        () => <String, _UnifiedTreeEntry>{},
+      )[file.path] = _UnifiedFileEntry(
+        name: parts.last,
+        path: file.path,
+        depth: 0,
+        file: file,
+      );
+      var path = '';
       for (var index = 0; index < parts.length - 1; index += 1) {
-        final path = parts.take(index + 1).join('/');
+        final parent = path;
+        path = path.isEmpty ? parts[index] : '$path/${parts[index]}';
+        childrenByDirectory.putIfAbsent(
+          parent,
+          () => <String, _UnifiedTreeEntry>{},
+        )[path] ??= _UnifiedFolderEntry(
+          name: parts[index],
+          path: path,
+          depth: 0,
+        );
         final current = summaries[path];
         summaries[path] = (current ?? const _UnifiedFolderSummary()).addFile(
           _folderStatusLabel(rootView.fileStatusLabel(file)),
@@ -6376,7 +6808,13 @@ class _UnifiedFolderSummaries {
         );
       }
     }
-    return _UnifiedFolderSummaries(byPath: summaries);
+    return _UnifiedFolderSummaries(
+      byPath: summaries,
+      entriesByDirectory: {
+        for (final entry in childrenByDirectory.entries)
+          entry.key: entry.value.values.toList(growable: false),
+      },
+    );
   }
 }
 
@@ -7506,6 +7944,10 @@ class _FilePropertiesDialog extends StatelessWidget {
     return switch (sourceType) {
       'file' => '本地文件',
       'media_asset' => '系统相册资源',
+      'wechat_file' => '微信文件',
+      'wechat' => '微信文件',
+      'wechat_archive_file' => '微信完整归档',
+      'wechat_archive' => '微信完整归档',
       null || '' => '-',
       _ => sourceType,
     };
@@ -7657,17 +8099,19 @@ class _DeletePolicyNotice extends StatelessWidget {
 }
 
 class _EmptyFileHint extends StatelessWidget {
-  const _EmptyFileHint();
+  final String? message;
+
+  const _EmptyFileHint({this.message});
 
   @override
   Widget build(BuildContext context) {
-    return const Padding(
-      padding: EdgeInsets.symmetric(vertical: 12),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
       child: Row(
         children: [
-          Icon(Icons.info_outline, size: 18),
-          SizedBox(width: 8),
-          Expanded(child: Text('还没有文件记录，点击顶部扫描按钮生成同步任务。')),
+          const Icon(Icons.info_outline, size: 18),
+          const SizedBox(width: 8),
+          Expanded(child: Text(message ?? '还没有文件记录，点击顶部扫描按钮生成同步任务。')),
         ],
       ),
     );
@@ -7703,7 +8147,7 @@ class _SyncRootViewData {
   final String currentDeviceId;
   final String currentDeviceName;
 
-  const _SyncRootViewData({
+  _SyncRootViewData({
     required this.root,
     required this.mapping,
     required this.tasks,
@@ -7717,6 +8161,9 @@ class _SyncRootViewData {
   String get displayName {
     if (isMediaBackupRoot) {
       return '相册备份';
+    }
+    if (isWechatBackupRoot) {
+      return mapping?.sourceType == 'wechat_archive' ? '微信电脑完整归档' : '微信文件备份';
     }
     final localPath = mapping?.localPath.trim() ?? '';
     if (localPath.isNotEmpty) {
@@ -7752,6 +8199,13 @@ class _SyncRootViewData {
     return isCurrentDeviceRoot;
   }
 
+  bool get canBindLocalPath {
+    if (!isCurrentDeviceRoot || isMediaBackupRoot) {
+      return false;
+    }
+    return mapping == null || mapping!.localPath.trim().isEmpty;
+  }
+
   String get deviceDisplayName {
     final localDeviceName = currentDeviceName.trim();
     if (isCurrentDeviceRoot && localDeviceName.isNotEmpty) {
@@ -7771,7 +8225,13 @@ class _SyncRootViewData {
 
   bool get isUnbound {
     return !isMediaBackupRoot &&
+        !isWechatBackupRoot &&
         (mapping == null || mapping!.localPath.trim().isEmpty);
+  }
+
+  bool get isWechatBackupRoot {
+    return root.encryptedPath.startsWith('wechat-backup:v1:') ||
+        _isWechatBackupSource(mapping?.sourceType ?? '');
   }
 
   bool get isMediaBackupRoot {
@@ -7782,6 +8242,10 @@ class _SyncRootViewData {
   String get subtitle {
     if (isMediaBackupRoot) {
       return '手机相册照片和视频';
+    }
+    if (isWechatBackupRoot) {
+      final localPath = mapping?.localPath.trim() ?? '';
+      return localPath.isEmpty ? '本机未绑定微信目录' : localPath;
     }
     if (!isUnbound) {
       return mapping!.localPath;
@@ -7812,7 +8276,9 @@ class _SyncRootViewData {
     return root.cleanupPolicy == 'delete' && backedUpDeletedLocalCount > 0;
   }
 
-  List<_UnifiedFileRecord> get fileEntries {
+  late final List<_UnifiedFileRecord> fileEntries = _buildFileEntries();
+
+  List<_UnifiedFileRecord> _buildFileEntries() {
     final records = <String, _UnifiedFileRecord>{};
     for (final task in tasks) {
       final path = _normalizeRelativePath(task.relativePath);
@@ -7880,6 +8346,9 @@ class _SyncRootViewData {
   }
 
   String get statusLabel {
+    if (isWechatBackupRoot && canBindLocalPath) {
+      return '待绑定';
+    }
     if (issues.isNotEmpty) {
       return '待处理';
     }
@@ -8248,18 +8717,6 @@ DateTime _unifiedFileUpdatedAt(_UnifiedFileRecord file) {
   return file.task?.modifiedAt ?? _epochDateTime;
 }
 
-bool _hasPathPrefix(List<String> parts, List<String> prefix) {
-  if (parts.length < prefix.length) {
-    return false;
-  }
-  for (var index = 0; index < prefix.length; index += 1) {
-    if (parts[index] != prefix[index]) {
-      return false;
-    }
-  }
-  return true;
-}
-
 String _normalizeRelativePath(String path) {
   return path.replaceAll('\\', '/');
 }
@@ -8309,14 +8766,22 @@ String _autoSyncSummary(AutoSyncStatus status, {required bool enabled}) {
 class _CreateSyncRootDialog extends StatefulWidget {
   final FolderPicker folderPicker;
   final FileAccessPermissionGateway fileAccessPermission;
+  final WechatFolderDiscoveryGateway wechatFolderDiscovery;
   final LocalPathProtector pathProtector;
+  final String devicePlatform;
   final bool showAndroidFileAccessGuide;
+  final bool wechatOnly;
+  final LocalSyncRootMapping? existingMapping;
 
   const _CreateSyncRootDialog({
     required this.folderPicker,
     required this.fileAccessPermission,
+    required this.wechatFolderDiscovery,
     required this.pathProtector,
+    required this.devicePlatform,
     required this.showAndroidFileAccessGuide,
+    this.wechatOnly = false,
+    this.existingMapping,
   });
 
   @override
@@ -8331,8 +8796,47 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
   final _encryptedPathController = TextEditingController();
   String _cleanupPolicy = 'keep';
   bool _encryptionEnabled = true;
+  final Set<String> _includedTypes = {'image', 'video', 'document'};
+  String _wechatMode = 'archive';
   String? _folderErrorMessage;
   String? _permissionStatusMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existingMapping;
+    if (existing == null) {
+      return;
+    }
+    _localPathController.text = existing.localPath;
+    _encryptedPathController.text = existing.encryptedPath;
+    _encryptionEnabled = existing.encryptionEnabled;
+    _cleanupPolicy = widget.wechatOnly ? 'keep' : existing.cleanupPolicy;
+    if (existing.sourceType == 'wechat') {
+      _wechatMode = 'files';
+    } else if (existing.sourceType == 'wechat_archive') {
+      _wechatMode = 'archive';
+    }
+    final types = existing.includedFileTypes
+        .split(',')
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet();
+    if (types.isNotEmpty) {
+      _includedTypes
+        ..clear()
+        ..addAll(types);
+    }
+  }
+
+  void _toggleIncludedType(String type, bool enabled) {
+    if (enabled) {
+      _includedTypes.add(type);
+    } else if (_includedTypes.length > 1) {
+      _includedTypes.remove(type);
+    }
+    setState(() {});
+  }
 
   bool get _isDownloadsPathSelected =>
       _localPathController.text.trim() == _androidDownloadsPath;
@@ -8369,6 +8873,40 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
     _setSelectedLocalPath(selectedPath);
   }
 
+  Future<void> _detectWechatFolder() async {
+    if (widget.devicePlatform == 'android' &&
+        !await widget.fileAccessPermission.hasFileAccessPermission()) {
+      await _openFileAccessSettings();
+      if (!mounted ||
+          !await widget.fileAccessPermission.hasFileAccessPermission()) {
+        return;
+      }
+    }
+    final result = await widget.wechatFolderDiscovery.discover(
+      widget.devicePlatform,
+    );
+    if (!mounted) {
+      return;
+    }
+    if (result == null) {
+      setState(() {
+        _permissionStatusMessage = null;
+        _folderErrorMessage = widget.devicePlatform == 'android'
+            ? '未找到系统允许访问的微信目录。Pixel 等原生 Android 通常只能自动读取微信保存到系统相册或公开目录的文件。'
+            : '未找到常见微信目录，请手动选择微信的文件存储目录。';
+      });
+      return;
+    }
+    _setSelectedLocalPath(result.path);
+    setState(() {
+      _permissionStatusMessage = result.isPrivateAppDirectory
+          ? '系统允许读取微信应用目录，将自动监控其中可访问的文件。'
+          : widget.devicePlatform == 'android'
+          ? '已找到微信公开文件目录；微信私有目录中的文档可能仍受系统限制。'
+          : '已找到微信文件目录，将自动监控新增文件。';
+    });
+  }
+
   void _setSelectedLocalPath(String selectedPath) {
     setState(() {
       _folderErrorMessage = null;
@@ -8395,7 +8933,7 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
       }
       setState(() {
         _folderErrorMessage = null;
-        _permissionStatusMessage = '已打开系统授权页。授权完成后请返回 VaultSync，并再次选择本地目录。';
+        _permissionStatusMessage = '已打开系统授权页。授权完成后请返回 VaultSync 继续操作。';
       });
     } catch (error) {
       if (!mounted) {
@@ -8411,14 +8949,98 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('新增同步目录'),
+      title: Text(
+        widget.wechatOnly
+            ? widget.existingMapping == null
+                  ? widget.showAndroidFileAccessGuide
+                        ? '新增微信文件备份'
+                        : '新增微信电脑备份'
+                  : widget.showAndroidFileAccessGuide
+                  ? '微信文件备份设置'
+                  : '微信电脑备份设置'
+            : '新增同步目录',
+      ),
       content: SingleChildScrollView(
         child: Form(
           key: _formKey,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (widget.showAndroidFileAccessGuide)
+              if (widget.wechatOnly) ...[
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('电脑端可自动归档微信数据；Android 仍只备份可访问的微信文件。'),
+                ),
+                const SizedBox(height: 8),
+                if (widget.showAndroidFileAccessGuide)
+                  _buildAndroidWechatPathOptions(context)
+                else
+                  _buildDesktopLocalPathPicker(),
+                const SizedBox(height: 8),
+                if (!widget.showAndroidFileAccessGuide) ...[
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('备份范围'),
+                  ),
+                  RadioListTile<String>(
+                    key: const ValueKey('wechat_archive_mode_option'),
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    value: 'archive',
+                    groupValue: _wechatMode,
+                    onChanged: (value) => setState(() {
+                      _wechatMode = value ?? 'archive';
+                    }),
+                    title: const Text('完整数据归档'),
+                    subtitle: const Text(
+                      '包含微信数据库、图片、视频、语音和文件；数据库保持原始加密格式，首次归档可能较大',
+                    ),
+                  ),
+                  RadioListTile<String>(
+                    key: const ValueKey('wechat_files_mode_option'),
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    value: 'files',
+                    groupValue: _wechatMode,
+                    onChanged: (value) => setState(() {
+                      _wechatMode = value ?? 'files';
+                    }),
+                    title: const Text('仅备份微信文件'),
+                    subtitle: const Text('只上传图片、视频和文档，不包含数据库'),
+                  ),
+                ] else
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('备份类型'),
+                  ),
+                if (widget.showAndroidFileAccessGuide ||
+                    _wechatMode == 'files') ...[
+                  CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('图片'),
+                    value: _includedTypes.contains('image'),
+                    onChanged: (value) =>
+                        _toggleIncludedType('image', value == true),
+                  ),
+                  CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('视频'),
+                    value: _includedTypes.contains('video'),
+                    onChanged: (value) =>
+                        _toggleIncludedType('video', value == true),
+                  ),
+                  CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('文档'),
+                    value: _includedTypes.contains('document'),
+                    onChanged: (value) =>
+                        _toggleIncludedType('document', value == true),
+                  ),
+                ],
+              ] else if (widget.showAndroidFileAccessGuide)
                 _buildAndroidLocalPathOptions(context)
               else
                 _buildDesktopLocalPathPicker(),
@@ -8446,18 +9068,20 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
                   ),
                 ),
               ],
-              const SizedBox(height: 12),
-              TextFormField(
-                key: const ValueKey('sync_root_encrypted_path_field'),
-                controller: _encryptedPathController,
-                decoration: const InputDecoration(labelText: '服务器路径标识'),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return '请输入服务器路径标识';
-                  }
-                  return null;
-                },
-              ),
+              if (!widget.wechatOnly) ...[
+                const SizedBox(height: 12),
+                TextFormField(
+                  key: const ValueKey('sync_root_encrypted_path_field'),
+                  controller: _encryptedPathController,
+                  decoration: const InputDecoration(labelText: '服务器路径标识'),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return '请输入服务器路径标识';
+                    }
+                    return null;
+                  },
+                ),
+              ],
               const SizedBox(height: 12),
               SwitchListTile(
                 key: const ValueKey('sync_root_encryption_enabled_field'),
@@ -8465,34 +9089,46 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
                 value: _encryptionEnabled,
                 title: const Text('服务器端加密存储'),
                 subtitle: Text(
-                  _encryptionEnabled
+                  widget.existingMapping != null
+                      ? '已有备份的存储方式不能直接修改'
+                      : _encryptionEnabled
                       ? '上传前在本机加密，服务器只保存密文'
                       : '服务器保存原文件内容，便于在 NAS 上直接查看',
                 ),
-                onChanged: (value) {
-                  setState(() {
-                    _encryptionEnabled = value;
-                  });
-                },
+                onChanged: widget.existingMapping != null
+                    ? null
+                    : (value) {
+                        setState(() {
+                          _encryptionEnabled = value;
+                        });
+                      },
               ),
               const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                key: const ValueKey('sync_root_cleanup_policy_field'),
-                initialValue: _cleanupPolicy,
-                decoration: const InputDecoration(labelText: '清理策略'),
-                items: const [
-                  DropdownMenuItem(value: 'keep', child: Text('保留本地文件')),
-                  DropdownMenuItem(value: 'delete', child: Text('上传后删除本地文件')),
-                ],
-                onChanged: (value) {
-                  if (value == null) {
-                    return;
-                  }
-                  setState(() {
-                    _cleanupPolicy = value;
-                  });
-                },
-              ),
+              if (widget.wechatOnly)
+                const ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.shield_outlined),
+                  title: Text('保留微信本地文件'),
+                  subtitle: Text('备份不会删除或修改微信正在使用的文件'),
+                )
+              else
+                DropdownButtonFormField<String>(
+                  key: const ValueKey('sync_root_cleanup_policy_field'),
+                  initialValue: _cleanupPolicy,
+                  decoration: const InputDecoration(labelText: '清理策略'),
+                  items: const [
+                    DropdownMenuItem(value: 'keep', child: Text('保留本地文件')),
+                    DropdownMenuItem(value: 'delete', child: Text('上传后删除本地文件')),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) {
+                      return;
+                    }
+                    setState(() {
+                      _cleanupPolicy = value;
+                    });
+                  },
+                ),
             ],
           ),
         ),
@@ -8505,32 +9141,95 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
         FilledButton(
           key: const ValueKey('save_sync_root_button'),
           onPressed: _submit,
-          child: const Text('保存'),
+          child: Text(widget.existingMapping == null ? '保存' : '更新配置'),
         ),
       ],
     );
   }
 
   Widget _buildDesktopLocalPathPicker() {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          child: TextFormField(
-            key: const ValueKey('sync_root_local_path_field'),
-            controller: _localPathController,
-            readOnly: true,
-            decoration: const InputDecoration(labelText: '本地目录'),
-          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: TextFormField(
+                key: const ValueKey('sync_root_local_path_field'),
+                controller: _localPathController,
+                readOnly: true,
+                decoration: const InputDecoration(labelText: '本地目录'),
+                validator: widget.wechatOnly
+                    ? (value) {
+                        if (value == null || value.trim().isEmpty) {
+                          return '请先自动查找或手动选择微信目录';
+                        }
+                        return null;
+                      }
+                    : null,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: OutlinedButton(
+                key: const ValueKey('choose_sync_folder_button'),
+                onPressed: _chooseFolder,
+                child: const Text('选择'),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 8),
-        Padding(
-          padding: const EdgeInsets.only(top: 8),
-          child: OutlinedButton(
+        if (widget.wechatOnly)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const ValueKey('detect_wechat_folder_button'),
+              onPressed: _detectWechatFolder,
+              icon: const Icon(Icons.manage_search_outlined),
+              label: const Text('自动查找微信目录'),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildAndroidWechatPathOptions(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        FilledButton.icon(
+          key: const ValueKey('detect_wechat_folder_button'),
+          onPressed: _detectWechatFolder,
+          icon: const Icon(Icons.manage_search_outlined),
+          label: const Text('授权并自动查找'),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '优先检测系统允许访问的微信目录。原生 Android 不开放微信私有目录时，仍可备份微信保存到系统相册或公开目录的文件。',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
             key: const ValueKey('choose_sync_folder_button'),
             onPressed: _chooseFolder,
-            child: const Text('选择'),
+            icon: const Icon(Icons.folder_open_outlined),
+            label: const Text('手动选择可访问目录'),
           ),
+        ),
+        TextFormField(
+          key: const ValueKey('sync_root_local_path_field'),
+          controller: _localPathController,
+          readOnly: true,
+          decoration: const InputDecoration(labelText: '微信文件目录'),
+          validator: (value) {
+            if (value == null || value.trim().isEmpty) {
+              return '请先自动查找或手动选择微信目录';
+            }
+            return null;
+          },
         ),
       ],
     );
@@ -8603,6 +9302,12 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
         encryptionEnabled: _encryptionEnabled,
         cleanupPolicy: _cleanupPolicy,
         archivePath: '',
+        sourceType: widget.wechatOnly
+            ? widget.showAndroidFileAccessGuide || _wechatMode == 'files'
+                  ? 'wechat'
+                  : 'wechat_archive'
+            : 'folder',
+        includedFileTypes: _includedTypes.join(','),
       ),
     );
   }
@@ -8664,7 +9369,9 @@ class _ManageSyncRootDialog extends StatefulWidget {
 }
 
 class _ManageSyncRootDialogState extends State<_ManageSyncRootDialog> {
-  late String _cleanupPolicy = widget.rootView.root.cleanupPolicy == 'delete'
+  late String _cleanupPolicy = widget.rootView.isWechatBackupRoot
+      ? 'keep'
+      : widget.rootView.root.cleanupPolicy == 'delete'
       ? 'delete'
       : 'keep';
 
@@ -8695,23 +9402,31 @@ class _ManageSyncRootDialogState extends State<_ManageSyncRootDialog> {
             ),
           ),
           const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            key: const ValueKey('manage_sync_root_cleanup_policy_field'),
-            initialValue: _cleanupPolicy,
-            decoration: const InputDecoration(labelText: '清理策略'),
-            items: const [
-              DropdownMenuItem(value: 'keep', child: Text('保留本地文件')),
-              DropdownMenuItem(value: 'delete', child: Text('上传后删除本地文件')),
-            ],
-            onChanged: (value) {
-              if (value == null) {
-                return;
-              }
-              setState(() {
-                _cleanupPolicy = value;
-              });
-            },
-          ),
+          if (widget.rootView.isWechatBackupRoot)
+            const ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.shield_outlined),
+              title: Text('保留微信本地文件'),
+              subtitle: Text('微信目录不支持上传后删除，避免影响微信中的文件'),
+            )
+          else
+            DropdownButtonFormField<String>(
+              key: const ValueKey('manage_sync_root_cleanup_policy_field'),
+              initialValue: _cleanupPolicy,
+              decoration: const InputDecoration(labelText: '清理策略'),
+              items: const [
+                DropdownMenuItem(value: 'keep', child: Text('保留本地文件')),
+                DropdownMenuItem(value: 'delete', child: Text('上传后删除本地文件')),
+              ],
+              onChanged: (value) {
+                if (value == null) {
+                  return;
+                }
+                setState(() {
+                  _cleanupPolicy = value;
+                });
+              },
+            ),
         ],
       ),
       actions: [
@@ -8804,6 +9519,8 @@ class _SyncRootDraft {
   final bool encryptionEnabled;
   final String cleanupPolicy;
   final String archivePath;
+  final String sourceType;
+  final String includedFileTypes;
 
   const _SyncRootDraft({
     required this.localPath,
@@ -8811,5 +9528,7 @@ class _SyncRootDraft {
     required this.encryptionEnabled,
     required this.cleanupPolicy,
     required this.archivePath,
+    this.sourceType = 'folder',
+    this.includedFileTypes = '',
   });
 }

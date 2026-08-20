@@ -4,7 +4,8 @@ import '../sync/encrypted_upload_payload_preparer.dart';
 import '../sync/sync_models.dart';
 import 'media_backup_gateway.dart';
 
-class MediaAwareUploadContentReader implements StreamingUploadContentReader {
+class MediaAwareUploadContentReader
+    implements StreamingUploadContentReader, UploadTemporaryFileCleanup {
   final UploadContentReader fileReader;
   final MediaBackupGateway media;
 
@@ -37,5 +38,16 @@ class MediaAwareUploadContentReader implements StreamingUploadContentReader {
       return reader.resolveFile(task);
     }
     return Future.value(null);
+  }
+
+  @override
+  Future<List<File>> temporaryFilesForCleanup(LocalUploadTask task) {
+    final reader = fileReader;
+    if (reader is UploadTemporaryFileCleanup) {
+      return (reader as UploadTemporaryFileCleanup).temporaryFilesForCleanup(
+        task,
+      );
+    }
+    return Future.value(const []);
   }
 }

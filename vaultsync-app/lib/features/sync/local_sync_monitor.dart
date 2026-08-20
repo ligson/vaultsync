@@ -97,7 +97,12 @@ class LocalSyncMonitor {
     }
     final relativePath = _relativePath(mapping.localPath, event.path);
     if (relativePath.isNotEmpty &&
-        isIgnoredLocalSyncRelativePath(relativePath)) {
+        (isIgnoredLocalSyncRelativePath(relativePath) ||
+            !shouldIncludeLocalSyncFile(
+              relativePath,
+              sourceType: mapping.sourceType,
+              includedFileTypes: mapping.includedFileTypes,
+            ))) {
       return;
     }
     _queue(mapping.syncRootId);

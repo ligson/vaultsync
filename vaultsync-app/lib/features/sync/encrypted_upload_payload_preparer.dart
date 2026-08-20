@@ -30,6 +30,10 @@ abstract interface class StreamingUploadContentReader
   Future<File?> resolveFile(LocalUploadTask task);
 }
 
+abstract interface class UploadTemporaryFileCleanup {
+  Future<List<File>> temporaryFilesForCleanup(LocalUploadTask task);
+}
+
 class FileUploadContentReader implements StreamingUploadContentReader {
   const FileUploadContentReader();
 
@@ -97,6 +101,7 @@ class PlainUploadPayloadPreparer implements UploadPayloadPreparer {
     required String versionId,
   }) async {
     final sourceFile = await _resolveSourceFile(contentReader, task);
+    final temporaryFiles = await _temporaryFilesForCleanup(contentReader, task);
     if (sourceFile != null) {
       final sourceContentHash = await _streamHash(sourceFile.openRead());
       final name = _fileName(task.relativePath);
@@ -116,6 +121,7 @@ class PlainUploadPayloadPreparer implements UploadPayloadPreparer {
       return PreparedUploadPayload(
         payloadFile: sourceFile,
         payloadFileSize: await sourceFile.length(),
+        cleanupFiles: temporaryFiles,
         payloadHash: _uploadFingerprint(
           sourceContentHash,
           encryptedName,
@@ -144,6 +150,7 @@ class PlainUploadPayloadPreparer implements UploadPayloadPreparer {
     });
     return PreparedUploadPayload(
       bytes: bytes,
+      cleanupFiles: temporaryFiles,
       payloadHash: _uploadFingerprint(
         sourceContentHash,
         encryptedName,
@@ -162,6 +169,18 @@ class PlainUploadPayloadPreparer implements UploadPayloadPreparer {
   String _base64(List<int> bytes) {
     return base64Url.encode(bytes).replaceAll('=', '');
   }
+}
+
+Future<List<File>> _temporaryFilesForCleanup(
+  UploadContentReader reader,
+  LocalUploadTask task,
+) {
+  if (reader is UploadTemporaryFileCleanup) {
+    return (reader as UploadTemporaryFileCleanup).temporaryFilesForCleanup(
+      task,
+    );
+  }
+  return Future.value(const []);
 }
 
 class EncryptedUploadPayloadPreparer implements UploadPayloadPreparer {
@@ -200,6 +219,7 @@ class EncryptedUploadPayloadPreparer implements UploadPayloadPreparer {
     required String versionId,
   }) async {
     final sourceFile = await _resolveSourceFile(contentReader, task);
+    final temporaryFiles = await _temporaryFilesForCleanup(contentReader, task);
     if (sourceFile != null &&
         cacheDirectoryProvider != null &&
         nonceFactory == null) {
@@ -208,6 +228,7 @@ class EncryptedUploadPayloadPreparer implements UploadPayloadPreparer {
         sourceFile: sourceFile,
         objectId: objectId,
         versionId: versionId,
+        temporaryFiles: temporaryFiles,
       );
     }
     final plainBytes = await contentReader.read(task);
@@ -234,6 +255,7 @@ class EncryptedUploadPayloadPreparer implements UploadPayloadPreparer {
     final contentHash = crypto.sha256.convert(payloadBytes).toString();
     return PreparedUploadPayload(
       bytes: payloadBytes,
+      cleanupFiles: temporaryFiles,
       payloadHash: _uploadFingerprint(contentHash, encryptedName, metadata),
       sourceContentHash: sourceContentHash,
       encryptedName: encryptedName,
@@ -246,6 +268,7 @@ class EncryptedUploadPayloadPreparer implements UploadPayloadPreparer {
     required File sourceFile,
     required String objectId,
     required String versionId,
+    List<File> temporaryFiles = const [],
   }) async {
     final sourceStat = await sourceFile.stat();
     final cacheDirectory = await cacheDirectoryProvider!();
@@ -282,7 +305,7 @@ class EncryptedUploadPayloadPreparer implements UploadPayloadPreparer {
           encryptedName,
           metadata,
         ),
-        cleanupFiles: [payloadFile, sidecarFile],
+        cleanupFiles: [...temporaryFiles, payloadFile, sidecarFile],
         sourceContentHash: cached.sourceContentHash,
         encryptedName: encryptedName,
         metadataJson: metadata,
@@ -368,7 +391,7 @@ class EncryptedUploadPayloadPreparer implements UploadPayloadPreparer {
         encryptedName,
         metadata,
       ),
-      cleanupFiles: [payloadFile, sidecarFile],
+      cleanupFiles: [...temporaryFiles, payloadFile, sidecarFile],
       sourceContentHash: sourceContentHash,
       encryptedName: encryptedName,
       metadataJson: metadata,

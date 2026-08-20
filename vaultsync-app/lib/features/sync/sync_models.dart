@@ -44,6 +44,10 @@ class LocalSyncRootMapping {
   final String cleanupPolicy;
   final String archivePath;
 
+  /// Optional local source classification. Older mappings are ordinary folders.
+  final String sourceType;
+  final String includedFileTypes;
+
   const LocalSyncRootMapping({
     required this.syncRootId,
     required this.localPath,
@@ -51,6 +55,8 @@ class LocalSyncRootMapping {
     this.encryptionEnabled = true,
     required this.cleanupPolicy,
     required this.archivePath,
+    this.sourceType = 'folder',
+    this.includedFileTypes = '',
   });
 
   factory LocalSyncRootMapping.fromJson(Map<String, Object?> json) {
@@ -61,6 +67,8 @@ class LocalSyncRootMapping {
       encryptionEnabled: json['encryption_enabled'] as bool? ?? true,
       cleanupPolicy: json['cleanup_policy'] as String,
       archivePath: json['archive_path'] as String? ?? '',
+      sourceType: json['source_type'] as String? ?? 'folder',
+      includedFileTypes: json['included_file_types'] as String? ?? '',
     );
   }
 
@@ -72,6 +80,8 @@ class LocalSyncRootMapping {
       'encryption_enabled': encryptionEnabled,
       'cleanup_policy': cleanupPolicy,
       'archive_path': archivePath,
+      'source_type': sourceType,
+      'included_file_types': includedFileTypes,
     };
   }
 }
@@ -83,6 +93,7 @@ class LocalSyncFile {
   final int sizeBytes;
   final DateTime modifiedAt;
   final bool encryptionEnabled;
+  final String sourceType;
 
   const LocalSyncFile({
     required this.syncRootId,
@@ -91,6 +102,7 @@ class LocalSyncFile {
     required this.sizeBytes,
     required this.modifiedAt,
     this.encryptionEnabled = true,
+    this.sourceType = 'file',
   });
 }
 

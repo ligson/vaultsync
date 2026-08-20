@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -303,6 +304,54 @@ void main() {
         [4, 5, 6],
         [7],
       ]);
+    },
+  );
+
+  test(
+    'executePendingUploads stops after current request when root is paused',
+    () async {
+      final uploadTasks = FakeIncrementalUploadTaskStore([
+        LocalUploadTask(
+          id: 'root-1:a.jpg',
+          syncRootId: 'root-1',
+          localPath: '/Users/alice/Photos/a.jpg',
+          relativePath: 'a.jpg',
+          sizeBytes: 6,
+          modifiedAt: DateTime.utc(2026, 6, 27, 9),
+          status: 'pending',
+          attempts: 0,
+          createdAt: DateTime.utc(2026, 6, 27, 10),
+        ),
+      ]);
+      final uploads = BlockingFirstPartUploadGateway();
+      final executor = LocalUploadExecutor(
+        sessionStore: const FakeSessionStore(
+          token: 'server-token',
+          deviceId: 'device-1',
+        ),
+        uploadTasks: uploadTasks,
+        uploads: uploads,
+        payloadPreparer: const FakeUploadPayloadPreparer(
+          bytes: [1, 2, 3, 4, 5, 6],
+        ),
+        objectIdForTask: (_) => 'object-1',
+        versionIdForTask: (_) => 'version-1',
+        chunkSize: 3,
+      );
+
+      final execution = executor.executePendingUploads();
+      await uploads.firstPartStarted.future;
+      executor.pauseSyncRootUploads('root-1');
+      executor.confirmSyncRootDeleted('root-1');
+      uploads.releaseFirstPart();
+      final result = await execution;
+
+      expect(uploads.uploadedPartIndexes, [0]);
+      expect(uploads.completeCallCount, 0);
+      expect(result.uploadedCount, 0);
+      expect(result.failedCount, 0);
+      expect(uploadTasks.saved, isEmpty);
+      expect(uploadTasks.removedTaskIds, ['root-1:a.jpg']);
     },
   );
 
@@ -908,6 +957,31 @@ class FakeUploadTaskStore implements UploadTaskStore {
   }
 }
 
+class FakeIncrementalUploadTaskStore extends FakeUploadTaskStore
+    implements IncrementalUploadTaskStore {
+  final List<String> removedTaskIds = [];
+
+  FakeIncrementalUploadTaskStore(super.saved);
+
+  @override
+  Future<void> saveUploadTask(LocalUploadTask task) async {
+    saved = [
+      for (final existing in saved)
+        if (existing.id != task.id) existing,
+      task,
+    ];
+  }
+
+  @override
+  Future<void> removeUploadTask(String taskId) async {
+    removedTaskIds.add(taskId);
+    saved = [
+      for (final task in saved)
+        if (task.id != taskId) task,
+    ];
+  }
+}
+
 class FakeUploadPayloadPreparer implements UploadPayloadPreparer {
   final List<int> bytes;
   final String sourceContentHash;
@@ -1110,6 +1184,46 @@ class FakeUploadGateway implements UploadGateway {
     required String sessionId,
   }) async {
     return const UploadedFileVersion(id: 'version-1');
+  }
+}
+
+class BlockingFirstPartUploadGateway extends FakeUploadGateway {
+  final Completer<void> firstPartStarted = Completer<void>();
+  final Completer<void> _releaseFirstPart = Completer<void>();
+  int completeCallCount = 0;
+
+  void releaseFirstPart() {
+    if (!_releaseFirstPart.isCompleted) {
+      _releaseFirstPart.complete();
+    }
+  }
+
+  @override
+  Future<void> uploadPart({
+    required String token,
+    required String sessionId,
+    required int partIndex,
+    required List<int> bytes,
+  }) async {
+    await super.uploadPart(
+      token: token,
+      sessionId: sessionId,
+      partIndex: partIndex,
+      bytes: bytes,
+    );
+    if (!firstPartStarted.isCompleted) {
+      firstPartStarted.complete();
+      await _releaseFirstPart.future;
+    }
+  }
+
+  @override
+  Future<UploadedFileVersion> completeUploadSession({
+    required String token,
+    required String sessionId,
+  }) async {
+    completeCallCount += 1;
+    return super.completeUploadSession(token: token, sessionId: sessionId);
   }
 }
 

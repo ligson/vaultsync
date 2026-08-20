@@ -23,6 +23,7 @@ import 'package:vaultsync_app/features/sync/sync_home_screen.dart';
 import 'package:vaultsync_app/features/sync/sync_models.dart';
 import 'package:vaultsync_app/features/sync/sync_pull_executor.dart';
 import 'package:vaultsync_app/features/sync/sync_service.dart';
+import 'package:vaultsync_app/features/sync/wechat_folder_discovery.dart';
 
 String _formatLocalTestDateTime(DateTime value) {
   final local = value.toLocal();
@@ -504,6 +505,65 @@ void main() {
     expect(find.text('相册备份'), findsOneWidget);
   });
 
+  testWidgets('saving existing media backup updates instead of creating root', (
+    tester,
+  ) async {
+    final roots = FakeSyncRootGateway([
+      const SyncRoot(
+        id: 'media-root',
+        userId: 'user-1',
+        deviceId: 'device-1',
+        encryptedPath: 'media-backup:v1:source-1',
+        cleanupPolicy: 'keep',
+        archivePath: '',
+        createdAt: '2026-07-01T00:00:00Z',
+      ),
+    ]);
+    final sources = FakeMediaBackupSourceStore([
+      LocalMediaBackupSource(
+        id: 'source-1',
+        syncRootId: 'media-root',
+        name: '相册备份',
+        mediaTypes: 'image_video',
+        albumScope: 'all',
+        albumIds: const [],
+        cleanupPolicy: 'keep',
+        encryptionEnabled: true,
+        wifiOnly: true,
+        autoBackupEnabled: true,
+        createdAt: DateTime.utc(2026, 7, 1),
+        updatedAt: DateTime.utc(2026, 7, 1),
+      ),
+    ]);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore(),
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: roots,
+          mediaBackupSources: sources,
+          devicePlatform: 'android',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await _tapHomeAction(tester, 'open_media_backup_button');
+    await tester.pumpAndSettle();
+    expect(find.text('更新配置'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('save_media_backup_button')));
+    await tester.pumpAndSettle();
+
+    expect(roots.createCallCount, 0);
+    expect(sources.saved, hasLength(1));
+    expect(sources.saved.single.syncRootId, 'media-root');
+  });
+
   testWidgets('sync home shows media backup root as album backup', (
     tester,
   ) async {
@@ -964,7 +1024,6 @@ void main() {
           encryptionEnabled: true,
         ),
       ]);
-
       await tester.pumpWidget(
         MaterialApp(
           home: SyncHomeScreen(
@@ -1900,6 +1959,17 @@ void main() {
         ?.call();
     await tester.pumpAndSettle();
 
+    expect(find.text('file-159.txt'), findsOneWidget);
+    expect(find.text('file-179.txt'), findsNothing);
+
+    tester
+        .widget<OutlinedButton>(
+          find.byKey(const ValueKey('load_more_files_root-1')),
+        )
+        .onPressed
+        ?.call();
+    await tester.pumpAndSettle();
+
     expect(find.text('file-179.txt'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('file_tree_view_mode_button')));
@@ -1907,6 +1977,97 @@ void main() {
     await tester.tap(find.text('图标').last);
     await tester.pumpAndSettle();
     expect(find.text('继续显示 24 项'), findsOneWidget);
+  });
+
+  testWidgets('collapsed sync root defers file browser work until expanded', (
+    tester,
+  ) async {
+    final now = DateTime.utc(2026, 8, 20, 10);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore([
+            const LocalSyncRootMapping(
+              syncRootId: 'root-a',
+              localPath: '/Users/alice/PhotosA',
+              encryptedPath: 'base64:path-a',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+            ),
+            const LocalSyncRootMapping(
+              syncRootId: 'root-b',
+              localPath: '/Users/alice/PhotosB',
+              encryptedPath: 'base64:path-b',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+            ),
+          ]),
+          uploadTasks: FakeUploadTaskStore([
+            LocalUploadTask(
+              id: 'root-a:a.txt',
+              syncRootId: 'root-a',
+              localPath: '/Users/alice/PhotosA/a.txt',
+              relativePath: 'a.txt',
+              sizeBytes: 1,
+              modifiedAt: now,
+              status: 'pending',
+              attempts: 0,
+              createdAt: now,
+            ),
+            LocalUploadTask(
+              id: 'root-b:b.txt',
+              syncRootId: 'root-b',
+              localPath: '/Users/alice/PhotosB/b.txt',
+              relativePath: 'b.txt',
+              sizeBytes: 1,
+              modifiedAt: now,
+              status: 'pending',
+              attempts: 0,
+              createdAt: now,
+            ),
+          ]),
+          syncRoots: FakeSyncRootGateway([
+            const SyncRoot(
+              id: 'root-a',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'base64:path-a',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-08-20T00:00:00Z',
+            ),
+            const SyncRoot(
+              id: 'root-b',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'base64:path-b',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-08-20T00:00:00Z',
+            ),
+          ]),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('a.txt'), findsNothing);
+    expect(find.text('b.txt'), findsNothing);
+
+    await tester.tap(find.text('PhotosA').first);
+    await tester.pump();
+
+    expect(find.text('正在加载目录…'), findsOneWidget);
+    expect(find.text('a.txt'), findsNothing);
+
+    await tester.pump(const Duration(milliseconds: 230));
+
+    expect(find.text('a.txt'), findsOneWidget);
+    expect(find.text('b.txt'), findsNothing);
   });
 
   testWidgets('sync home marks other device roots readonly', (tester) async {
@@ -2286,6 +2447,215 @@ void main() {
       );
     },
   );
+
+  testWidgets('desktop WeChat backup automatically detects and saves folder', (
+    tester,
+  ) async {
+    final syncRoots = FakeSyncRootGateway(const []);
+    final mappings = FakeSyncRootMappingStore();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: mappings,
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: syncRoots,
+          wechatFolderDiscovery: const FakeWechatFolderDiscovery(
+            WechatFolderDiscoveryResult(
+              path: r'C:\Users\alice\Documents\WeChat Files',
+            ),
+          ),
+          pathProtector: const FakePathProtector(),
+          devicePlatform: 'windows',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('sync_more_actions_button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open_wechat_backup_button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('新增微信电脑备份'), findsOneWidget);
+    expect(find.text('完整数据归档'), findsOneWidget);
+    expect(find.text('保留微信本地文件'), findsOneWidget);
+    expect(find.text('上传后删除本地文件'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('detect_wechat_folder_button')));
+    await tester.pumpAndSettle();
+    expect(find.text(r'C:\Users\alice\Documents\WeChat Files'), findsOneWidget);
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('save_sync_root_button')),
+    );
+    await tester.tap(find.byKey(const ValueKey('save_sync_root_button')));
+    await tester.pumpAndSettle();
+
+    expect(syncRoots.createdEncryptedPath, startsWith('wechat-backup:v1:'));
+    expect(syncRoots.createdCleanupPolicy, 'keep');
+    expect(mappings.saved.single.sourceType, 'wechat_archive');
+    expect(
+      mappings.saved.single.localPath,
+      r'C:\Users\alice\Documents\WeChat Files',
+    );
+  });
+
+  testWidgets(
+    'saving existing WeChat backup updates instead of creating root',
+    (tester) async {
+      final roots = FakeSyncRootGateway([
+        const SyncRoot(
+          id: 'wechat-root',
+          userId: 'user-1',
+          deviceId: 'device-1',
+          encryptedPath: 'wechat-backup:v1:wechat-existing',
+          cleanupPolicy: 'keep',
+          archivePath: '',
+          createdAt: '2026-07-01T00:00:00Z',
+        ),
+      ]);
+      final mappings = FakeSyncRootMappingStore([
+        const LocalSyncRootMapping(
+          syncRootId: 'wechat-root',
+          localPath: '/storage/emulated/0/Pictures/WeiXin',
+          encryptedPath: 'wechat-backup:v1:wechat-existing',
+          cleanupPolicy: 'keep',
+          archivePath: '',
+          sourceType: 'wechat',
+          includedFileTypes: 'image,video,document',
+        ),
+      ]);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SyncHomeScreen(
+            storage: FakeSessionStore(
+              token: 'server-token',
+              deviceId: 'device-1',
+            ),
+            syncRootMappings: mappings,
+            uploadTasks: FakeUploadTaskStore(),
+            syncRoots: roots,
+            devicePlatform: 'android',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await _tapHomeAction(tester, 'open_wechat_backup_button');
+      await tester.pumpAndSettle();
+      expect(find.text('微信文件备份设置'), findsOneWidget);
+      expect(find.text('更新配置'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('save_sync_root_button')));
+      await tester.pumpAndSettle();
+
+      expect(roots.createCallCount, 0);
+      expect(mappings.saved, hasLength(1));
+      expect(mappings.saved.single.syncRootId, 'wechat-root');
+    },
+  );
+
+  testWidgets('unbound desktop WeChat root can be bound from directory settings', (
+    tester,
+  ) async {
+    final roots = FakeSyncRootGateway([
+      const SyncRoot(
+        id: 'wechat-root',
+        userId: 'user-1',
+        deviceId: 'device-1',
+        encryptedPath: 'wechat-backup:v1:wechat-existing',
+        cleanupPolicy: 'keep',
+        archivePath: '',
+        createdAt: '2026-07-01T00:00:00Z',
+      ),
+    ]);
+    final mappings = FakeSyncRootMappingStore();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: mappings,
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: roots,
+          folderPicker: const FakeFolderPicker(
+            '/Users/alice/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files',
+          ),
+          wechatFolderDiscovery: const FakeWechatFolderDiscovery(
+            WechatFolderDiscoveryResult(
+              path:
+                  '/Users/alice/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files',
+            ),
+          ),
+          devicePlatform: 'macos',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('本机未绑定微信目录'), findsOneWidget);
+    expect(find.text('待绑定'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('manage_sync_root_wechat-root')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('新增微信电脑备份'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('detect_wechat_folder_button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('save_sync_root_button')));
+    await tester.pumpAndSettle();
+
+    expect(mappings.saved.single.syncRootId, 'wechat-root');
+    expect(mappings.saved.single.sourceType, 'wechat_archive');
+    expect(mappings.saved.single.localPath, contains('xwechat_files'));
+  });
+
+  testWidgets('scanning an unbound WeChat root explains how to bind it', (
+    tester,
+  ) async {
+    final scanner = FakeLocalSyncScanner(const []);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore(),
+          uploadTasks: FakeUploadTaskStore(),
+          localScanner: scanner,
+          syncRoots: FakeSyncRootGateway([
+            const SyncRoot(
+              id: 'wechat-root',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: 'wechat-backup:v1:wechat-existing',
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-07-01T00:00:00Z',
+            ),
+          ]),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('sync_root_quick_actions_wechat-root')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('扫描此目录'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('微信目录尚未绑定'), findsOneWidget);
+    expect(scanner.callCount, 0);
+  });
 
   testWidgets(
     'android sync root dialog can use downloads path without tree picker',
@@ -4354,6 +4724,7 @@ void main() {
           createdAt: DateTime.utc(2026, 7),
         ),
       ]);
+      final uploadExecutor = RecordingCancelableUploadExecutor();
 
       await tester.pumpWidget(
         MaterialApp(
@@ -4365,6 +4736,7 @@ void main() {
             syncRootMappings: mappings,
             uploadTasks: uploadTasks,
             syncRoots: syncRoots,
+            uploadExecutor: uploadExecutor,
           ),
         ),
       );
@@ -4388,8 +4760,83 @@ void main() {
       expect(syncRoots.deletedRemote, isFalse);
       expect(mappings.saved, isEmpty);
       expect(uploadTasks.saved, isEmpty);
+      expect(uploadExecutor.pausedSyncRootIds, ['root-1']);
+      expect(uploadExecutor.confirmedSyncRootIds, ['root-1']);
+      expect(uploadExecutor.resumedSyncRootIds, isEmpty);
     },
   );
+
+  testWidgets('sync home resumes root uploads when deleting root fails', (
+    tester,
+  ) async {
+    final syncRoots = FailingDeleteSyncRootGateway([
+      const SyncRoot(
+        id: 'root-1',
+        userId: 'user-1',
+        deviceId: 'device-1',
+        encryptedPath: 'base64:path',
+        cleanupPolicy: 'keep',
+        archivePath: '',
+        createdAt: '2026-07-01T00:00:00Z',
+      ),
+    ]);
+    final mappings = FakeSyncRootMappingStore([
+      const LocalSyncRootMapping(
+        syncRootId: 'root-1',
+        localPath: '/Users/alice/Photos',
+        encryptedPath: 'base64:path',
+        cleanupPolicy: 'keep',
+        archivePath: '',
+      ),
+    ]);
+    final uploadTasks = FakeUploadTaskStore([
+      LocalUploadTask(
+        id: 'root-1:a.jpg',
+        syncRootId: 'root-1',
+        localPath: '/Users/alice/Photos/a.jpg',
+        relativePath: 'a.jpg',
+        sizeBytes: 1,
+        modifiedAt: DateTime.utc(2026, 7),
+        status: 'pending',
+        attempts: 0,
+        createdAt: DateTime.utc(2026, 7),
+      ),
+    ]);
+    final uploadExecutor = RecordingCancelableUploadExecutor();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: mappings,
+          uploadTasks: uploadTasks,
+          syncRoots: syncRoots,
+          uploadExecutor: uploadExecutor,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('manage_sync_root_root-1')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('delete_managed_sync_root_button')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('confirm_delete_sync_root_button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(uploadExecutor.pausedSyncRootIds, ['root-1']);
+    expect(uploadExecutor.confirmedSyncRootIds, isEmpty);
+    expect(uploadExecutor.resumedSyncRootIds, ['root-1']);
+    expect(mappings.saved.single.syncRootId, 'root-1');
+    expect(uploadTasks.saved.single.syncRootId, 'root-1');
+  });
 
   testWidgets('sync home can delete sync root with server content', (
     tester,
@@ -4464,6 +4911,7 @@ class FakeSyncRootGateway implements SyncRootGateway {
   String? deletedSyncRootId;
   bool? deletedRemote;
   int listCallCount = 0;
+  int createCallCount = 0;
 
   FakeSyncRootGateway(this.initialRoots);
 
@@ -4487,6 +4935,7 @@ class FakeSyncRootGateway implements SyncRootGateway {
     required String cleanupPolicy,
     required String archivePath,
   }) async {
+    createCallCount += 1;
     createdToken = token;
     createdDeviceId = deviceId;
     createdEncryptedPath = encryptedPath;
@@ -4560,6 +5009,19 @@ class BlockingReloadSyncRootGateway extends FakeSyncRootGateway {
       return initialRoots;
     }
     return reloadFuture;
+  }
+}
+
+class FailingDeleteSyncRootGateway extends FakeSyncRootGateway {
+  FailingDeleteSyncRootGateway(super.initialRoots);
+
+  @override
+  Future<void> deleteSyncRoot({
+    required String token,
+    required String syncRootId,
+    required bool deleteRemote,
+  }) async {
+    throw Exception('删除同步目录失败');
   }
 }
 
@@ -4875,6 +5337,16 @@ class FakeFileAccessPermissionGateway implements FileAccessPermissionGateway {
   }
 }
 
+class FakeWechatFolderDiscovery implements WechatFolderDiscoveryGateway {
+  final WechatFolderDiscoveryResult? result;
+
+  const FakeWechatFolderDiscovery(this.result);
+
+  @override
+  Future<WechatFolderDiscoveryResult?> discover(String platform) async =>
+      result;
+}
+
 class FakePathProtector implements LocalPathProtector {
   const FakePathProtector();
 
@@ -4951,6 +5423,35 @@ class BlockingUploadExecutor implements LocalUploadExecutionGateway {
     if (!_result.isCompleted) {
       _result.complete(const UploadExecutionResult(uploadedCount: 0));
     }
+  }
+}
+
+class RecordingCancelableUploadExecutor
+    implements LocalUploadExecutionGateway, LocalUploadCancellationGateway {
+  final List<String> pausedSyncRootIds = [];
+  final List<String> confirmedSyncRootIds = [];
+  final List<String> resumedSyncRootIds = [];
+
+  @override
+  void pauseSyncRootUploads(String syncRootId) {
+    pausedSyncRootIds.add(syncRootId);
+  }
+
+  @override
+  void confirmSyncRootDeleted(String syncRootId) {
+    confirmedSyncRootIds.add(syncRootId);
+  }
+
+  @override
+  void resumeSyncRootUploads(String syncRootId) {
+    resumedSyncRootIds.add(syncRootId);
+  }
+
+  @override
+  Future<UploadExecutionResult> executePendingUploads({
+    String? syncRootId,
+  }) async {
+    return const UploadExecutionResult(uploadedCount: 0);
   }
 }
 

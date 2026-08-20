@@ -18,8 +18,15 @@ class MediaBackupDraft {
 
 class MediaBackupScreen extends StatefulWidget {
   final Future<void> Function(MediaBackupDraft draft) onSave;
+  final MediaBackupDraft? initialDraft;
+  final bool encryptionLocked;
 
-  const MediaBackupScreen({super.key, required this.onSave});
+  const MediaBackupScreen({
+    super.key,
+    required this.onSave,
+    this.initialDraft,
+    this.encryptionLocked = false,
+  });
 
   @override
   State<MediaBackupScreen> createState() => _MediaBackupScreenState();
@@ -33,6 +40,21 @@ class _MediaBackupScreenState extends State<MediaBackupScreen> {
   bool _wifiOnly = true;
   bool _autoBackupEnabled = true;
   bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initialDraft;
+    if (initial == null) {
+      return;
+    }
+    _mediaTypes = initial.mediaTypes;
+    _cleanupPolicy = initial.cleanupPolicy;
+    _deletePolicyConfirmed = initial.cleanupPolicy == 'delete';
+    _encryptionEnabled = initial.encryptionEnabled;
+    _wifiOnly = initial.wifiOnly;
+    _autoBackupEnabled = initial.autoBackupEnabled;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -90,9 +112,15 @@ class _MediaBackupScreenState extends State<MediaBackupScreen> {
           const Divider(),
           SwitchListTile(
             title: const Text('服务器端加密存储'),
-            subtitle: const Text('关闭后，服务器会按相册目录和文件名保存明文备份'),
+            subtitle: Text(
+              widget.encryptionLocked
+                  ? '已有备份的存储方式不能直接修改'
+                  : '关闭后，服务器会按相册目录和文件名保存明文备份',
+            ),
             value: _encryptionEnabled,
-            onChanged: (value) => setState(() => _encryptionEnabled = value),
+            onChanged: widget.encryptionLocked
+                ? null
+                : (value) => setState(() => _encryptionEnabled = value),
           ),
           const Divider(),
           SwitchListTile(
@@ -112,7 +140,13 @@ class _MediaBackupScreenState extends State<MediaBackupScreen> {
         child: FilledButton(
           key: const ValueKey('save_media_backup_button'),
           onPressed: _isSaving ? null : _save,
-          child: Text(_isSaving ? '保存中...' : '保存'),
+          child: Text(
+            _isSaving
+                ? '保存中...'
+                : widget.initialDraft == null
+                ? '保存'
+                : '更新配置',
+          ),
         ),
       ),
     );

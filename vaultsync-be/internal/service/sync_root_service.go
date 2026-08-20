@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ligson/vaultsync/internal/domain"
@@ -14,6 +15,7 @@ type SyncRootService struct {
 	deviceRepo *store.DeviceRepo
 	objectRepo *store.ObjectRepo
 	now        func() time.Time
+	createMu   sync.Mutex
 }
 
 func NewSyncRootService(repo *store.SyncRootRepo, deviceRepo *store.DeviceRepo, objectRepo *store.ObjectRepo) *SyncRootService {
@@ -45,6 +47,17 @@ func (s *SyncRootService) Create(ctx context.Context, userID, deviceID, encrypte
 	if !deviceExists {
 		return domain.SyncRoot{}, InvalidRequest("设备不属于当前用户")
 	}
+	if prefix := singletonBackupPrefix(encryptedPath); prefix != "" {
+		s.createMu.Lock()
+		defer s.createMu.Unlock()
+		existing, findErr := s.repo.FindFirstByDeviceAndPathPrefix(ctx, userID, deviceID, prefix)
+		if findErr == nil {
+			return existing, nil
+		}
+		if findErr != store.ErrNotFound {
+			return domain.SyncRoot{}, findErr
+		}
+	}
 
 	root := domain.SyncRoot{
 		ID:                newID(),
@@ -72,6 +85,16 @@ func (s *SyncRootService) UpdateCleanupPolicy(ctx context.Context, userID, syncR
 	if cleanupPolicy == "" {
 		return domain.SyncRoot{}, InvalidRequest("本地清理策略不能为空")
 	}
+	existing, err := s.repo.GetForUser(ctx, userID, syncRootID)
+	if err != nil {
+		if err == store.ErrNotFound {
+			return domain.SyncRoot{}, NotFound("同步目录不存在或无权访问")
+		}
+		return domain.SyncRoot{}, err
+	}
+	if strings.HasPrefix(existing.EncryptedPath, "wechat-backup:v1:") && cleanupPolicy != "keep" {
+		return domain.SyncRoot{}, InvalidRequest("微信文件备份必须保留本地文件")
+	}
 	root, err := s.repo.UpdateCleanupPolicy(ctx, userID, syncRootID, cleanupPolicy, archivePath)
 	if err != nil {
 		if err == store.ErrNotFound {
@@ -80,6 +103,15 @@ func (s *SyncRootService) UpdateCleanupPolicy(ctx context.Context, userID, syncR
 		return domain.SyncRoot{}, err
 	}
 	return root, nil
+}
+
+func singletonBackupPrefix(encryptedPath string) string {
+	for _, prefix := range []string{"media-backup:v1:", "wechat-backup:v1:"} {
+		if strings.HasPrefix(encryptedPath, prefix) {
+			return prefix
+		}
+	}
+	return ""
 }
 
 func (s *SyncRootService) Delete(ctx context.Context, userID, syncRootID string, deleteRemote bool) (map[string]any, error) {

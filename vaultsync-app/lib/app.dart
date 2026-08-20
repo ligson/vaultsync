@@ -33,6 +33,7 @@ import 'features/sync/sync_pull_executor.dart';
 import 'features/sync/sync_service.dart';
 import 'features/sync/upload_api_service.dart';
 import 'features/sync/upload_key_store.dart';
+import 'features/sync/wechat_dat_decoder.dart';
 
 class VaultSyncApp extends StatefulWidget {
   final AppConfig config;
@@ -320,7 +321,15 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
               );
             },
             contentReader: MediaAwareUploadContentReader(
-              fileReader: const FileUploadContentReader(),
+              fileReader: WechatDatUploadContentReader(
+                fileReader: const FileUploadContentReader(),
+                cacheDirectoryProvider: () async {
+                  final temporaryDirectory = await getTemporaryDirectory();
+                  return Directory(
+                    '${temporaryDirectory.path}/vaultsync-wechat-decoded',
+                  );
+                },
+              ),
               media: mediaGateway,
             ),
           ),

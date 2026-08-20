@@ -29,6 +29,14 @@ abstract interface class LocalUploadExecutionGateway {
   Future<UploadExecutionResult> executePendingUploads({String? syncRootId});
 }
 
+abstract interface class LocalUploadCancellationGateway {
+  void pauseSyncRootUploads(String syncRootId);
+
+  void confirmSyncRootDeleted(String syncRootId);
+
+  void resumeSyncRootUploads(String syncRootId);
+}
+
 abstract interface class UploadSessionProgressReconciler {
   Future<int> reconcilePendingUploadProgress();
 }
@@ -179,7 +187,10 @@ class UploadProgressChannel extends ChangeNotifier {
 typedef UploadTaskIDFactory = String Function(LocalUploadTask task);
 
 class LocalUploadExecutor
-    implements LocalUploadExecutionGateway, UploadSessionProgressReconciler {
+    implements
+        LocalUploadExecutionGateway,
+        LocalUploadCancellationGateway,
+        UploadSessionProgressReconciler {
   static const _progressPersistBytes = 32 * 1024 * 1024;
   static const _maxStartupSessionChecks = 32;
 
@@ -196,8 +207,10 @@ class LocalUploadExecutor
   final UploadProgressChannel? progress;
   final Duration sourceStabilityWindow;
   final DateTime Function() now;
+  final Set<String> _pausedSyncRootIds = <String>{};
+  final Set<String> _deletedSyncRootIds = <String>{};
 
-  const LocalUploadExecutor({
+  LocalUploadExecutor({
     required this.sessionStore,
     this.syncRootMappings,
     required this.uploadTasks,
@@ -214,6 +227,30 @@ class LocalUploadExecutor
   });
 
   @override
+  void pauseSyncRootUploads(String syncRootId) {
+    final normalizedId = syncRootId.trim();
+    if (normalizedId.isNotEmpty) {
+      _pausedSyncRootIds.add(normalizedId);
+    }
+  }
+
+  @override
+  void confirmSyncRootDeleted(String syncRootId) {
+    final normalizedId = syncRootId.trim();
+    if (normalizedId.isNotEmpty) {
+      _pausedSyncRootIds.add(normalizedId);
+      _deletedSyncRootIds.add(normalizedId);
+    }
+  }
+
+  @override
+  void resumeSyncRootUploads(String syncRootId) {
+    final normalizedId = syncRootId.trim();
+    _pausedSyncRootIds.remove(normalizedId);
+    _deletedSyncRootIds.remove(normalizedId);
+  }
+
+  @override
   Future<int> reconcilePendingUploadProgress() async {
     final token = await sessionStore.loadAuthToken();
     if (token == null || token.isEmpty) {
@@ -224,6 +261,7 @@ class LocalUploadExecutor
         tasks
             .where(
               (task) =>
+                  !_isSyncRootUploadPaused(task.syncRootId) &&
                   task.uploadSessionId.isNotEmpty &&
                   (task.status == 'pending' || task.status == 'failed'),
             )
@@ -250,6 +288,9 @@ class LocalUploadExecutor
     var changedCount = 0;
     final updatedTasks = <LocalUploadTask>[];
     for (final task in tasks) {
+      if (_isSyncRootDeleted(task.syncRootId)) {
+        continue;
+      }
       final session = sessionsByTaskId[task.id];
       if (session == null) {
         updatedTasks.add(task);
@@ -278,12 +319,13 @@ class LocalUploadExecutor
     if (changedCount > 0) {
       if (uploadTasks case final IncrementalUploadTaskStore incrementalStore) {
         for (final task in updatedTasks) {
-          if (sessionsByTaskId.containsKey(task.id)) {
-            await incrementalStore.saveUploadTask(task);
+          if (sessionsByTaskId.containsKey(task.id) &&
+              !_isSyncRootUploadPaused(task.syncRootId)) {
+            await _saveIncrementalTaskUnlessCancelled(incrementalStore, task);
           }
         }
       } else {
-        await uploadTasks.saveUploadTasks(updatedTasks);
+        await _saveBulkTasksWithoutDeletedRoots(updatedTasks);
       }
     }
     return changedCount;
@@ -317,6 +359,15 @@ class LocalUploadExecutor
     final updatedTasks = <LocalUploadTask>[];
     for (var taskIndex = 0; taskIndex < tasks.length; taskIndex += 1) {
       final task = tasks[taskIndex];
+      if (_isSyncRootUploadPaused(task.syncRootId)) {
+        if (!_isSyncRootDeleted(task.syncRootId)) {
+          updatedTasks.add(task);
+        } else if (uploadTasks
+            case final IncrementalUploadTaskStore incrementalStore) {
+          await incrementalStore.removeUploadTask(task.id);
+        }
+        continue;
+      }
       if (!_shouldUploadTask(task, syncRootId: syncRootId)) {
         updatedTasks.add(task);
         continue;
@@ -329,13 +380,19 @@ class LocalUploadExecutor
         task,
         mappingsByRootId[task.syncRootId],
       );
+      PreparedUploadPayload? preparedPayload;
       try {
+        _throwIfSyncRootUploadPaused(currentTask.syncRootId);
         currentTask = await _prepareStableSourceTask(currentTask);
+        _throwIfSyncRootUploadPaused(currentTask.syncRootId);
         if (currentTask.status == 'waiting_stable') {
           updatedTasks.add(currentTask);
           if (uploadTasks
               case final IncrementalUploadTaskStore incrementalStore) {
-            await incrementalStore.saveUploadTask(currentTask);
+            await _saveIncrementalTaskUnlessCancelled(
+              incrementalStore,
+              currentTask,
+            );
           }
           continue;
         }
@@ -357,6 +414,7 @@ class LocalUploadExecutor
           token: token,
           task: currentTask,
         );
+        _throwIfSyncRootUploadPaused(currentTask.syncRootId);
         if (knownSession != null) {
           currentTask = _withStatus(
             currentTask,
@@ -382,8 +440,11 @@ class LocalUploadExecutor
           objectId: objectId,
           versionId: versionId,
         );
+        preparedPayload = payload;
+        _throwIfSyncRootUploadPaused(currentTask.syncRootId);
         await _ensureSourceUnchanged(currentTask);
         final payloadHash = await _uploadPayloadFingerprint(payload);
+        _throwIfSyncRootUploadPaused(currentTask.syncRootId);
         _reportProgress(
           phase: UploadProgressPhase.connecting,
           taskIndex: processedTaskCount,
@@ -406,6 +467,7 @@ class LocalUploadExecutor
           payloadHash: payloadHash,
           knownSession: knownSession,
         );
+        _throwIfSyncRootUploadPaused(currentTask.syncRootId);
         currentTask = _withStatus(
           currentTask,
           'pending',
@@ -417,16 +479,19 @@ class LocalUploadExecutor
           uploadedBytes: session.receivedSize,
         );
         await _saveProgress(updatedTasks, tasks, taskIndex, currentTask);
+        _throwIfSyncRootUploadPaused(currentTask.syncRootId);
         uploadTimer.start();
         final initialUploadedBytes = session.receivedSize;
 
         if (session.status == 'completed') {
+          _throwIfSyncRootUploadPaused(currentTask.syncRootId);
           await _saveRemoteVersionBaseline(
             task: currentTask,
             objectId: objectId,
             versionId: versionId,
             sourceContentHash: payload.sourceContentHash,
           );
+          _throwIfSyncRootUploadPaused(currentTask.syncRootId);
           currentTask = _withStatus(
             currentTask,
             'uploaded',
@@ -479,13 +544,17 @@ class LocalUploadExecutor
           offset < payload.length;
           offset += chunkSize
         ) {
+          _throwIfSyncRootUploadPaused(currentTask.syncRootId);
           final end = (offset + chunkSize).clamp(0, payload.length);
+          final bytes = await payload.readRange(offset, end);
+          _throwIfSyncRootUploadPaused(currentTask.syncRootId);
           await uploads.uploadPart(
             token: token,
             sessionId: session.id,
             partIndex: partIndex,
-            bytes: await payload.readRange(offset, end),
+            bytes: bytes,
           );
+          _throwIfSyncRootUploadPaused(currentTask.syncRootId);
           currentTask = _withStatus(
             currentTask,
             'pending',
@@ -528,17 +597,21 @@ class LocalUploadExecutor
           failedCount: failedCount,
           speedBytesPerSecond: lastSpeedBytesPerSecond,
         );
+        _throwIfSyncRootUploadPaused(currentTask.syncRootId);
         await _ensureSourceUnchanged(currentTask);
+        _throwIfSyncRootUploadPaused(currentTask.syncRootId);
         final completedVersion = await uploads.completeUploadSession(
           token: token,
           sessionId: session.id,
         );
+        _throwIfSyncRootUploadPaused(currentTask.syncRootId);
         await _saveRemoteVersionBaseline(
           task: currentTask,
           objectId: objectId,
           versionId: completedVersion.id,
           sourceContentHash: payload.sourceContentHash,
         );
+        _throwIfSyncRootUploadPaused(currentTask.syncRootId);
         currentTask = _withStatus(
           currentTask,
           'uploaded',
@@ -558,12 +631,26 @@ class LocalUploadExecutor
         updatedTasks.add(currentTask);
         await payload.cleanupAfterSuccess();
         uploadedCount += 1;
+      } on _SyncRootUploadPausedException {
+        await preparedPayload?.cleanupAfterSuccess();
+        if (_isSyncRootDeleted(currentTask.syncRootId)) {
+          if (uploadTasks
+              case final IncrementalUploadTaskStore incrementalStore) {
+            await incrementalStore.removeUploadTask(currentTask.id);
+          }
+        } else {
+          updatedTasks.add(currentTask);
+        }
+        continue;
       } on UploadSourceChangedException {
         currentTask = await _markSourceChanged(currentTask);
         updatedTasks.add(currentTask);
         if (uploadTasks
             case final IncrementalUploadTaskStore incrementalStore) {
-          await incrementalStore.saveUploadTask(currentTask);
+          await _saveIncrementalTaskUnlessCancelled(
+            incrementalStore,
+            currentTask,
+          );
         }
         continue;
       } catch (error) {
@@ -590,7 +677,10 @@ class LocalUploadExecutor
         updatedTasks.add(currentTask);
         if (uploadTasks
             case final IncrementalUploadTaskStore incrementalStore) {
-          await incrementalStore.saveUploadTask(currentTask);
+          await _saveIncrementalTaskUnlessCancelled(
+            incrementalStore,
+            currentTask,
+          );
         }
         _reportProgress(
           phase: UploadProgressPhase.failed,
@@ -607,7 +697,7 @@ class LocalUploadExecutor
       }
     }
     if (uploadTasks is! IncrementalUploadTaskStore) {
-      await uploadTasks.saveUploadTasks(updatedTasks);
+      await _saveBulkTasksWithoutDeletedRoots(updatedTasks);
     }
     try {
       await postUploadCleaner?.cleanupDeletedLocalEmptyDirectories(
@@ -661,6 +751,20 @@ class LocalUploadExecutor
         _normalizedLocalPath(task.localPath);
   }
 
+  bool _isSyncRootUploadPaused(String syncRootId) {
+    return _pausedSyncRootIds.contains(syncRootId);
+  }
+
+  bool _isSyncRootDeleted(String syncRootId) {
+    return _deletedSyncRootIds.contains(syncRootId);
+  }
+
+  void _throwIfSyncRootUploadPaused(String syncRootId) {
+    if (_isSyncRootUploadPaused(syncRootId)) {
+      throw const _SyncRootUploadPausedException();
+    }
+  }
+
   String _normalizedLocalPath(String path) {
     final normalized = File(path).absolute.path.replaceAll('\\', '/');
     return Platform.isWindows ? normalized.toLowerCase() : normalized;
@@ -676,7 +780,7 @@ class LocalUploadExecutor
   }
 
   Future<LocalUploadTask> _prepareStableSourceTask(LocalUploadTask task) async {
-    if (sourceStabilityWindow <= Duration.zero || task.sourceType != 'file') {
+    if (sourceStabilityWindow <= Duration.zero || !_usesFileStability(task)) {
       return task;
     }
     final file = File(task.localPath);
@@ -748,7 +852,7 @@ class LocalUploadExecutor
   }
 
   Future<void> _ensureSourceUnchanged(LocalUploadTask task) async {
-    if (sourceStabilityWindow <= Duration.zero || task.sourceType != 'file') {
+    if (sourceStabilityWindow <= Duration.zero || !_usesFileStability(task)) {
       return;
     }
     final stat = await File(task.localPath).stat();
@@ -756,6 +860,12 @@ class LocalUploadExecutor
         !stat.modified.toUtc().isAtSameMomentAs(task.modifiedAt.toUtc())) {
       throw const UploadSourceChangedException();
     }
+  }
+
+  bool _usesFileStability(LocalUploadTask task) {
+    return task.sourceType == 'file' ||
+        task.sourceType == 'wechat_file' ||
+        task.sourceType == 'wechat_archive_file';
   }
 
   Future<LocalUploadTask> _markSourceChanged(LocalUploadTask task) async {
@@ -961,14 +1071,49 @@ class LocalUploadExecutor
     LocalUploadTask currentTask,
   ) {
     if (uploadTasks case final IncrementalUploadTaskStore incrementalStore) {
-      return incrementalStore.saveUploadTask(currentTask);
+      return _saveIncrementalTaskUnlessCancelled(incrementalStore, currentTask);
     }
     final nextTasks = <LocalUploadTask>[
       ...completedTasks,
       currentTask,
       ...originalTasks.skip(currentIndex + 1),
     ];
-    return uploadTasks.saveUploadTasks(nextTasks);
+    return _saveBulkTasksWithoutDeletedRoots(nextTasks);
+  }
+
+  Future<void> _saveIncrementalTaskUnlessCancelled(
+    IncrementalUploadTaskStore store,
+    LocalUploadTask task,
+  ) async {
+    if (_isSyncRootUploadPaused(task.syncRootId)) {
+      if (_isSyncRootDeleted(task.syncRootId)) {
+        await store.removeUploadTask(task.id);
+      }
+      return;
+    }
+    await store.saveUploadTask(task);
+    if (_isSyncRootDeleted(task.syncRootId)) {
+      await store.removeUploadTask(task.id);
+    }
+  }
+
+  Future<void> _saveBulkTasksWithoutDeletedRoots(
+    List<LocalUploadTask> tasks,
+  ) async {
+    await uploadTasks.saveUploadTasks([
+      for (final task in tasks)
+        if (!_isSyncRootDeleted(task.syncRootId)) task,
+    ]);
+    if (_deletedSyncRootIds.isEmpty) {
+      return;
+    }
+    final persistedTasks = await uploadTasks.loadUploadTasks();
+    if (persistedTasks.any((task) => _isSyncRootDeleted(task.syncRootId))) {
+      await uploadTasks.saveUploadTasks([
+        for (final task in persistedTasks)
+          if (!_isSyncRootDeleted(task.syncRootId)) task,
+      ]);
+    }
   }
 
   Future<LocalUploadTask> _finishUploadedTask({
@@ -977,12 +1122,14 @@ class LocalUploadExecutor
     required int currentIndex,
     required LocalUploadTask uploadedTask,
   }) async {
+    _throwIfSyncRootUploadPaused(uploadedTask.syncRootId);
     await _saveProgress(
       completedTasks,
       originalTasks,
       currentIndex,
       uploadedTask,
     );
+    _throwIfSyncRootUploadPaused(uploadedTask.syncRootId);
     final cleaner = postUploadCleaner;
     if (cleaner == null) {
       return uploadedTask;
@@ -997,6 +1144,7 @@ class LocalUploadExecutor
         lastError: '上传已完成，本地清理暂未执行，请稍后重试',
       );
     }
+    _throwIfSyncRootUploadPaused(uploadedTask.syncRootId);
     await _saveProgress(
       completedTasks,
       originalTasks,
@@ -1069,6 +1217,10 @@ class LocalUploadExecutor
         )
         .toString();
   }
+}
+
+class _SyncRootUploadPausedException implements Exception {
+  const _SyncRootUploadPausedException();
 }
 
 String objectIdForUploadTask(LocalUploadTask task) {

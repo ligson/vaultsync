@@ -70,6 +70,7 @@ class LocalUploadPlanner {
             ? existingTask?.uploadedBytes ?? 0
             : 0,
         encryptionEnabled: file.encryptionEnabled,
+        sourceType: file.sourceType,
       );
       tasksById[id] = task;
       enqueuedTasks.add(task);

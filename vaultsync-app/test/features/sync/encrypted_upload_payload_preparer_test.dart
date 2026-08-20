@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vaultsync_app/features/sync/encrypted_upload_payload_preparer.dart';
 import 'package:vaultsync_app/features/sync/sync_models.dart';
+import 'package:vaultsync_app/features/sync/wechat_dat_decoder.dart';
 
 void main() {
   test('prepare encrypts file content and metadata for upload', () async {
@@ -252,6 +253,45 @@ void main() {
       expect(payload.bytes, isEmpty);
       expect(payload.payloadFile?.path, source.path);
       expect(await payload.readRange(1, 3), [2, 3]);
+    },
+  );
+
+  test(
+    'WechatDatUploadContentReader decodes legacy dat bytes before upload',
+    () async {
+      const decoded = [
+        0xff,
+        0xd8,
+        0xff,
+        0xe0,
+        0x00,
+        0x10,
+        0x4a,
+        0x46,
+        0x49,
+        0x46,
+      ];
+      const key = 0x33;
+      final reader = WechatDatUploadContentReader(
+        fileReader: FakeUploadContentReader([
+          for (final byte in decoded) byte ^ key,
+        ]),
+      );
+      final bytes = await reader.read(
+        LocalUploadTask(
+          id: 'wechat-root:image/photo.jpg',
+          syncRootId: 'wechat-root',
+          localPath: '/tmp/photo.dat',
+          relativePath: 'image/photo.jpg',
+          sizeBytes: decoded.length,
+          modifiedAt: DateTime.utc(2026, 8, 20),
+          status: 'pending',
+          attempts: 0,
+          createdAt: DateTime.utc(2026, 8, 20),
+          sourceType: 'wechat_file',
+        ),
+      );
+      expect(bytes, decoded);
     },
   );
 }

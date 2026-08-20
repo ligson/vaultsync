@@ -46,6 +46,41 @@ func TestCreatePlainSyncRoot(t *testing.T) {
 	testutil.AssertJSONContains(t, resp, `"encryption_enabled":false`)
 }
 
+func TestSpecialBackupRootIsSingletonPerDevice(t *testing.T) {
+	app, token := testutil.NewAuthenticatedServer(t)
+
+	deviceBody := `{"name":"Alice Phone","platform":"android"}`
+	resp := testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/devices", deviceBody, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	deviceID := testutil.MustReadJSONField(t, resp, "id")
+
+	firstBody := fmt.Sprintf(`{"device_id":"%s","encrypted_path":"media-backup:v1:first","cleanup_policy":"keep","archive_path":""}`, deviceID)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/sync-roots", firstBody, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	firstID := testutil.MustReadJSONField(t, resp, "id")
+
+	secondBody := fmt.Sprintf(`{"device_id":"%s","encrypted_path":"media-backup:v1:second","cleanup_policy":"delete","archive_path":""}`, deviceID)
+	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/sync-roots", secondBody, token)
+	testutil.AssertStatus(t, resp, http.StatusCreated)
+	if secondID := testutil.MustReadJSONField(t, resp, "id"); secondID != firstID {
+		t.Fatalf("expected singleton media root %q, got %q", firstID, secondID)
+	}
+
+	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/sync-roots", "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	var payload struct {
+		Data struct {
+			Items []any `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode sync roots: %v", err)
+	}
+	if len(payload.Data.Items) != 1 {
+		t.Fatalf("expected one special backup root, got %d", len(payload.Data.Items))
+	}
+}
+
 func TestSyncRootRemoteObjectsSubrouteReturnsJSONEnvelope(t *testing.T) {
 	app, token := testutil.NewAuthenticatedServer(t)
 

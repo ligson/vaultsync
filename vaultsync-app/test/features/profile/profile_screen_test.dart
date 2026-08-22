@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:vaultsync_app/core/storage/app_storage.dart';
+import 'package:vaultsync_app/core/theme/app_theme.dart';
 import 'package:vaultsync_app/features/auth/auth_models.dart';
 import 'package:vaultsync_app/features/auth/auth_service.dart';
 import 'package:vaultsync_app/features/device/device_models.dart';
@@ -58,6 +60,91 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('sync_navigation_destination')));
     await tester.pumpAndSettle();
     expect(find.text('同步工作区'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const ValueKey('profile_navigation_destination')),
+    );
+    await tester.pumpAndSettle();
+    expect(gateway.loadCount, 1);
+  });
+
+  testWidgets('profile shows stable skeleton while first request is pending', (
+    tester,
+  ) async {
+    final completer = Completer<UserProfile>();
+    final gateway = FakeProfileGateway(profileLoader: () => completer.future);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AuthenticatedShell(
+          syncHome: const Scaffold(body: Text('同步工作区')),
+          storage: FakeSessionStore(),
+          profileGateway: gateway,
+          avatarStore: MemoryAvatarStore(),
+          platform: 'macos',
+          serverAddress: 'https://files.example.com',
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(gateway.loadCount, 0);
+    await tester.tap(
+      find.byKey(const ValueKey('profile_navigation_destination')),
+    );
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('profile_loading_skeleton')),
+      findsOneWidget,
+    );
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(gateway.loadCount, 1);
+
+    completer.complete(gateway.profile);
+    await tester.pumpAndSettle();
+    expect(find.text('Alice'), findsOneWidget);
+  });
+
+  testWidgets('profile theme settings exposes Chinese presets', (tester) async {
+    VaultThemePreset? selected;
+    await tester.pumpWidget(
+      _profileApp(
+        gateway: FakeProfileGateway(),
+        selectedTheme: VaultThemePreset.celadon,
+        onThemeChanged: (theme) async => selected = theme,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('theme_settings_tile')),
+      200,
+      scrollable: find.byType(Scrollable),
+    );
+    await tester.drag(
+      find.byKey(const ValueKey('profile_settings_list')),
+      const Offset(0, -120),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('theme_settings_tile')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('青瓷'), findsOneWidget);
+    expect(find.text('朱砂'), findsOneWidget);
+    expect(find.text('墨竹'), findsOneWidget);
+    expect(find.text('黛蓝'), findsOneWidget);
+    expect(find.text('松烟'), findsOneWidget);
+    expect(find.text('夜朱'), findsOneWidget);
+    expect(find.text('乌金'), findsOneWidget);
+    expect(find.text('深黛'), findsOneWidget);
+    expect(find.text('松烟'), findsOneWidget);
+    expect(find.text('夜朱'), findsOneWidget);
+    expect(find.text('乌金'), findsOneWidget);
+    expect(find.text('深黛'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('theme_option_cinnabar')));
+    await tester.pumpAndSettle();
+    expect(selected, VaultThemePreset.cinnabar);
   });
 
   testWidgets('profile shows storage and updates personal details', (
@@ -294,6 +381,36 @@ void main() {
     expect(permissions.fileRequestCount, 1);
     expect(find.text('同步权限已满足'), findsOneWidget);
   });
+
+  testWidgets('macOS treats folder access as picker-managed', (tester) async {
+    final permissions = FakeAppPermissionGateway(
+      const AppPermissionSnapshot(
+        media: AppPermissionState.granted,
+        allFiles: AppPermissionState.notRequired,
+      ),
+    );
+    await tester.pumpWidget(
+      _profileApp(
+        gateway: FakeProfileGateway(),
+        permissionGateway: permissions,
+        platform: 'macos',
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('app_permissions_tile')),
+      200,
+      scrollable: find.byType(Scrollable),
+    );
+    await tester.tap(find.byKey(const ValueKey('app_permissions_tile')));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('macOS 照片图库'), findsOneWidget);
+    expect(find.text('文件夹访问由系统目录选择器管理，选择同步目录时授予权限。'), findsOneWidget);
+    expect(find.text('无需额外授权'), findsOneWidget);
+    expect(find.text('未授权'), findsNothing);
+    expect(permissions.fileRequestCount, 0);
+  });
 }
 
 Widget _profileApp({
@@ -302,6 +419,9 @@ Widget _profileApp({
   AppPermissionGateway? permissionGateway,
   AppReleaseGateway? releaseGateway,
   Future<bool> Function(Uri uri)? launchExternalUrl,
+  String platform = 'android',
+  VaultThemePreset selectedTheme = VaultThemePreset.celadon,
+  Future<void> Function(VaultThemePreset theme)? onThemeChanged,
 }) {
   return MaterialApp(
     home: ProfileScreen(
@@ -310,11 +430,13 @@ Widget _profileApp({
       releaseGateway: releaseGateway,
       avatarStore: MemoryAvatarStore(),
       permissionGateway: permissionGateway,
-      platform: 'android',
+      platform: platform,
       serverAddress: 'https://files.example.com',
       onSignOut: onSignOut,
       appVersionLoader: () async => '1.0.0+1',
       launchExternalUrl: launchExternalUrl,
+      selectedTheme: selectedTheme,
+      onThemeChanged: onThemeChanged,
     ),
   );
 }
@@ -357,6 +479,10 @@ class FakeAppPermissionGateway implements AppPermissionGateway {
 }
 
 class FakeProfileGateway implements UserProfileGateway, StorageUsageGateway {
+  final Future<UserProfile> Function()? profileLoader;
+
+  FakeProfileGateway({this.profileLoader});
+
   UserProfile profile = const UserProfile(
     id: 'user-1',
     email: 'alice@example.com',
@@ -397,7 +523,7 @@ class FakeProfileGateway implements UserProfileGateway, StorageUsageGateway {
   @override
   Future<UserProfile> loadProfile(String token) async {
     loadCount += 1;
-    return profile;
+    return profileLoader?.call() ?? profile;
   }
 
   @override

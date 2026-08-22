@@ -1,5 +1,6 @@
 import 'package:permission_handler/permission_handler.dart';
 import 'package:photo_manager/photo_manager.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 enum AppPermissionState { granted, limited, denied, notRequired }
 
@@ -30,10 +31,23 @@ class PlatformAppPermissionGateway implements AppPermissionGateway {
 
   const PlatformAppPermissionGateway({required this.platform});
 
-  bool get _supportsMedia =>
+  static bool supportsMediaFor(String platform) =>
       platform == 'android' || platform == 'ios' || platform == 'macos';
 
-  bool get _requiresAllFiles => platform == 'android';
+  static bool requiresAllFilesFor(String platform) => platform == 'android';
+
+  static Uri? systemSettingsUriFor(String platform) {
+    if (platform == 'macos') {
+      return Uri.parse(
+        'x-apple.systempreferences:com.apple.preference.security?Privacy_Photos',
+      );
+    }
+    return null;
+  }
+
+  bool get _supportsMedia => supportsMediaFor(platform);
+
+  bool get _requiresAllFiles => requiresAllFilesFor(platform);
 
   @override
   Future<AppPermissionSnapshot> checkPermissions() async {
@@ -66,6 +80,11 @@ class PlatformAppPermissionGateway implements AppPermissionGateway {
 
   @override
   Future<void> openSystemSettings() async {
+    final systemSettingsUri = systemSettingsUriFor(platform);
+    if (systemSettingsUri != null) {
+      await launchUrl(systemSettingsUri, mode: LaunchMode.externalApplication);
+      return;
+    }
     await openAppSettings();
   }
 

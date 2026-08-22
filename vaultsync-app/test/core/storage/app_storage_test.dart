@@ -23,6 +23,17 @@ void main() {
     expect(await storage.loadServerAddress(), 'http://192.168.1.10:8080');
   });
 
+  test('AppStorage saves app theme without clearing it on sign out', () async {
+    SharedPreferences.setMockInitialValues({});
+    const storage = AppStorage();
+
+    expect(await storage.loadAppTheme(), isNull);
+    await storage.saveAppTheme('ink_bamboo');
+    await storage.clearLocalSession();
+
+    expect(await storage.loadAppTheme(), 'ink_bamboo');
+  });
+
   test('AppStorage saves auth token and registered device id', () async {
     SharedPreferences.setMockInitialValues({});
     const storage = AppStorage();

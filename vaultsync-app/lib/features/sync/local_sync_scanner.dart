@@ -197,6 +197,10 @@ String _replaceFileExtension(String path, String extension) {
 }
 
 bool _isWechatContentPath(String path) {
+  return isWechatContentRelativePath(path);
+}
+
+bool isWechatContentRelativePath(String path) {
   final segments = path
       .replaceAll('\\', '/')
       .split('/')

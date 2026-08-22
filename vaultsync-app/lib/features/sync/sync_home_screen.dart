@@ -33,6 +33,8 @@ import 'sync_service.dart';
 import 'wechat_folder_discovery.dart';
 
 const _androidDownloadsPath = '/storage/emulated/0/Download';
+// 微信私有媒体的可用性仍不足以支撑稳定的用户承诺，暂时只保留历史数据兼容。
+const _wechatBackupFeatureEnabled = false;
 
 bool _isWechatBackupSource(String sourceType) {
   return sourceType == 'wechat' || sourceType == 'wechat_archive';
@@ -135,11 +137,14 @@ class SyncHomeScreen extends StatefulWidget {
 class _SyncHomeScreenState extends State<SyncHomeScreen>
     with WidgetsBindingObserver {
   static const _androidSyncKeepAlive = AndroidSyncKeepAlive();
+  static const _slowServerThreshold = Duration(milliseconds: 1200);
+  static const _remoteBackupLoadConcurrency = 3;
   late Future<_SyncHomeData> _homeFuture;
   _SyncHomeData? _cachedHomeData;
   String _selectedDeviceFilterId = _DeviceFilterOption.currentId;
   Timer? _initialAutoSyncTimer;
   Timer? _autoSyncTimer;
+  Timer? _slowServerTimer;
   LocalSyncMonitor? _localSyncMonitor;
   final Set<String> _pendingMonitorRootIds = {};
   final Set<String> _activeScanRootIds = {};
@@ -151,7 +156,10 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
   var _isPulling = false;
   var _isAutoSyncing = false;
   var _isAutoCleaningMedia = false;
+  var _isSyncStatusOpen = false;
   var _hasReconciledUploadProgress = false;
+  var _loadGeneration = 0;
+  var _showSlowServerNotice = false;
   late AppLifecycleState _appLifecycleState;
 
   @override
@@ -160,7 +168,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     WidgetsBinding.instance.addObserver(this);
     _appLifecycleState =
         WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
-    _homeFuture = _loadAndCacheHomeData();
+    _homeFuture = _loadAndCacheHomeData(bootstrapLocal: true);
     _startAutoSync();
   }
 
@@ -177,6 +185,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     WidgetsBinding.instance.removeObserver(this);
     _initialAutoSyncTimer?.cancel();
     _autoSyncTimer?.cancel();
+    _slowServerTimer?.cancel();
     unawaited(_localSyncMonitor?.stop());
     unawaited(_androidSyncKeepAlive.stop(_devicePlatform));
     super.dispose();
@@ -226,18 +235,6 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     if (token == null || token.isEmpty) {
       throw Exception('登录状态已失效');
     }
-    final uploadExecutor = widget.uploadExecutor;
-    final progressReconciler = uploadExecutor is UploadSessionProgressReconciler
-        ? uploadExecutor as UploadSessionProgressReconciler
-        : null;
-    if (!_hasReconciledUploadProgress && progressReconciler != null) {
-      _hasReconciledUploadProgress = true;
-      try {
-        await progressReconciler.reconcilePendingUploadProgress();
-      } catch (error) {
-        debugPrint('VaultSync upload progress reconciliation failed: $error');
-      }
-    }
     final currentDeviceId = await widget.storage.loadDeviceId();
     final currentDeviceName = widget.storage is CurrentDeviceInfoStore
         ? await (widget.storage as CurrentDeviceInfoStore).loadDeviceName()
@@ -247,7 +244,6 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
         ? widget.currentDeviceDisplayName!.trim()
         : currentDeviceName;
     final roots = await widget.syncRoots.listSyncRoots(token: token);
-    final remoteBackupEntries = await _loadRemoteBackupEntries(token, roots);
     final mappings = await widget.syncRootMappings.loadSyncRootMappings();
     final uploadTasks = await widget.uploadTasks.loadUploadTasks();
     final autoSyncStatus =
@@ -270,18 +266,249 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
       mappings: prunedState.mappings,
       uploadTasks: prunedState.uploadTasks,
       issues: issues,
-      remoteBackupEntries: remoteBackupEntries,
+      remoteBackupEntries: _remoteEntriesForCurrentRoots(roots),
       autoSyncStatus: autoSyncStatus,
       operationStatuses: operationStatuses,
       currentDeviceId: currentDeviceId ?? '',
       currentDeviceName: currentDeviceDisplayName ?? '',
+      remoteContentLoading: _canLoadRemoteBackups && roots.isNotEmpty,
     );
   }
 
-  Future<_SyncHomeData> _loadAndCacheHomeData() async {
-    final data = await _loadHomeData();
+  Future<_SyncHomeData> _loadAndCacheHomeData({
+    bool bootstrapLocal = false,
+  }) async {
+    final generation = ++_loadGeneration;
+    _scheduleSlowServerNotice(generation);
+    if (bootstrapLocal) {
+      try {
+        final localData = await _loadLocalHomeData();
+        if (generation == _loadGeneration) {
+          _cachedHomeData = localData;
+          if (mounted) {
+            setState(() {});
+          }
+        }
+      } catch (error) {
+        debugPrint('VaultSync local home bootstrap failed: $error');
+      }
+    }
+
+    late final _SyncHomeData data;
+    try {
+      data = await _loadHomeData();
+    } catch (_) {
+      if (generation == _loadGeneration && _cachedHomeData != null) {
+        _cachedHomeData = _cachedHomeData!.copyWith(
+          remoteContentLoading: false,
+        );
+      }
+      _finishBackgroundRefresh(generation);
+      rethrow;
+    }
+    if (generation != _loadGeneration) {
+      return data;
+    }
     _cachedHomeData = data;
+    _reconcileUploadProgressInBackground();
+    if (data.remoteContentLoading) {
+      unawaited(_loadRemoteBackupsInBackground(data, generation));
+    } else {
+      _finishBackgroundRefresh(generation);
+    }
     return data;
+  }
+
+  bool get _canLoadRemoteBackups =>
+      widget.remoteBackups != null && widget.remoteMetadataDecrypter != null;
+
+  Future<_SyncHomeData> _loadLocalHomeData() async {
+    final currentDeviceId = await widget.storage.loadDeviceId() ?? '';
+    final currentDeviceName = widget.storage is CurrentDeviceInfoStore
+        ? await (widget.storage as CurrentDeviceInfoStore).loadDeviceName() ??
+              ''
+        : '';
+    final displayName =
+        widget.currentDeviceDisplayName?.trim().isNotEmpty == true
+        ? widget.currentDeviceDisplayName!.trim()
+        : currentDeviceName;
+    final mappings = await widget.syncRootMappings.loadSyncRootMappings();
+    final uploadTasks = await widget.uploadTasks.loadUploadTasks();
+    final issues = await widget.syncIssues?.loadSyncIssues() ?? const [];
+    final autoSyncStatus =
+        await widget.autoSyncStatus?.loadAutoSyncStatus() ??
+        const AutoSyncStatus();
+    final operationStatuses =
+        await _operationStatusStore?.loadSyncOperationStatuses() ?? const [];
+    final roots = [
+      for (final mapping in mappings)
+        SyncRoot(
+          id: mapping.syncRootId,
+          userId: '',
+          deviceId: currentDeviceId,
+          deviceName: displayName,
+          encryptedPath: mapping.encryptedPath,
+          encryptionEnabled: mapping.encryptionEnabled,
+          cleanupPolicy: mapping.cleanupPolicy,
+          archivePath: mapping.archivePath,
+          createdAt: '',
+        ),
+    ];
+    return _SyncHomeData(
+      roots: roots,
+      mappings: mappings,
+      uploadTasks: uploadTasks,
+      issues: issues,
+      remoteBackupEntries: _remoteEntriesForCurrentRoots(roots),
+      autoSyncStatus: autoSyncStatus,
+      operationStatuses: operationStatuses,
+      currentDeviceId: currentDeviceId,
+      currentDeviceName: displayName,
+      isLocalSnapshot: true,
+      remoteContentLoading: true,
+    );
+  }
+
+  Map<String, List<RemoteBackupEntry>> _remoteEntriesForCurrentRoots(
+    List<SyncRoot> roots,
+  ) {
+    final previous = _cachedHomeData?.remoteBackupEntries ?? const {};
+    return {
+      for (final root in roots)
+        if (previous.containsKey(root.id)) root.id: previous[root.id]!,
+    };
+  }
+
+  void _scheduleSlowServerNotice(int generation) {
+    _slowServerTimer?.cancel();
+    _showSlowServerNotice = false;
+    _slowServerTimer = Timer(_slowServerThreshold, () {
+      if (!mounted || generation != _loadGeneration) {
+        return;
+      }
+      setState(() => _showSlowServerNotice = true);
+    });
+  }
+
+  void _finishBackgroundRefresh(int generation) {
+    if (generation != _loadGeneration) {
+      return;
+    }
+    _slowServerTimer?.cancel();
+    _slowServerTimer = null;
+    if (mounted && _showSlowServerNotice) {
+      setState(() => _showSlowServerNotice = false);
+    } else {
+      _showSlowServerNotice = false;
+    }
+  }
+
+  void _reconcileUploadProgressInBackground() {
+    final uploadExecutor = widget.uploadExecutor;
+    final reconciler = uploadExecutor is UploadSessionProgressReconciler
+        ? uploadExecutor as UploadSessionProgressReconciler
+        : null;
+    if (_hasReconciledUploadProgress || reconciler == null) {
+      return;
+    }
+    _hasReconciledUploadProgress = true;
+    unawaited(() async {
+      try {
+        final changedCount = await reconciler.reconcilePendingUploadProgress();
+        if (changedCount <= 0 || !mounted) {
+          return;
+        }
+        final tasks = await widget.uploadTasks.loadUploadTasks();
+        if (!mounted || _cachedHomeData == null) {
+          return;
+        }
+        setState(() {
+          _cachedHomeData = _cachedHomeData!.copyWith(uploadTasks: tasks);
+        });
+      } catch (error) {
+        debugPrint('VaultSync upload progress reconciliation failed: $error');
+      }
+    }());
+  }
+
+  Future<void> _loadRemoteBackupsInBackground(
+    _SyncHomeData baseData,
+    int generation,
+  ) async {
+    final token = await widget.storage.loadAuthToken();
+    if (token == null || token.isEmpty) {
+      _finishBackgroundRefresh(generation);
+      return;
+    }
+    final entriesByRoot = Map<String, List<RemoteBackupEntry>>.from(
+      baseData.remoteBackupEntries,
+    );
+    final failedRootIds = <String>{};
+    for (
+      var offset = 0;
+      offset < baseData.roots.length;
+      offset += _remoteBackupLoadConcurrency
+    ) {
+      final end = (offset + _remoteBackupLoadConcurrency).clamp(
+        0,
+        baseData.roots.length,
+      );
+      final batch = baseData.roots.sublist(offset, end);
+      final results = await Future.wait([
+        for (final root in batch) _loadRemoteBackupRoot(token, root),
+      ]);
+      for (var index = 0; index < batch.length; index += 1) {
+        final result = results[index];
+        if (result != null) {
+          entriesByRoot[batch[index].id] = result;
+        } else {
+          failedRootIds.add(batch[index].id);
+        }
+      }
+      if (!mounted || generation != _loadGeneration) {
+        return;
+      }
+      setState(() {
+        final currentData = _cachedHomeData ?? baseData;
+        _cachedHomeData = currentData.copyWith(
+          remoteBackupEntries: Map.unmodifiable(entriesByRoot),
+          remoteContentLoading: end < baseData.roots.length,
+          remoteContentError: failedRootIds.isEmpty
+              ? ''
+              : '部分服务器文件加载失败，已保留其他可用内容',
+        );
+      });
+    }
+    _finishBackgroundRefresh(generation);
+  }
+
+  Future<List<RemoteBackupEntry>?> _loadRemoteBackupRoot(
+    String token,
+    SyncRoot root,
+  ) async {
+    try {
+      final gateway = widget.remoteBackups!;
+      final decrypter = widget.remoteMetadataDecrypter!;
+      final page = await gateway.listRemoteBackupObjects(
+        token: token,
+        syncRootId: root.id,
+        limit: 500,
+      );
+      final entries = <RemoteBackupEntry>[];
+      for (final object in page.items) {
+        final entry = await decrypter.decrypt(object);
+        entries.add(
+          entry.withPayloadMetadata(
+            encryptedName: object.encryptedName,
+            metadataJson: object.metadataJson,
+          ),
+        );
+      }
+      return entries;
+    } catch (error) {
+      debugPrint('VaultSync remote backup load failed [${root.id}]: $error');
+      return null;
+    }
   }
 
   SyncOperationStatusStore? get _operationStatusStore {
@@ -493,37 +720,6 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     return null;
   }
 
-  Future<Map<String, List<RemoteBackupEntry>>> _loadRemoteBackupEntries(
-    String token,
-    List<SyncRoot> roots,
-  ) async {
-    final gateway = widget.remoteBackups;
-    final decrypter = widget.remoteMetadataDecrypter;
-    if (gateway == null || decrypter == null) {
-      return const {};
-    }
-    final entriesByRoot = <String, List<RemoteBackupEntry>>{};
-    for (final root in roots) {
-      final page = await gateway.listRemoteBackupObjects(
-        token: token,
-        syncRootId: root.id,
-        limit: 500,
-      );
-      final entries = <RemoteBackupEntry>[];
-      for (final object in page.items) {
-        final entry = await decrypter.decrypt(object);
-        entries.add(
-          entry.withPayloadMetadata(
-            encryptedName: object.encryptedName,
-            metadataJson: object.metadataJson,
-          ),
-        );
-      }
-      entriesByRoot[root.id] = entries;
-    }
-    return entriesByRoot;
-  }
-
   Future<void> _addHistory({
     required String type,
     required String result,
@@ -552,6 +748,9 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
   }
 
   void _reloadSyncRoots() {
+    if (_isSyncStatusOpen) {
+      return;
+    }
     setState(() {
       _homeFuture = _loadAndCacheHomeData();
     });
@@ -567,6 +766,14 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
   }
 
   Future<void> _openCreateSyncRootDialog({bool wechatOnly = false}) async {
+    if (wechatOnly && !_wechatBackupFeatureEnabled) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('微信备份功能暂时下架，已有备份仍会保留。')));
+      }
+      return;
+    }
     final existingWechat = wechatOnly
         ? await _currentDeviceSpecialRoot(
             (root) => root.encryptedPath.startsWith('wechat-backup:v1:'),
@@ -1038,11 +1245,19 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
       }
       if (root.encryptedPath.startsWith('wechat-backup:v1:') &&
           !await Directory(localPath).exists()) {
-        throw Exception('无法访问微信目录：$localPath。请重新选择目录并授予 VaultSync 访问权限');
+        throw Exception(
+          _wechatBackupFeatureEnabled
+              ? '无法访问微信目录：$localPath。请重新选择目录并授予 VaultSync 访问权限'
+              : '无法访问历史微信目录：$localPath。微信备份功能已下架，已有服务器备份仍会保留。',
+        );
       }
     }
     if (missingWechat.isNotEmpty) {
-      throw Exception('微信目录尚未绑定。请点击“更多”→“微信文件备份”，自动查找或选择微信目录后保存');
+      throw Exception(
+        _wechatBackupFeatureEnabled
+            ? '微信目录尚未绑定。请点击“更多”→“微信文件备份”，自动查找或选择微信目录后保存'
+            : '历史微信目录未绑定。微信备份功能已下架，已有服务器备份仍会保留。',
+      );
     }
   }
 
@@ -1329,14 +1544,14 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     }
   }
 
-  Future<void> _openMediaCleanupConfirmationPage() async {
+  Future<bool> _openMediaCleanupConfirmationPage() async {
     try {
       final data = await _loadHomeData();
       if (!mounted) {
-        return;
+        return false;
       }
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(
+      final changed = await Navigator.of(context).push<bool>(
+        MaterialPageRoute<bool>(
           builder: (context) => _MediaCleanupConfirmationPage(
             data: data,
             onConfirmCleanup: _confirmMediaCleanupTaskIds,
@@ -1345,14 +1560,18 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
         ),
       );
       if (!mounted) {
-        return;
+        return changed == true;
       }
-      _reloadSyncRoots();
+      if (changed == true) {
+        _reloadSyncRoots();
+      }
+      return changed == true;
     } catch (error) {
       if (!mounted) {
-        return;
+        return false;
       }
       _showErrorSnackBar(error);
+      return false;
     }
   }
 
@@ -1799,30 +2018,39 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
       if (!mounted) {
         return;
       }
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (context) => _SyncStatusPage(
-            initialData: initialData,
-            loadData: _loadHomeData,
-            retryFailedUploads: _retryFailedUploads,
-            retryCleanupPending: _retryCleanupPending,
-            retryCleanupTask: _retryCleanupTask,
-            ignoreCleanupTask: _ignoreCleanupTask,
-            openMediaCleanupConfirmationPage: _openMediaCleanupConfirmationPage,
-            enqueueConflictIssue: _enqueueConflictIssue,
-            enqueueConflictIssues: _enqueueConflictIssues,
-            resolveIssue: _markIssueResolved,
-            retryEnabled: widget.uploadExecutor != null,
-            autoSyncEnabled: widget.autoSyncEnabled,
-            uploadProgress: widget.uploadProgress,
-            downloadProgress: widget.downloadProgress,
+      _isSyncStatusOpen = true;
+      late final bool? changed;
+      try {
+        changed = await Navigator.of(context).push<bool>(
+          MaterialPageRoute<bool>(
+            builder: (context) => _SyncStatusPage(
+              initialData: initialData,
+              loadData: _loadHomeData,
+              retryFailedUploads: _retryFailedUploads,
+              retryCleanupPending: _retryCleanupPending,
+              retryCleanupTask: _retryCleanupTask,
+              ignoreCleanupTask: _ignoreCleanupTask,
+              openMediaCleanupConfirmationPage:
+                  _openMediaCleanupConfirmationPage,
+              enqueueConflictIssue: _enqueueConflictIssue,
+              enqueueConflictIssues: _enqueueConflictIssues,
+              resolveIssue: _markIssueResolved,
+              retryEnabled: widget.uploadExecutor != null,
+              autoSyncEnabled: widget.autoSyncEnabled,
+              uploadProgress: widget.uploadProgress,
+              downloadProgress: widget.downloadProgress,
+            ),
           ),
-        ),
-      );
+        );
+      } finally {
+        _isSyncStatusOpen = false;
+      }
       if (!mounted) {
         return;
       }
-      _reloadSyncRoots();
+      if (changed == true) {
+        _reloadSyncRoots();
+      }
     } catch (error) {
       if (!mounted) {
         return;
@@ -2063,14 +2291,15 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
                     label: '相册备份',
                   ),
                 ),
-              const PopupMenuItem(
-                key: ValueKey('open_wechat_backup_button'),
-                value: _HomeAction.wechatBackup,
-                child: _HomeActionLabel(
-                  icon: Icons.chat_bubble_outline,
-                  label: '微信文件备份',
+              if (_wechatBackupFeatureEnabled)
+                const PopupMenuItem(
+                  key: ValueKey('open_wechat_backup_button'),
+                  value: _HomeAction.wechatBackup,
+                  child: _HomeActionLabel(
+                    icon: Icons.chat_bubble_outline,
+                    label: '微信文件备份',
+                  ),
                 ),
-              ),
               const PopupMenuItem(
                 key: ValueKey('open_sync_history_button'),
                 value: _HomeAction.history,
@@ -2113,17 +2342,19 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
       body: FutureBuilder<_SyncHomeData>(
         future: _homeFuture,
         builder: (context, snapshot) {
-          final cachedData = snapshot.data ?? _cachedHomeData;
-          final isRefreshing = snapshot.connectionState != ConnectionState.done;
+          final cachedData = _cachedHomeData ?? snapshot.data;
+          final isRefreshing =
+              snapshot.connectionState != ConnectionState.done ||
+              (cachedData?.remoteContentLoading ?? false);
           if (isRefreshing && cachedData == null) {
-            return const Center(child: CircularProgressIndicator());
+            return const _SyncHomeLoadingSkeleton();
           }
           if (snapshot.hasError) {
             final error = snapshot.error;
             final message = userReadableErrorMessage(
               error ?? Exception('加载同步主页失败'),
             );
-            if (cachedData != null) {
+            if (cachedData != null && cachedData.roots.isNotEmpty) {
               return _buildHomeContent(
                 context,
                 cachedData,
@@ -2145,7 +2376,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
           }
           return _buildHomeContent(
             context,
-            cachedData ?? const _SyncHomeData(),
+            cachedData ?? _SyncHomeData(),
             isRefreshing: isRefreshing,
           );
         },
@@ -2182,6 +2413,14 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     final selectedFilterId = _resolveSelectedDeviceFilterId(filterOptions);
     final rootViews = _filterRootViews(allRootViews, selectedFilterId);
     final children = <Widget>[
+      if (_showSlowServerNotice) ...[
+        _SlowServerNotice(showingLocalData: data.isLocalSnapshot),
+        const SizedBox(height: 10),
+      ],
+      if (data.remoteContentError.isNotEmpty) ...[
+        _InlineSyncWarning(message: data.remoteContentError),
+        const SizedBox(height: 10),
+      ],
       if (refreshError.isNotEmpty) ...[
         _InlineSyncError(message: refreshError),
         const SizedBox(height: 12),
@@ -2198,7 +2437,9 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
         ),
         const SizedBox(height: 12),
       ],
-      if (rootViews.isEmpty)
+      if (rootViews.isEmpty && data.isLocalSnapshot)
+        const _WaitingForServerDirectories()
+      else if (rootViews.isEmpty)
         Padding(
           padding: EdgeInsets.all(roots.isEmpty ? 48 : 16),
           child: Center(
@@ -2229,7 +2470,10 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
             onScan: rootView.canRunLocalSync
                 ? () => _scanLocalFiles(syncRootId: rootView.root.id)
                 : null,
-            onBind: rootView.isCurrentDeviceRoot
+            onBind:
+                rootView.isCurrentDeviceRoot &&
+                    (!rootView.isWechatBackupRoot ||
+                        _wechatBackupFeatureEnabled)
                 ? rootView.isWechatBackupRoot
                       ? () => _openCreateSyncRootDialog(wechatOnly: true)
                       : () => _bindLocalFolder(rootView)
@@ -2680,7 +2924,8 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
   Future<void> _openManageSyncRootDialog(_SyncRootViewData rootView) async {
     // WeChat roots use the dedicated dialog so automatic discovery and the
     // source classification are preserved when a mapping is missing.
-    if (rootView.isWechatBackupRoot &&
+    if (_wechatBackupFeatureEnabled &&
+        rootView.isWechatBackupRoot &&
         (rootView.mapping == null ||
             rootView.mapping!.localPath.trim().isEmpty)) {
       await _openCreateSyncRootDialog(wechatOnly: true);
@@ -2966,8 +3211,11 @@ class _SyncHomeData {
   final List<LocalSyncOperationStatus> operationStatuses;
   final String currentDeviceId;
   final String currentDeviceName;
+  final bool isLocalSnapshot;
+  final bool remoteContentLoading;
+  final String remoteContentError;
 
-  const _SyncHomeData({
+  _SyncHomeData({
     this.roots = const [],
     this.mappings = const [],
     this.uploadTasks = const [],
@@ -2977,7 +3225,40 @@ class _SyncHomeData {
     this.operationStatuses = const [],
     this.currentDeviceId = '',
     this.currentDeviceName = '',
+    this.isLocalSnapshot = false,
+    this.remoteContentLoading = false,
+    this.remoteContentError = '',
   });
+
+  _SyncHomeData copyWith({
+    List<SyncRoot>? roots,
+    List<LocalSyncRootMapping>? mappings,
+    List<LocalUploadTask>? uploadTasks,
+    List<LocalSyncIssue>? issues,
+    Map<String, List<RemoteBackupEntry>>? remoteBackupEntries,
+    AutoSyncStatus? autoSyncStatus,
+    List<LocalSyncOperationStatus>? operationStatuses,
+    String? currentDeviceId,
+    String? currentDeviceName,
+    bool? isLocalSnapshot,
+    bool? remoteContentLoading,
+    String? remoteContentError,
+  }) {
+    return _SyncHomeData(
+      roots: roots ?? this.roots,
+      mappings: mappings ?? this.mappings,
+      uploadTasks: uploadTasks ?? this.uploadTasks,
+      issues: issues ?? this.issues,
+      remoteBackupEntries: remoteBackupEntries ?? this.remoteBackupEntries,
+      autoSyncStatus: autoSyncStatus ?? this.autoSyncStatus,
+      operationStatuses: operationStatuses ?? this.operationStatuses,
+      currentDeviceId: currentDeviceId ?? this.currentDeviceId,
+      currentDeviceName: currentDeviceName ?? this.currentDeviceName,
+      isLocalSnapshot: isLocalSnapshot ?? this.isLocalSnapshot,
+      remoteContentLoading: remoteContentLoading ?? this.remoteContentLoading,
+      remoteContentError: remoteContentError ?? this.remoteContentError,
+    );
+  }
 
   List<LocalSyncIssue> get openIssues {
     return [
@@ -2986,30 +3267,30 @@ class _SyncHomeData {
     ];
   }
 
-  List<_SyncRootViewData> get rootViews {
-    return [
-      for (final root in roots)
-        _SyncRootViewData(
-          root: root,
-          mapping: _mappingFor(root.id),
-          tasks: [
-            for (final task in uploadTasks)
-              if (task.syncRootId == root.id) task,
-          ],
-          issues: [
-            for (final issue in openIssues)
-              if (issue.syncRootId == root.id) issue,
-          ],
-          remoteBackups: remoteBackupEntries[root.id] ?? const [],
-          operations: [
-            for (final operation in operationStatuses)
-              if (operation.syncRootId == root.id) operation,
-          ],
-          currentDeviceId: currentDeviceId,
-          currentDeviceName: currentDeviceName,
-        ),
-    ];
-  }
+  List<_SyncRootViewData>? _rootViewsCache;
+
+  List<_SyncRootViewData> get rootViews => _rootViewsCache ??= [
+    for (final root in roots)
+      _SyncRootViewData(
+        root: root,
+        mapping: _mappingFor(root.id),
+        tasks: [
+          for (final task in uploadTasks)
+            if (task.syncRootId == root.id) task,
+        ],
+        issues: [
+          for (final issue in openIssues)
+            if (issue.syncRootId == root.id) issue,
+        ],
+        remoteBackups: remoteBackupEntries[root.id] ?? const [],
+        operations: [
+          for (final operation in operationStatuses)
+            if (operation.syncRootId == root.id) operation,
+        ],
+        currentDeviceId: currentDeviceId,
+        currentDeviceName: currentDeviceName,
+      ),
+  ];
 
   int get pendingTaskCount {
     return uploadTasks.where((task) => task.status == 'pending').length;
@@ -3174,7 +3455,7 @@ class _SyncStatusPage extends StatefulWidget {
   final Future<void> Function() retryCleanupPending;
   final Future<void> Function(String taskId) retryCleanupTask;
   final Future<void> Function(String taskId) ignoreCleanupTask;
-  final Future<void> Function() openMediaCleanupConfirmationPage;
+  final Future<bool> Function() openMediaCleanupConfirmationPage;
   final Future<void> Function(LocalSyncIssue issue) enqueueConflictIssue;
   final Future<_BatchIssueActionResult> Function(List<LocalSyncIssue> issues)
   enqueueConflictIssues;
@@ -3221,6 +3502,7 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
   late _SyncHomeData _data;
   var _isRetrying = false;
   var _isRefreshing = false;
+  var _hasChanges = false;
   String _refreshError = '';
   UploadProgressPhase _lastUploadPhase = UploadProgressPhase.idle;
   DownloadProgressPhase _lastDownloadPhase = DownloadProgressPhase.idle;
@@ -3320,6 +3602,7 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
     });
     try {
       await widget.retryFailedUploads(syncRootId: syncRootId);
+      _hasChanges = true;
       if (!mounted) {
         return;
       }
@@ -3342,6 +3625,7 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
     });
     try {
       await widget.retryCleanupPending();
+      _hasChanges = true;
       if (!mounted) {
         return;
       }
@@ -3364,6 +3648,7 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
     });
     try {
       await widget.retryCleanupTask(taskId);
+      _hasChanges = true;
       if (!mounted) {
         return;
       }
@@ -3386,6 +3671,7 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
     });
     try {
       await widget.ignoreCleanupTask(taskId);
+      _hasChanges = true;
       if (!mounted) {
         return;
       }
@@ -3400,7 +3686,11 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
   }
 
   Future<void> _openMediaCleanupPage() async {
-    await widget.openMediaCleanupConfirmationPage();
+    final changed = await widget.openMediaCleanupConfirmationPage();
+    if (!changed) {
+      return;
+    }
+    _hasChanges = true;
     if (!mounted) {
       return;
     }
@@ -3418,8 +3708,8 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
         break;
       }
     }
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
         builder: (context) => _SyncIssueDetailPage(
           issue: issue,
           rootName: rootName,
@@ -3428,6 +3718,10 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
         ),
       ),
     );
+    if (changed != true) {
+      return;
+    }
+    _hasChanges = true;
     if (!mounted) {
       return;
     }
@@ -3454,6 +3748,9 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
     var failedCount = 0;
     try {
       final result = await widget.enqueueConflictIssues(conflictIssues);
+      if (result.successCount > 0) {
+        _hasChanges = true;
+      }
       successCount = result.successCount;
       failedCount = result.failedCount;
       if (!mounted) {
@@ -3508,6 +3805,9 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
           failedCount += 1;
         }
       }
+      if (successCount > 0) {
+        _hasChanges = true;
+      }
       if (!mounted) {
         return;
       }
@@ -3560,80 +3860,95 @@ class _SyncStatusPageState extends State<_SyncStatusPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('同步状态'),
-        actions: [
-          IconButton(
-            key: const ValueKey('refresh_sync_status_button'),
-            tooltip: '刷新状态',
-            onPressed: _isRefreshing ? null : _refresh,
-            icon: _isRefreshing
-                ? const SizedBox.square(
-                    dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.refresh),
+    return PopScope<bool>(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) {
+          Navigator.of(context).pop(_hasChanges);
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('同步状态'),
+          automaticallyImplyLeading: false,
+          leading: IconButton(
+            key: const ValueKey('close_sync_status_button'),
+            tooltip: '返回同步',
+            onPressed: () => Navigator.of(context).pop(_hasChanges),
+            icon: const Icon(Icons.arrow_back),
           ),
-        ],
-      ),
-      body: Stack(
-        children: [
-          ListView(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-            children: [
-              if (widget.uploadProgress != null ||
-                  widget.downloadProgress != null)
-                _SyncTransferProgressPanel(
-                  uploadProgress: widget.uploadProgress,
-                  downloadProgress: widget.downloadProgress,
-                ),
-              if (_refreshError.isNotEmpty) ...[
-                _InlineSyncError(message: _refreshError),
-                const SizedBox(height: 12),
-              ],
-              _SyncStatusCenter(
-                data: _data,
-                retryEnabled: widget.retryEnabled && !_isRetrying,
-                onRetryFailed: () => _retryFailed(),
-                onRetryCleanup: _isRetrying ? null : _retryCleanup,
-                autoSyncEnabled: widget.autoSyncEnabled,
-              ),
-              const SizedBox(height: 12),
-              _FailedUploadTaskList(
-                data: _data,
-                retryEnabled: widget.retryEnabled && !_isRetrying,
-                onRetryRoot: (syncRootId) =>
-                    _retryFailed(syncRootId: syncRootId),
-              ),
-              const SizedBox(height: 12),
-              _CleanupPendingTaskList(
-                data: _data,
-                onOpenMediaCleanupPage: _openMediaCleanupPage,
-                onRetryCleanup: _isRetrying ? null : _retryCleanup,
-                onRetryOne: _isRetrying ? null : _retryOneCleanup,
-                onIgnoreOne: _isRetrying ? null : _ignoreOneCleanup,
-              ),
-              const SizedBox(height: 12),
-              _OpenSyncIssueList(
-                data: _data,
-                batchEnabled: !_isRetrying,
-                onOpenIssue: (issue) => _openIssueDetail(_data, issue),
-                onEnqueueAllConflicts: () =>
-                    _enqueueAllConflicts(_data.openIssues),
-                onResolveAllConflicts: () =>
-                    _resolveAllConflicts(_data.openIssues),
-              ),
-            ],
-          ),
-          if (_isRefreshing)
-            const Positioned(
-              left: 0,
-              right: 0,
-              top: 0,
-              child: LinearProgressIndicator(minHeight: 2),
+          actions: [
+            IconButton(
+              key: const ValueKey('refresh_sync_status_button'),
+              tooltip: '刷新状态',
+              onPressed: _isRefreshing ? null : _refresh,
+              icon: _isRefreshing
+                  ? const SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh),
             ),
-        ],
+          ],
+        ),
+        body: Stack(
+          children: [
+            ListView(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+              children: [
+                if (widget.uploadProgress != null ||
+                    widget.downloadProgress != null)
+                  _SyncTransferProgressPanel(
+                    uploadProgress: widget.uploadProgress,
+                    downloadProgress: widget.downloadProgress,
+                  ),
+                if (_refreshError.isNotEmpty) ...[
+                  _InlineSyncError(message: _refreshError),
+                  const SizedBox(height: 12),
+                ],
+                _SyncStatusCenter(
+                  data: _data,
+                  retryEnabled: widget.retryEnabled && !_isRetrying,
+                  onRetryFailed: () => _retryFailed(),
+                  onRetryCleanup: _isRetrying ? null : _retryCleanup,
+                  autoSyncEnabled: widget.autoSyncEnabled,
+                ),
+                const SizedBox(height: 12),
+                _FailedUploadTaskList(
+                  data: _data,
+                  retryEnabled: widget.retryEnabled && !_isRetrying,
+                  onRetryRoot: (syncRootId) =>
+                      _retryFailed(syncRootId: syncRootId),
+                ),
+                const SizedBox(height: 12),
+                _CleanupPendingTaskList(
+                  data: _data,
+                  onOpenMediaCleanupPage: _openMediaCleanupPage,
+                  onRetryCleanup: _isRetrying ? null : _retryCleanup,
+                  onRetryOne: _isRetrying ? null : _retryOneCleanup,
+                  onIgnoreOne: _isRetrying ? null : _ignoreOneCleanup,
+                ),
+                const SizedBox(height: 12),
+                _OpenSyncIssueList(
+                  data: _data,
+                  batchEnabled: !_isRetrying,
+                  onOpenIssue: (issue) => _openIssueDetail(_data, issue),
+                  onEnqueueAllConflicts: () =>
+                      _enqueueAllConflicts(_data.openIssues),
+                  onResolveAllConflicts: () =>
+                      _resolveAllConflicts(_data.openIssues),
+                ),
+              ],
+            ),
+            if (_isRefreshing)
+              const Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                child: LinearProgressIndicator(minHeight: 2),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -4063,6 +4378,170 @@ Color _uploadProgressColor(ColorScheme colorScheme, UploadProgressPhase phase) {
     UploadProgressPhase.completed => colorScheme.primary,
     _ => colorScheme.primary,
   };
+}
+
+class _SyncHomeLoadingSkeleton extends StatelessWidget {
+  const _SyncHomeLoadingSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Stack(
+      children: [
+        ListView(
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 88),
+          children: [
+            Text('正在加载同步目录', style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 6),
+            Text(
+              '正在读取本地状态并连接服务器',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 18),
+            for (var index = 0; index < 3; index += 1) ...[
+              _SyncRootSkeletonRow(color: colorScheme.surfaceContainerLow),
+              if (index != 2) const SizedBox(height: 10),
+            ],
+          ],
+        ),
+        const Positioned(
+          left: 0,
+          right: 0,
+          top: 0,
+          child: LinearProgressIndicator(minHeight: 2),
+        ),
+      ],
+    );
+  }
+}
+
+class _WaitingForServerDirectories extends StatelessWidget {
+  const _WaitingForServerDirectories();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Padding(
+      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 28),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox.square(
+            dimension: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SizedBox(width: 10),
+          Flexible(child: Text('正在获取服务器上的同步目录')),
+        ],
+      ),
+    );
+  }
+}
+
+class _SyncRootSkeletonRow extends StatelessWidget {
+  final Color color;
+
+  const _SyncRootSkeletonRow({required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 82,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(6),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                FractionallySizedBox(
+                  widthFactor: 0.42,
+                  child: Container(
+                    height: 12,
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.surfaceContainerHighest,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                FractionallySizedBox(
+                  widthFactor: 0.7,
+                  child: Container(
+                    height: 9,
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.surfaceContainerHighest,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SlowServerNotice extends StatelessWidget {
+  final bool showingLocalData;
+
+  const _SlowServerNotice({required this.showingLocalData});
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.cloud_sync_outlined, size: 18, color: colorScheme.primary),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            showingLocalData ? '服务器响应较慢，当前显示本地同步状态' : '服务器响应较慢，当前显示已加载的内容',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _InlineSyncWarning extends StatelessWidget {
+  final String message;
+
+  const _InlineSyncWarning({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.info_outline, size: 18, color: colorScheme.tertiary),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(message, style: Theme.of(context).textTheme.bodySmall),
+        ),
+      ],
+    );
+  }
 }
 
 class _InlineSyncError extends StatelessWidget {
@@ -4913,6 +5392,7 @@ class _MediaCleanupConfirmationPageState
   final Set<String> _completedTaskIds = {};
   final Set<String> _ignoredTaskIds = {};
   var _isConfirming = false;
+  var _hasChanges = false;
   var _page = 0;
 
   List<({String rootName, LocalUploadTask task})> get _mediaCleanupItems {
@@ -4938,6 +5418,7 @@ class _MediaCleanupConfirmationPageState
     }
     setState(() {
       _ignoredTaskIds.add(taskId);
+      _hasChanges = true;
     });
   }
 
@@ -4984,6 +5465,9 @@ class _MediaCleanupConfirmationPageState
           .length;
       setState(() {
         _completedTaskIds.addAll(result.cleanedTaskIds);
+        if (result.cleanedTaskIds.isNotEmpty) {
+          _hasChanges = true;
+        }
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -5018,84 +5502,101 @@ class _MediaCleanupConfirmationPageState
             start,
             math.min(start + _statusListPageSize, items.length),
           );
-    return Scaffold(
-      appBar: AppBar(title: const Text('待清理照片和视频')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
-        children: [
-          Text(
-            '这些是旧版本留下的待清理任务。无需逐项选择，一次确认即可批量提交；文件名编码异常的项目会继续保留。',
-            style: Theme.of(context).textTheme.bodyMedium,
+    return PopScope<bool>(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) {
+          Navigator.of(context).pop(_hasChanges);
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('待清理照片和视频'),
+          automaticallyImplyLeading: false,
+          leading: IconButton(
+            key: const ValueKey('close_media_cleanup_button'),
+            tooltip: '返回同步状态',
+            onPressed: () => Navigator.of(context).pop(_hasChanges),
+            icon: const Icon(Icons.arrow_back),
           ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _StatusBadge(label: '待清理总数 ${items.length}'),
-              const _StatusBadge(label: '一次确认批量处理'),
-            ],
-          ),
-          const SizedBox(height: 12),
-          if (items.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 32),
-              child: Center(child: Text('暂无待清理照片和视频')),
-            )
-          else
-            for (final item in pageItems)
-              Card(
-                key: ValueKey('media_cleanup_select_${item.task.id}'),
-                margin: const EdgeInsets.symmetric(vertical: 4),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: ListTile(
-                  leading: const Icon(Icons.photo_outlined),
-                  title: Text(item.task.relativePath),
-                  subtitle: Text(
-                    [
-                      item.rootName,
-                      item.task.assetMediaType.isEmpty
-                          ? '相册资源'
-                          : item.task.assetMediaType,
-                      if (item.task.lastError.trim().isNotEmpty)
-                        item.task.lastError.trim(),
-                    ].join(' · '),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
+          children: [
+            Text(
+              '这些是旧版本留下的待清理任务。无需逐项选择，一次确认即可批量提交；文件名编码异常的项目会继续保留。',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _StatusBadge(label: '待清理总数 ${items.length}'),
+                const _StatusBadge(label: '一次确认批量处理'),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (items.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 32),
+                child: Center(child: Text('暂无待清理照片和视频')),
+              )
+            else
+              for (final item in pageItems)
+                Card(
+                  key: ValueKey('media_cleanup_select_${item.task.id}'),
+                  margin: const EdgeInsets.symmetric(vertical: 4),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                  trailing: widget.onIgnoreOne == null
-                      ? null
-                      : IconButton(
-                          tooltip: '忽略此项',
-                          onPressed: _isConfirming
-                              ? null
-                              : () => _ignoreTask(item.task.id),
-                          icon: const Icon(Icons.visibility_off_outlined),
-                        ),
+                  child: ListTile(
+                    leading: const Icon(Icons.photo_outlined),
+                    title: Text(item.task.relativePath),
+                    subtitle: Text(
+                      [
+                        item.rootName,
+                        item.task.assetMediaType.isEmpty
+                            ? '相册资源'
+                            : item.task.assetMediaType,
+                        if (item.task.lastError.trim().isNotEmpty)
+                          item.task.lastError.trim(),
+                      ].join(' · '),
+                    ),
+                    trailing: widget.onIgnoreOne == null
+                        ? null
+                        : IconButton(
+                            tooltip: '忽略此项',
+                            onPressed: _isConfirming
+                                ? null
+                                : () => _ignoreTask(item.task.id),
+                            icon: const Icon(Icons.visibility_off_outlined),
+                          ),
+                  ),
                 ),
-              ),
-          _StatusListPager(
-            keyPrefix: 'media_cleanup',
-            page: page,
-            pageCount: pageCount,
-            onPrevious: () => setState(() => _page = page - 1),
-            onNext: () => setState(() => _page = page + 1),
+            _StatusListPager(
+              keyPrefix: 'media_cleanup',
+              page: page,
+              pageCount: pageCount,
+              onPrevious: () => setState(() => _page = page - 1),
+              onNext: () => setState(() => _page = page + 1),
+            ),
+          ],
+        ),
+        bottomNavigationBar: SafeArea(
+          minimum: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: FilledButton.icon(
+            key: const ValueKey('confirm_media_cleanup_button'),
+            onPressed: items.isEmpty || _isConfirming ? null : _confirmAll,
+            icon: _isConfirming
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.delete_outline),
+            label: Text(items.isEmpty ? '暂无待清理项目' : '全部清理 ${items.length} 个'),
           ),
-        ],
-      ),
-      bottomNavigationBar: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-        child: FilledButton.icon(
-          key: const ValueKey('confirm_media_cleanup_button'),
-          onPressed: items.isEmpty || _isConfirming ? null : _confirmAll,
-          icon: _isConfirming
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.delete_outline),
-          label: Text(items.isEmpty ? '暂无待清理项目' : '全部清理 ${items.length} 个'),
         ),
       ),
     );
@@ -5253,7 +5754,7 @@ class _SyncIssueDetailPageState extends State<_SyncIssueDetailPage> {
       if (!mounted) {
         return;
       }
-      Navigator.of(context).pop();
+      Navigator.of(context).pop(true);
     } catch (error) {
       if (!mounted) {
         return;
@@ -5743,6 +6244,29 @@ class _DeferredRootContentIndicator extends StatelessWidget {
   }
 }
 
+class _TreeIndexLoadingIndicator extends StatelessWidget {
+  const _TreeIndexLoadingIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 18),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SizedBox(width: 10),
+          Text('正在整理目录…'),
+        ],
+      ),
+    );
+  }
+}
+
 enum _SyncRootQuickAction { bind, scan, upload, retryFailed }
 
 class _RootMetaRow extends StatelessWidget {
@@ -5894,11 +6418,30 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
   List<_UnifiedFileRecord>? _cachedFilteredFiles;
   _UnifiedFolderSummaries? _cachedFolderSummaries;
   List<_UnifiedTreeEntry>? _cachedDirectoryEntries;
+  var _folderSummaryGeneration = 0;
 
   @override
   void initState() {
     super.initState();
     unawaited(_restorePreferences());
+    unawaited(_prepareFolderSummaries());
+  }
+
+  Future<void> _prepareFolderSummaries() async {
+    final generation = ++_folderSummaryGeneration;
+    if (!mounted || generation != _folderSummaryGeneration) {
+      return;
+    }
+    final files = widget.rootView.fileEntries;
+    final summaries = files.length <= 128
+        ? _UnifiedFolderSummaries.fromFiles(files, widget.rootView)
+        : await _UnifiedFolderSummaries.fromFilesAsync(files, widget.rootView);
+    if (!mounted || generation != _folderSummaryGeneration) {
+      return;
+    }
+    setState(() {
+      _cachedFolderSummaries = summaries;
+    });
   }
 
   Future<void> _restorePreferences() async {
@@ -5975,6 +6518,7 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
       _cachedFilteredFiles = null;
       _cachedFolderSummaries = null;
       _cachedDirectoryEntries = null;
+      unawaited(_prepareFolderSummaries());
     }
   }
 
@@ -6021,6 +6565,9 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
       return cached;
     }
     final query = _query.trim().toLowerCase();
+    if (query.isEmpty && _sortMode == _FileSortMode.name && _sortAscending) {
+      return _cachedFilteredFiles = widget.rootView.fileEntries;
+    }
     final files = widget.rootView.fileEntries.where((file) {
       if (query.isEmpty) {
         return true;
@@ -6147,12 +6694,11 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
 
   @override
   Widget build(BuildContext context) {
+    final folderSummaries = _cachedFolderSummaries;
+    if (folderSummaries == null) {
+      return const _TreeIndexLoadingIndicator();
+    }
     final files = _filteredSortedFiles();
-    final folderSummaries = _cachedFolderSummaries ??=
-        _UnifiedFolderSummaries.fromFiles(
-          widget.rootView.fileEntries,
-          widget.rootView,
-        );
     final allVisibleEntries = _directoryEntries(files, folderSummaries);
     final visibleEntries = allVisibleEntries
         .take(_visibleEntryLimit)
@@ -6768,7 +7314,7 @@ class _UnifiedFolderSummaries {
     required this.entriesByDirectory,
   });
 
-  factory _UnifiedFolderSummaries.fromFiles(
+  static _UnifiedFolderSummaries fromFiles(
     List<_UnifiedFileRecord> files,
     _SyncRootViewData rootView,
   ) {
@@ -6806,6 +7352,61 @@ class _UnifiedFolderSummaries {
           file.backup?.sizeBytes ?? file.task?.sizeBytes ?? 0,
           _unifiedFileUpdatedAt(file),
         );
+      }
+    }
+    return _UnifiedFolderSummaries(
+      byPath: summaries,
+      entriesByDirectory: {
+        for (final entry in childrenByDirectory.entries)
+          entry.key: entry.value.values.toList(growable: false),
+      },
+    );
+  }
+
+  static Future<_UnifiedFolderSummaries> fromFilesAsync(
+    List<_UnifiedFileRecord> files,
+    _SyncRootViewData rootView,
+  ) async {
+    final summaries = <String, _UnifiedFolderSummary>{};
+    final childrenByDirectory = <String, Map<String, _UnifiedTreeEntry>>{};
+    for (var fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
+      final file = files[fileIndex];
+      final parts = _pathParts(file.path);
+      final parentPath = parts.length <= 1
+          ? ''
+          : parts.take(parts.length - 1).join('/');
+      childrenByDirectory.putIfAbsent(
+        parentPath,
+        () => <String, _UnifiedTreeEntry>{},
+      )[file.path] = _UnifiedFileEntry(
+        name: parts.last,
+        path: file.path,
+        depth: 0,
+        file: file,
+      );
+      var path = '';
+      for (var index = 0; index < parts.length - 1; index += 1) {
+        final parent = path;
+        path = path.isEmpty ? parts[index] : '$path/${parts[index]}';
+        childrenByDirectory.putIfAbsent(
+          parent,
+          () => <String, _UnifiedTreeEntry>{},
+        )[path] ??= _UnifiedFolderEntry(
+          name: parts[index],
+          path: path,
+          depth: 0,
+        );
+        final current = summaries[path];
+        summaries[path] = (current ?? const _UnifiedFolderSummary()).addFile(
+          _folderStatusLabel(rootView.fileStatusLabel(file)),
+          file.backup?.sizeBytes ?? file.task?.sizeBytes ?? 0,
+          _unifiedFileUpdatedAt(file),
+        );
+      }
+      // Keep long directory indexes from monopolizing a frame. The next
+      // batch resumes on the event loop while the UI remains responsive.
+      if (fileIndex > 0 && fileIndex % 96 == 0) {
+        await Future<void>.delayed(Duration.zero);
       }
     }
     return _UnifiedFolderSummaries(
@@ -8401,9 +9002,7 @@ class _UnifiedFileRecord {
 
   bool get canPreview {
     final remoteBackup = backup;
-    return remoteBackup != null &&
-        remoteBackup.decryptable &&
-        remoteFilePreviewKindFor(remoteBackup.name) != null;
+    return remoteBackup != null && remoteFileCanAttemptPreview(remoteBackup);
   }
 
   bool get canDownload {

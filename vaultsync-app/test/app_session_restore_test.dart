@@ -212,6 +212,74 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets('switching theme preserves session and sync home state', (
+    tester,
+  ) async {
+    final syncRoots = FakeSyncRootGateway(const []);
+    final themes = FakeThemePreferenceStore();
+    final auth = FakeAuthGateway(
+      refreshed: const AuthSession(
+        token: 'token-1',
+        tokenId: 'token-id-1',
+        userId: 'user-1',
+        expiresAt: '2999-01-01T00:00:00Z',
+      ),
+    );
+    await tester.pumpWidget(
+      VaultSyncApp(
+        storage: FakeSessionStore(
+          token: 'token-1',
+          deviceId: 'dev-1',
+          expiresAt: '2999-01-01T00:00:00Z',
+        ),
+        themePreferences: themes,
+        authGateway: auth,
+        syncRootMappings: FakeSyncRootMappingStore(),
+        uploadTasks: FakeUploadTaskStore(),
+        syncIssues: FakeSyncIssueStore(),
+        syncRoots: syncRoots,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(syncRoots.callCount, 1);
+
+    await tester.tap(
+      find.byKey(const ValueKey('profile_navigation_destination')),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('theme_settings_tile')),
+      200,
+      scrollable: find.byType(Scrollable),
+    );
+    await tester.tap(find.byKey(const ValueKey('theme_settings_tile')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('theme_option_indigo')));
+    await tester.pumpAndSettle();
+
+    expect(themes.savedThemeId, 'indigo');
+    expect(find.byKey(const ValueKey('app_session_loading')), findsNothing);
+    expect(syncRoots.callCount, 1);
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('sync_navigation_destination')));
+    await tester.pumpAndSettle();
+    expect(syncRoots.callCount, 1);
+  });
+}
+
+class FakeThemePreferenceStore implements AppThemePreferenceStore {
+  String? savedThemeId;
+
+  @override
+  Future<String?> loadAppTheme() async => savedThemeId;
+
+  @override
+  Future<void> saveAppTheme(String themeId) async {
+    savedThemeId = themeId;
+  }
 }
 
 class FakeServerSettingsStore implements ServerSettingsStore {
@@ -273,7 +341,7 @@ class FakeSessionStore implements SessionStore, RefreshTokenStore {
   Future<void> saveDevice(RegisteredDevice device) async {}
 }
 
-class FakeAuthGateway implements AuthGateway {
+class FakeAuthGateway implements AuthGateway, UserProfileGateway {
   final AuthSession refreshed;
   String? refreshAccessToken;
   String? requestedRefreshToken;
@@ -299,6 +367,36 @@ class FakeAuthGateway implements AuthGateway {
 
   @override
   Future<void> ping() async {}
+
+  @override
+  Future<UserProfile> loadProfile(String token) async {
+    return const UserProfile(
+      id: 'user-1',
+      email: 'alice@example.com',
+      username: 'alice',
+      nickname: 'Alice',
+      quotaBytes: 10 * 1024 * 1024,
+      usedBytes: 2 * 1024 * 1024,
+    );
+  }
+
+  @override
+  Future<UserProfile> updateProfile({
+    required String token,
+    required String username,
+    required String nickname,
+  }) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> changePassword({
+    required String token,
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    throw UnimplementedError();
+  }
 }
 
 class FakeSyncRootMappingStore implements SyncRootMappingStore {
@@ -336,12 +434,14 @@ class FakeSyncIssueStore implements SyncIssueStore {
 class FakeSyncRootGateway implements SyncRootGateway {
   final List<SyncRoot> roots;
   String? token;
+  int callCount = 0;
 
   FakeSyncRootGateway(this.roots);
 
   @override
   Future<List<SyncRoot>> listSyncRoots({required String token}) async {
     this.token = token;
+    callCount += 1;
     return roots;
   }
 

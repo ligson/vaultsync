@@ -88,6 +88,12 @@ abstract interface class ServerSettingsStore {
   Future<void> saveServerAddress(String address);
 }
 
+abstract interface class AppThemePreferenceStore {
+  Future<String?> loadAppTheme();
+
+  Future<void> saveAppTheme(String themeId);
+}
+
 abstract interface class LocalSessionCleaner {
   Future<void> clearLocalSession();
 }
@@ -184,6 +190,7 @@ abstract interface class FileBrowserPreferenceStore {
 class AppStorage
     implements
         ServerSettingsStore,
+        AppThemePreferenceStore,
         SessionStore,
         RefreshTokenStore,
         CurrentDeviceInfoStore,
@@ -209,6 +216,7 @@ class AppStorage
 
   static const _authTokenKey = 'vaultsync.auth.token';
   static const _serverAddressKey = 'vaultsync.server.address';
+  static const _appThemeKey = 'vaultsync.appearance.theme';
   static const _tokenIdKey = 'vaultsync.auth.token_id';
   static const _userIdKey = 'vaultsync.auth.user_id';
   static const _expiresAtKey = 'vaultsync.auth.expires_at';
@@ -246,6 +254,18 @@ class AppStorage
   Future<void> saveServerAddress(String address) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_serverAddressKey, address);
+  }
+
+  @override
+  Future<String?> loadAppTheme() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_appThemeKey);
+  }
+
+  @override
+  Future<void> saveAppTheme(String themeId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_appThemeKey, themeId);
   }
 
   @override

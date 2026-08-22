@@ -7,12 +7,14 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/network/api_exception.dart';
 import '../../core/storage/app_storage.dart';
+import '../../core/theme/app_theme.dart';
 import '../auth/auth_models.dart';
 import '../auth/auth_service.dart';
 import 'app_permission_gateway.dart';
 import 'app_permissions_screen.dart';
 import 'avatar_store.dart';
 import 'device_storage_screen.dart';
+import 'theme_settings_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   final SessionStore storage;
@@ -26,6 +28,9 @@ class ProfileScreen extends StatefulWidget {
   final Future<void> Function()? onSignOut;
   final Future<String> Function()? appVersionLoader;
   final Future<bool> Function(Uri uri)? launchExternalUrl;
+  final VaultThemePreset selectedTheme;
+  final Future<void> Function(VaultThemePreset theme)? onThemeChanged;
+  final bool active;
 
   const ProfileScreen({
     super.key,
@@ -40,6 +45,9 @@ class ProfileScreen extends StatefulWidget {
     this.onSignOut,
     this.appVersionLoader,
     this.launchExternalUrl,
+    this.selectedTheme = VaultThemePreset.celadon,
+    this.onThemeChanged,
+    this.active = true,
   });
 
   @override
@@ -47,15 +55,25 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  late Future<UserProfile> _profileFuture;
+  Future<UserProfile>? _profileFuture;
   Future<Uint8List?> _avatarFuture = Future.value(null);
   String _appVersion = '';
 
   @override
   void initState() {
     super.initState();
-    _profileFuture = _loadProfile();
+    if (widget.active) {
+      _profileFuture = _loadProfile();
+    }
     _loadAppVersion();
+  }
+
+  @override
+  void didUpdateWidget(ProfileScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.active && !oldWidget.active && _profileFuture == null) {
+      _profileFuture = _loadProfile();
+    }
   }
 
   Future<String> _token() async {
@@ -107,8 +125,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
       body: FutureBuilder<UserProfile>(
         future: _profileFuture,
         builder: (context, snapshot) {
+          if (_profileFuture == null) {
+            return const _ProfileLoadingSkeleton();
+          }
           if (!snapshot.hasData && !snapshot.hasError) {
-            return const Center(child: CircularProgressIndicator());
+            return const _ProfileLoadingSkeleton();
           }
           if (snapshot.hasError && !snapshot.hasData) {
             return _ProfileErrorView(
@@ -176,6 +197,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 const Divider(height: 1, indent: 56),
                 _SectionLabel('应用'),
                 ListTile(
+                  key: const ValueKey('theme_settings_tile'),
+                  leading: const Icon(Icons.palette_outlined),
+                  title: const Text('主题外观'),
+                  subtitle: Text('当前：${widget.selectedTheme.label}'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _openThemeSettings,
+                ),
+                ListTile(
                   key: const ValueKey('app_update_tile'),
                   leading: const Icon(Icons.system_update_outlined),
                   title: const Text('App 更新'),
@@ -224,6 +253,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
               widget.permissionGateway ??
               PlatformAppPermissionGateway(platform: widget.platform),
           platform: widget.platform,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openThemeSettings() async {
+    final onThemeChanged = widget.onThemeChanged;
+    if (onThemeChanged == null) {
+      return;
+    }
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => ThemeSettingsScreen(
+          selectedTheme: widget.selectedTheme,
+          onThemeChanged: onThemeChanged,
         ),
       ),
     );
@@ -747,6 +791,98 @@ class _SectionLabel extends StatelessWidget {
         style: Theme.of(context).textTheme.labelLarge?.copyWith(
           color: Theme.of(context).colorScheme.primary,
         ),
+      ),
+    );
+  }
+}
+
+class _ProfileLoadingSkeleton extends StatelessWidget {
+  const _ProfileLoadingSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return ListView(
+      key: const ValueKey('profile_loading_skeleton'),
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.only(bottom: 32),
+      children: [
+        Container(
+          color: colorScheme.surfaceContainerLow,
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 22),
+          child: const Row(
+            children: [
+              _SkeletonBlock(width: 72, height: 72, circular: true),
+              SizedBox(width: 20),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _SkeletonBlock(width: 128, height: 20),
+                    SizedBox(height: 10),
+                    _SkeletonBlock(width: 196, height: 14),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(20, 22, 20, 8),
+          child: _SkeletonBlock(width: double.infinity, height: 68),
+        ),
+        const _SkeletonSettingsGroup(),
+        const _SkeletonSettingsGroup(),
+        const _SkeletonSettingsGroup(rows: 3),
+      ],
+    );
+  }
+}
+
+class _SkeletonSettingsGroup extends StatelessWidget {
+  final int rows;
+
+  const _SkeletonSettingsGroup({this.rows = 2});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SkeletonBlock(width: 72, height: 12),
+          const SizedBox(height: 10),
+          for (var index = 0; index < rows; index += 1) ...[
+            const _SkeletonBlock(width: double.infinity, height: 48),
+            if (index < rows - 1) const SizedBox(height: 2),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _SkeletonBlock extends StatelessWidget {
+  final double width;
+  final double height;
+  final bool circular;
+
+  const _SkeletonBlock({
+    required this.width,
+    required this.height,
+    this.circular = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: circular ? null : BorderRadius.circular(6),
+        shape: circular ? BoxShape.circle : BoxShape.rectangle,
       ),
     );
   }

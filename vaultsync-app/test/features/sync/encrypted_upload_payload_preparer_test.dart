@@ -1,9 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pointycastle/export.dart'
+    show AESEngine, ECBBlockCipher, KeyParameter;
 import 'package:vaultsync_app/features/sync/encrypted_upload_payload_preparer.dart';
 import 'package:vaultsync_app/features/sync/sync_models.dart';
 import 'package:vaultsync_app/features/sync/wechat_dat_decoder.dart';
@@ -294,6 +297,50 @@ void main() {
       expect(bytes, decoded);
     },
   );
+
+  test('decodeWechatDatV2Image decodes AES and XOR protected image bytes', () {
+    final aesKey = List<int>.generate(16, (index) => index + 1);
+    const xorKey = 0x3a;
+    const plainPrefix = [
+      0xff,
+      0xd8,
+      0xff,
+      0xe0,
+      0x00,
+      0x10,
+      0x4a,
+      0x46,
+      0x49,
+      0x46,
+    ];
+    const plainTail = [0xff, 0xd9];
+    final encryptedPrefix = _encryptAesEcb([
+      ...plainPrefix,
+      ...List<int>.filled(6, 6),
+    ], aesKey);
+    final datBytes = <int>[
+      0x07,
+      0x08,
+      0x56,
+      0x32,
+      0x08,
+      0x07,
+      ..._uint32LittleEndian(plainPrefix.length),
+      ..._uint32LittleEndian(plainTail.length),
+      0x01,
+      ...encryptedPrefix,
+      for (final byte in plainTail) byte ^ xorKey,
+    ];
+
+    final decoded = decodeWechatDatV2Image(
+      datBytes,
+      WechatDatV2ImageKey(aesKey: aesKey, xorKey: xorKey),
+    );
+
+    expect(decoded?.extension, 'jpg');
+    expect(decoded?.bytes, orderedEquals([...plainPrefix, ...plainTail]));
+    expect(inferWechatDatV2JpegTailXorKey(datBytes), xorKey);
+  });
 }
 
 Future<List<int>> _decryptContent(List<int> payload) async {
@@ -361,6 +408,26 @@ Future<List<int>> _decryptBox({
 
 List<int> _base64UrlDecode(String value) {
   return base64Url.decode(base64Url.normalize(value));
+}
+
+List<int> _encryptAesEcb(List<int> bytes, List<int> aesKey) {
+  final cipher = ECBBlockCipher(AESEngine())
+    ..init(true, KeyParameter(Uint8List.fromList(aesKey)));
+  final input = Uint8List.fromList(bytes);
+  final output = Uint8List(input.length);
+  for (var offset = 0; offset < input.length; offset += cipher.blockSize) {
+    cipher.processBlock(input, offset, output, offset);
+  }
+  return output;
+}
+
+List<int> _uint32LittleEndian(int value) {
+  return [
+    value & 0xff,
+    (value >> 8) & 0xff,
+    (value >> 16) & 0xff,
+    (value >> 24) & 0xff,
+  ];
 }
 
 class SequenceNonceFactory implements UploadNonceFactory {

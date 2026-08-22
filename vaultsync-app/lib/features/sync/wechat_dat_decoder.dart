@@ -1,7 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
+import 'package:pointycastle/export.dart'
+    show AESEngine, ECBBlockCipher, KeyParameter;
 
 import 'encrypted_upload_payload_preparer.dart';
 import 'local_upload_executor.dart';
@@ -19,6 +22,20 @@ class WechatDatImageSignature {
     required this.extension,
     required this.xorKey,
   });
+}
+
+class WechatDatV2ImageKey {
+  final List<int> aesKey;
+  final int? xorKey;
+
+  const WechatDatV2ImageKey({required this.aesKey, this.xorKey});
+}
+
+class WechatDatDecodedImage {
+  final String extension;
+  final Uint8List bytes;
+
+  const WechatDatDecodedImage({required this.extension, required this.bytes});
 }
 
 WechatDatImageSignature? detectWechatDatImage(List<int> bytes) {
@@ -56,6 +73,145 @@ WechatDatImageSignature? detectWechatDatImage(List<int> bytes) {
       }
     }
     return WechatDatImageSignature(extension: candidate.extension, xorKey: key);
+  }
+  return null;
+}
+
+bool looksLikeWechatDatV2Container(List<int> bytes) {
+  return bytes.length >= 14 &&
+      bytes[0] == 0x07 &&
+      bytes[1] == 0x08 &&
+      bytes[2] == 0x56 &&
+      bytes[3] == 0x32 &&
+      bytes[4] == 0x08 &&
+      bytes[5] == 0x07;
+}
+
+WechatDatDecodedImage? decodeWechatDatV2Image(
+  List<int> bytes,
+  WechatDatV2ImageKey key,
+) {
+  if (!looksLikeWechatDatV2Container(bytes) ||
+      bytes.length < 15 ||
+      key.aesKey.length < 16) {
+    return null;
+  }
+  final data = Uint8List.fromList(bytes);
+  final aesEncryptLength = _readUint32LittleEndian(data, 6);
+  final xorEncryptLength = _readUint32LittleEndian(data, 10);
+  final body = data.sublist(15);
+  if (aesEncryptLength > body.length || xorEncryptLength > body.length) {
+    return null;
+  }
+
+  var aesBlockLength = (aesEncryptLength ~/ 16) * 16 + 16;
+  if (aesBlockLength > body.length) {
+    aesBlockLength = body.length;
+  }
+  if (aesBlockLength == 0 || aesBlockLength % 16 != 0) {
+    return null;
+  }
+
+  final decoded = BytesBuilder(copy: false);
+  final aesDecoded = _decryptAesEcb(
+    body.sublist(0, aesBlockLength),
+    key.aesKey.take(16).toList(),
+  );
+  if (aesDecoded == null || aesDecoded.length < aesEncryptLength) {
+    return null;
+  }
+  decoded.add(aesDecoded.sublist(0, aesEncryptLength));
+
+  final middleStart = aesBlockLength;
+  final middleEnd = body.length - xorEncryptLength;
+  if (middleEnd < middleStart) {
+    return null;
+  }
+  if (middleStart < middleEnd) {
+    decoded.add(body.sublist(middleStart, middleEnd));
+  }
+
+  if (xorEncryptLength > 0) {
+    final xorKey = key.xorKey;
+    if (xorKey == null) {
+      return null;
+    }
+    decoded.add([for (final byte in body.sublist(middleEnd)) byte ^ xorKey]);
+  }
+
+  final imageBytes = decoded.toBytes();
+  final extension = _decodedImageExtension(imageBytes);
+  return extension == null
+      ? null
+      : WechatDatDecodedImage(extension: extension, bytes: imageBytes);
+}
+
+int? inferWechatDatV2JpegTailXorKey(List<int> bytes) {
+  if (!looksLikeWechatDatV2Container(bytes) || bytes.length < 17) {
+    return null;
+  }
+  final data = Uint8List.fromList(bytes);
+  final xorEncryptLength = _readUint32LittleEndian(data, 10);
+  final body = data.sublist(15);
+  if (xorEncryptLength < 2 || xorEncryptLength > body.length) {
+    return null;
+  }
+  final tail = body.sublist(body.length - xorEncryptLength);
+  final keyFromFirstTailByte = tail[tail.length - 2] ^ 0xff;
+  final keyFromSecondTailByte = tail[tail.length - 1] ^ 0xd9;
+  return keyFromFirstTailByte == keyFromSecondTailByte
+      ? keyFromFirstTailByte
+      : null;
+}
+
+Uint8List? _decryptAesEcb(List<int> bytes, List<int> aesKey) {
+  try {
+    final cipher = ECBBlockCipher(AESEngine())
+      ..init(false, KeyParameter(Uint8List.fromList(aesKey)));
+    final input = Uint8List.fromList(bytes);
+    final output = Uint8List(input.length);
+    for (var offset = 0; offset < input.length; offset += cipher.blockSize) {
+      cipher.processBlock(input, offset, output, offset);
+    }
+    return output;
+  } catch (_) {
+    return null;
+  }
+}
+
+int _readUint32LittleEndian(Uint8List bytes, int offset) {
+  return bytes[offset] |
+      (bytes[offset + 1] << 8) |
+      (bytes[offset + 2] << 16) |
+      (bytes[offset + 3] << 24);
+}
+
+String? _decodedImageExtension(List<int> bytes) {
+  if (_startsWith(bytes, const [0xff, 0xd8, 0xff])) {
+    return 'jpg';
+  }
+  if (_startsWith(bytes, const [
+    0x89,
+    0x50,
+    0x4e,
+    0x47,
+    0x0d,
+    0x0a,
+    0x1a,
+    0x0a,
+  ])) {
+    return 'png';
+  }
+  if (_startsWith(bytes, const [0x47, 0x49, 0x46, 0x38])) {
+    return 'gif';
+  }
+  if (_startsWith(bytes, const [0x52, 0x49, 0x46, 0x46]) &&
+      bytes.length >= 12 &&
+      _startsWith(bytes.sublist(8, 12), const [0x57, 0x45, 0x42, 0x50])) {
+    return 'webp';
+  }
+  if (_startsWith(bytes, const [0x42, 0x4d])) {
+    return 'bmp';
   }
   return null;
 }

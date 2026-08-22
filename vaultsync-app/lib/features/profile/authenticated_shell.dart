@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/storage/app_storage.dart';
+import '../../core/theme/app_theme.dart';
 import '../auth/auth_service.dart';
 import 'app_permission_gateway.dart';
 import 'avatar_store.dart';
@@ -17,6 +18,8 @@ class AuthenticatedShell extends StatefulWidget {
   final String serverAddress;
   final Future<void> Function()? onConfigureServer;
   final Future<void> Function()? onSignOut;
+  final VaultThemePreset selectedTheme;
+  final Future<void> Function(VaultThemePreset theme)? onThemeChanged;
 
   const AuthenticatedShell({
     super.key,
@@ -30,6 +33,8 @@ class AuthenticatedShell extends StatefulWidget {
     required this.serverAddress,
     this.onConfigureServer,
     this.onSignOut,
+    this.selectedTheme = VaultThemePreset.celadon,
+    this.onThemeChanged,
   });
 
   @override
@@ -38,7 +43,6 @@ class AuthenticatedShell extends StatefulWidget {
 
 class _AuthenticatedShellState extends State<AuthenticatedShell> {
   int _selectedIndex = 0;
-  bool _profileOpened = false;
 
   @override
   Widget build(BuildContext context) {
@@ -47,20 +51,20 @@ class _AuthenticatedShellState extends State<AuthenticatedShell> {
         index: _selectedIndex,
         children: [
           widget.syncHome,
-          if (_profileOpened)
-            ProfileScreen(
-              storage: widget.storage,
-              profileGateway: widget.profileGateway,
-              releaseGateway: widget.releaseGateway,
-              avatarStore: widget.avatarStore,
-              permissionGateway: widget.permissionGateway,
-              platform: widget.platform,
-              serverAddress: widget.serverAddress,
-              onConfigureServer: widget.onConfigureServer,
-              onSignOut: widget.onSignOut,
-            )
-          else
-            const SizedBox.shrink(),
+          ProfileScreen(
+            storage: widget.storage,
+            profileGateway: widget.profileGateway,
+            releaseGateway: widget.releaseGateway,
+            avatarStore: widget.avatarStore,
+            permissionGateway: widget.permissionGateway,
+            platform: widget.platform,
+            serverAddress: widget.serverAddress,
+            onConfigureServer: widget.onConfigureServer,
+            onSignOut: widget.onSignOut,
+            selectedTheme: widget.selectedTheme,
+            onThemeChanged: widget.onThemeChanged,
+            active: _selectedIndex == 1,
+          ),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -68,7 +72,6 @@ class _AuthenticatedShellState extends State<AuthenticatedShell> {
         onDestinationSelected: (index) {
           setState(() {
             _selectedIndex = index;
-            _profileOpened = _profileOpened || index == 1;
           });
         },
         destinations: const [

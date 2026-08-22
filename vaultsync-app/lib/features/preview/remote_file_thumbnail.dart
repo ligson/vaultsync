@@ -10,6 +10,7 @@ import '../../core/storage/app_storage.dart';
 import '../download/download_service.dart';
 import '../sync/encrypted_download_payload_decrypter.dart';
 import '../sync/sync_models.dart';
+import '../sync/wechat_dat_decoder.dart';
 import 'remote_file_preview.dart';
 
 typedef RemoteThumbnailCacheDirectoryProvider = Future<Directory> Function();
@@ -29,6 +30,7 @@ class CachedRemoteFileThumbnailLoader implements RemoteFileThumbnailGateway {
   final DownloadPayloadDecrypter decrypter;
   final RemoteThumbnailCacheDirectoryProvider cacheDirectoryProvider;
   final RemoteThumbnailEncoder thumbnailEncoder;
+  final WechatDatV2ImageKeyProvider? wechatDatV2ImageKeys;
 
   final Map<String, Future<Uint8List?>> _inFlight = {};
   final Queue<Completer<void>> _waiters = Queue<Completer<void>>();
@@ -39,13 +41,18 @@ class CachedRemoteFileThumbnailLoader implements RemoteFileThumbnailGateway {
     required this.downloads,
     required this.decrypter,
     required this.cacheDirectoryProvider,
+    this.wechatDatV2ImageKeys,
     RemoteThumbnailEncoder? thumbnailEncoder,
   }) : thumbnailEncoder = thumbnailEncoder ?? _resizeImage;
 
   @override
   Future<Uint8List?> load(RemoteBackupEntry entry) {
     if (!entry.decryptable ||
-        remoteFilePreviewKindFor(entry.name) != RemoteFilePreviewKind.image ||
+        (!remoteFileCanProbeContent(entry) &&
+            remoteFilePreviewKindFor(entry.name) !=
+                RemoteFilePreviewKind.image &&
+            remoteFilePreviewKindFor(entry.relativePath) !=
+                RemoteFilePreviewKind.image) ||
         entry.sizeBytes <= 0 ||
         entry.sizeBytes > _maxSourceBytes ||
         entry.encryptedName.isEmpty ||
@@ -98,9 +105,20 @@ class CachedRemoteFileThumbnailLoader implements RemoteFileThumbnailGateway {
       metadataJson: entry.metadataJson,
       payloadBytes: downloaded.bytes,
     );
-    final thumbnail = await thumbnailEncoder(
-      Uint8List.fromList(decrypted.bytes),
+    final resolved = resolveRemoteFilePreviewContent(
+      name: decrypted.name,
+      relativePath: decrypted.relativePath,
+      bytes: decrypted.bytes,
+      wechatDatV2ImageKey: await _wechatDatV2ImageKey(
+        name: decrypted.name,
+        relativePath: decrypted.relativePath,
+        bytes: decrypted.bytes,
+      ),
     );
+    if (resolved?.kind != RemoteFilePreviewKind.image) {
+      return null;
+    }
+    final thumbnail = await thumbnailEncoder(resolved!.bytes);
     if (thumbnail == null || thumbnail.isEmpty) {
       return null;
     }
@@ -159,5 +177,21 @@ class CachedRemoteFileThumbnailLoader implements RemoteFileThumbnailGateway {
       entry.sizeBytes.toString(),
     ].join('|');
     return crypto.sha256.convert(raw.codeUnits).toString();
+  }
+
+  Future<WechatDatV2ImageKey?> _wechatDatV2ImageKey({
+    required String name,
+    required String relativePath,
+    required List<int> bytes,
+  }) {
+    if (!looksLikeWechatDatV2Container(bytes)) {
+      return Future.value(null);
+    }
+    return wechatDatV2ImageKeys?.loadImageKey(
+          name: name,
+          relativePath: relativePath,
+          bytes: bytes,
+        ) ??
+        Future.value(null);
   }
 }

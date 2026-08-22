@@ -24,6 +24,13 @@ class _AppPermissionsScreenState extends State<AppPermissionsScreen>
 
   bool get _isAndroid => widget.platform == 'android';
 
+  bool get _isMacOS => widget.platform == 'macos';
+
+  bool get _supportsMedia =>
+      widget.platform == 'android' ||
+      widget.platform == 'ios' ||
+      widget.platform == 'macos';
+
   @override
   void initState() {
     super.initState();
@@ -105,7 +112,11 @@ class _AppPermissionsScreenState extends State<AppPermissionsScreen>
             key: const ValueKey('media_permission_tile'),
             icon: Icons.photo_library_outlined,
             title: '照片和视频',
-            description: '用于扫描相册并备份照片、视频。',
+            description: _supportsMedia
+                ? _isMacOS
+                      ? '用于访问 macOS 照片图库并备份照片、视频。'
+                      : '用于扫描相册并备份照片、视频。'
+                : '当前平台通过文件夹选择器管理照片和视频目录，无需单独授权。',
             state: snapshot?.media,
             onRequest: snapshot?.media == AppPermissionState.notRequired
                 ? null
@@ -118,6 +129,8 @@ class _AppPermissionsScreenState extends State<AppPermissionsScreen>
             title: '共享文件夹访问',
             description: _isAndroid
                 ? '用于扫描下载目录等共享存储中的完整文件夹。'
+                : _isMacOS
+                ? '文件夹访问由系统目录选择器管理，选择同步目录时授予权限。'
                 : '当前平台通过系统目录选择器管理文件夹访问。',
             state: snapshot?.allFiles,
             onRequest: snapshot?.allFiles == AppPermissionState.notRequired

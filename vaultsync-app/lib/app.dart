@@ -8,6 +8,7 @@ import 'core/device/device_profile.dart';
 import 'core/network/api_client.dart';
 import 'core/network/api_exception.dart';
 import 'core/storage/app_storage.dart';
+import 'core/theme/app_theme.dart';
 import 'features/auth/auth_models.dart';
 import 'features/auth/auth_service.dart';
 import 'features/auth/login_screen.dart';
@@ -45,6 +46,7 @@ class VaultSyncApp extends StatefulWidget {
   final SyncIssueStore syncIssues;
   final UploadKeyStore uploadKeys;
   final ServerSettingsStore serverSettings;
+  final AppThemePreferenceStore themePreferences;
   final AutoSyncStatusStore? autoSyncStatus;
   final SyncHistoryStore? syncHistory;
   final AuthGateway? authGateway;
@@ -66,6 +68,7 @@ class VaultSyncApp extends StatefulWidget {
     SyncIssueStore? syncIssues,
     UploadKeyStore? uploadKeys,
     ServerSettingsStore? serverSettings,
+    AppThemePreferenceStore? themePreferences,
     AutoSyncStatusStore? autoSyncStatus,
     SyncHistoryStore? syncHistory,
     this.authGateway,
@@ -84,6 +87,7 @@ class VaultSyncApp extends StatefulWidget {
        syncIssues = _resolveSyncIssues(storage, syncIssues),
        uploadKeys = _resolveUploadKeys(storage, uploadKeys),
        serverSettings = _resolveServerSettings(storage, serverSettings),
+       themePreferences = _resolveThemePreferences(storage, themePreferences),
        autoSyncStatus = _resolveAutoSyncStatus(storage, autoSyncStatus),
        syncHistory = _resolveSyncHistory(storage, syncHistory);
 
@@ -142,6 +146,20 @@ class VaultSyncApp extends StatefulWidget {
     final existingStorage = storage;
     if (existingStorage is ServerSettingsStore) {
       return existingStorage as ServerSettingsStore;
+    }
+    return const AppStorage();
+  }
+
+  static AppThemePreferenceStore _resolveThemePreferences(
+    SessionStore? storage,
+    AppThemePreferenceStore? themePreferences,
+  ) {
+    if (themePreferences != null) {
+      return themePreferences;
+    }
+    final existingStorage = storage;
+    if (existingStorage is AppThemePreferenceStore) {
+      return existingStorage as AppThemePreferenceStore;
     }
     return const AppStorage();
   }
@@ -229,6 +247,8 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
   final UploadProgressChannel _uploadProgress = UploadProgressChannel();
   final DownloadProgressChannel _downloadProgress = DownloadProgressChannel();
   bool _serverSettingsLoaded = false;
+  VaultThemePreset _themePreset = VaultThemePreset.celadon;
+  Future<bool>? _localSessionFuture;
 
   @override
   void initState() {
@@ -237,6 +257,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
     _deviceProfile = DeviceProfile.current();
     _loadDeviceProfile();
     _loadServerSettings();
+    _loadThemePreference();
   }
 
   @override
@@ -251,7 +272,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
     if (!_serverSettingsLoaded) {
       return MaterialApp(
         title: 'VaultSync',
-        theme: _theme(),
+        theme: buildVaultTheme(_themePreset),
         home: const Scaffold(body: Center(child: CircularProgressIndicator())),
       );
     }
@@ -383,6 +404,8 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
         serverAddress: _apiBaseUrl.toString(),
         onConfigureServer: () => _openServerSettings(auth),
         onSignOut: _signOut,
+        selectedTheme: _themePreset,
+        onThemeChanged: _saveThemePreference,
         syncHome: SyncHomeScreen(
           storage: widget.storage,
           syncRootMappings: widget.syncRootMappings,
@@ -417,12 +440,13 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
 
     return MaterialApp(
       title: 'VaultSync',
-      theme: _theme(),
+      theme: buildVaultTheme(_themePreset),
       home: FutureBuilder<bool>(
-        future: _hasLocalSession(auth),
+        future: _localSessionFuture ??= _hasLocalSession(auth),
         builder: (context, snapshot) {
           if (!snapshot.hasData) {
             return const Scaffold(
+              key: ValueKey('app_session_loading'),
               body: Center(child: CircularProgressIndicator()),
             );
           }
@@ -529,13 +553,6 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
     return auth.refresh(token, refreshToken: refreshToken);
   }
 
-  ThemeData _theme() {
-    return ThemeData(
-      colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
-      useMaterial3: true,
-    );
-  }
-
   Future<void> _loadServerSettings() async {
     final savedAddress = await widget.serverSettings.loadServerAddress();
     final savedUri = _tryParseServerAddress(savedAddress);
@@ -548,6 +565,26 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
     });
   }
 
+  Future<void> _loadThemePreference() async {
+    final savedTheme = await widget.themePreferences.loadAppTheme();
+    if (!mounted) {
+      return;
+    }
+    final preset = VaultThemePresetDetails.fromId(savedTheme);
+    if (preset == _themePreset) {
+      return;
+    }
+    setState(() => _themePreset = preset);
+  }
+
+  Future<void> _saveThemePreference(VaultThemePreset preset) async {
+    await widget.themePreferences.saveAppTheme(preset.id);
+    if (!mounted || preset == _themePreset) {
+      return;
+    }
+    setState(() => _themePreset = preset);
+  }
+
   Future<void> _saveServerAddress(String address) async {
     final uri = _parseServerAddress(address);
     await widget.serverSettings.saveServerAddress(uri.toString());
@@ -556,6 +593,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
     }
     setState(() {
       _apiBaseUrl = uri;
+      _localSessionFuture = null;
     });
   }
 
@@ -610,7 +648,9 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
       await (storage as LocalSessionCleaner).clearLocalSession();
     }
     if (mounted) {
-      setState(() {});
+      setState(() {
+        _localSessionFuture = Future.value(false);
+      });
     }
   }
 }

@@ -491,20 +491,28 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     try {
       final gateway = widget.remoteBackups!;
       final decrypter = widget.remoteMetadataDecrypter!;
-      final page = await gateway.listRemoteBackupObjects(
-        token: token,
-        syncRootId: root.id,
-        limit: 500,
-      );
       final entries = <RemoteBackupEntry>[];
-      for (final object in page.items) {
-        final entry = await decrypter.decrypt(object);
-        entries.add(
-          entry.withPayloadMetadata(
-            encryptedName: object.encryptedName,
-            metadataJson: object.metadataJson,
-          ),
+      var cursor = 0;
+      while (true) {
+        final page = await gateway.listRemoteBackupObjects(
+          token: token,
+          syncRootId: root.id,
+          cursor: cursor,
+          limit: 500,
         );
+        for (final object in page.items) {
+          final entry = await decrypter.decrypt(object);
+          entries.add(
+            entry.withPayloadMetadata(
+              encryptedName: object.encryptedName,
+              metadataJson: object.metadataJson,
+            ),
+          );
+        }
+        if (!page.hasMore || page.items.isEmpty || page.nextCursor <= cursor) {
+          break;
+        }
+        cursor = page.nextCursor;
       }
       return entries;
     } catch (error) {

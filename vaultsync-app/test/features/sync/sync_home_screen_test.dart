@@ -2641,6 +2641,121 @@ void main() {
     expect(find.text('已删除 1 个服务器备份'), findsOneWidget);
   });
 
+  testWidgets(
+    'sync home loads remote backups beyond the first page before deleting',
+    (tester) async {
+      final targetPath = 'AMM.AMM.ammStockPeriodStatistics.java';
+      final remoteObjects = [
+        for (var index = 0; index < 500; index += 1)
+          RemoteBackupObject(
+            cursorValue: index + 1,
+            syncRootId: 'root-1',
+            objectId: 'object-$index',
+            versionId: 'version-$index',
+            encryptedName: 'enc:$index',
+            contentHash: 'sha256:$index',
+            sizeBytes: 1,
+            metadataJson: '{}',
+            updatedAt: '2026-08-22T10:00:00Z',
+          ),
+        const RemoteBackupObject(
+          cursorValue: 501,
+          syncRootId: 'root-1',
+          objectId: 'object-target',
+          versionId: 'version-target',
+          encryptedName: 'enc:target',
+          contentHash: 'sha256:target',
+          sizeBytes: 1,
+          metadataJson: '{}',
+          updatedAt: '2026-08-22T10:00:00Z',
+        ),
+      ];
+      final entries = <String, RemoteBackupEntry>{
+        for (var index = 0; index < 500; index += 1)
+          'object-$index': RemoteBackupEntry(
+            syncRootId: 'root-1',
+            objectId: 'object-$index',
+            versionId: 'version-$index',
+            name: 'file-${index.toString().padLeft(3, '0')}.txt',
+            relativePath: 'file-${index.toString().padLeft(3, '0')}.txt',
+            sizeBytes: 1,
+            updatedAt: '2026-08-22T10:00:00Z',
+          ),
+        'object-target': RemoteBackupEntry(
+          syncRootId: 'root-1',
+          objectId: 'object-target',
+          versionId: 'version-target',
+          name: 'ammStockPeriodStatistics.java',
+          relativePath: targetPath,
+          sizeBytes: 1,
+          updatedAt: '2026-08-22T10:00:00Z',
+        ),
+      };
+      final remoteBackups = PaginatedRemoteBackupGateway(remoteObjects);
+      final deletes = FakeRemoteObjectDeleteGateway();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SyncHomeScreen(
+            storage: FakeSessionStore(
+              token: 'server-token',
+              deviceId: 'device-1',
+            ),
+            syncRootMappings: FakeSyncRootMappingStore([
+              const LocalSyncRootMapping(
+                syncRootId: 'root-1',
+                localPath: '/Users/alice/Documents',
+                encryptedPath: 'base64:path',
+                cleanupPolicy: 'keep',
+                archivePath: '',
+              ),
+            ]),
+            uploadTasks: FakeUploadTaskStore([
+              LocalUploadTask(
+                id: 'root-1:$targetPath',
+                syncRootId: 'root-1',
+                localPath: '/Users/alice/Documents/$targetPath',
+                relativePath: targetPath,
+                sizeBytes: 1,
+                modifiedAt: DateTime.utc(2026, 8, 22),
+                status: 'uploaded',
+                attempts: 0,
+                createdAt: DateTime.utc(2026, 8, 22),
+              ),
+            ]),
+            syncRoots: FakeSyncRootGateway([
+              const SyncRoot(
+                id: 'root-1',
+                userId: 'user-1',
+                deviceId: 'device-1',
+                encryptedPath: 'base64:path',
+                cleanupPolicy: 'keep',
+                archivePath: '',
+                createdAt: '2026-08-22T00:00:00Z',
+              ),
+            ]),
+            remoteBackups: remoteBackups,
+            remoteObjectDeletes: deletes,
+            remoteMetadataDecrypter: FakeRemoteMetadataDecrypter(entries),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(remoteBackups.listCallCount, 2);
+      expect(find.text(targetPath), findsOneWidget);
+      await tester.tap(find.byTooltip('文件操作').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('删除服务器备份'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('删除备份'));
+      await tester.pumpAndSettle();
+
+      expect(deletes.objectIds, ['object-target']);
+      expect(find.text('已删除 1 个服务器备份'), findsOneWidget);
+    },
+  );
+
   testWidgets('sync home creates sync root and refreshes list', (tester) async {
     final syncRoots = FakeSyncRootGateway(const []);
     final mappings = FakeSyncRootMappingStore();
@@ -5825,6 +5940,36 @@ class FakeRemoteBackupGateway implements RemoteBackupGateway {
       ],
       nextCursor: objects.isEmpty ? cursor : objects.last.cursorValue,
       hasMore: false,
+    );
+  }
+}
+
+class PaginatedRemoteBackupGateway implements RemoteBackupGateway {
+  final List<RemoteBackupObject> objects;
+  int listCallCount = 0;
+
+  PaginatedRemoteBackupGateway(this.objects);
+
+  @override
+  Future<RemoteBackupObjectPage> listRemoteBackupObjects({
+    required String token,
+    required String syncRootId,
+    int cursor = 0,
+    int limit = 100,
+  }) async {
+    listCallCount += 1;
+    final matching = objects
+        .where(
+          (object) =>
+              object.syncRootId == syncRootId && object.cursorValue > cursor,
+        )
+        .toList();
+    final page = matching.take(limit).toList();
+    final hasMore = page.length < matching.length;
+    return RemoteBackupObjectPage(
+      items: page,
+      nextCursor: page.isEmpty ? cursor : page.last.cursorValue,
+      hasMore: hasMore,
     );
   }
 }

@@ -17,6 +17,7 @@ type App struct {
 	Config          config.Config
 	db              *sql.DB
 	authService     *service.AuthService
+	avatarService   *service.AvatarService
 	deviceService   *service.DeviceService
 	syncRootService *service.SyncRootService
 	uploadService   *service.UploadService
@@ -33,6 +34,7 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	authRepo := store.NewAuthRepo(db)
+	avatarRepo := store.NewAvatarRepo(db)
 	adminRepo := store.NewAdminRepo(db)
 	deviceRepo := store.NewDeviceRepo(db)
 	syncRootRepo := store.NewSyncRootRepo(db)
@@ -47,6 +49,7 @@ func New(cfg config.Config) (*App, error) {
 			AdminRegistrationEnabled: cfg.AdminRegistrationEnabled,
 			DefaultUserQuotaBytes:    cfg.DefaultUserQuotaBytes,
 		}),
+		avatarService:   service.NewAvatarService(avatarRepo, fsStorage),
 		deviceService:   service.NewDeviceService(deviceRepo),
 		syncRootService: service.NewSyncRootService(syncRootRepo, deviceRepo, objectRepo),
 		uploadService:   service.NewUploadService(objectRepo, deviceRepo, syncRootRepo, fsStorage),
@@ -60,6 +63,7 @@ func New(cfg config.Config) (*App, error) {
 func (a *App) Dependencies() httpapi.Dependencies {
 	return httpapi.Dependencies{
 		AuthHandler:     handlers.NewAuthHandler(a.authService),
+		AvatarHandler:   handlers.NewAvatarHandler(a.avatarService),
 		DeviceHandler:   handlers.NewDeviceHandler(a.deviceService),
 		SyncRootHandler: handlers.NewSyncRootHandler(a.syncRootService),
 		UploadHandler:   handlers.NewUploadHandler(a.uploadService),

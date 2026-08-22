@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/storage/app_storage.dart';
 import '../../core/theme/app_theme.dart';
 import '../auth/auth_service.dart';
+import '../sync/upload_key_store.dart';
 import 'app_permission_gateway.dart';
 import 'avatar_store.dart';
 import 'profile_screen.dart';
@@ -13,6 +14,8 @@ class AuthenticatedShell extends StatefulWidget {
   final UserProfileGateway profileGateway;
   final AppReleaseGateway? releaseGateway;
   final AvatarStore avatarStore;
+  final AvatarGateway? avatarGateway;
+  final UploadKeyStore? avatarKeys;
   final AppPermissionGateway? permissionGateway;
   final String platform;
   final String serverAddress;
@@ -28,6 +31,8 @@ class AuthenticatedShell extends StatefulWidget {
     required this.profileGateway,
     this.releaseGateway,
     this.avatarStore = const LocalAvatarStore(),
+    this.avatarGateway,
+    this.avatarKeys,
     this.permissionGateway,
     required this.platform,
     required this.serverAddress,
@@ -56,6 +61,8 @@ class _AuthenticatedShellState extends State<AuthenticatedShell> {
             profileGateway: widget.profileGateway,
             releaseGateway: widget.releaseGateway,
             avatarStore: widget.avatarStore,
+            avatarGateway: widget.avatarGateway,
+            avatarKeys: widget.avatarKeys,
             permissionGateway: widget.permissionGateway,
             platform: widget.platform,
             serverAddress: widget.serverAddress,

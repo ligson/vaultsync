@@ -82,6 +82,17 @@ class UserProfile {
     }
     return effectiveUsername;
   }
+
+  Map<String, Object?> toJson() {
+    return {
+      'id': id,
+      'email': email,
+      'username': username,
+      'nickname': nickname,
+      'quota_bytes': quotaBytes,
+      'used_bytes': usedBytes,
+    };
+  }
 }
 
 class StorageUsage {

@@ -105,6 +105,48 @@ void main() {
     expect(find.text('Alice'), findsOneWidget);
   });
 
+  testWidgets('profile shows cached data before the remote refresh completes', (
+    tester,
+  ) async {
+    final completer = Completer<UserProfile>();
+    final gateway = FakeProfileGateway(profileLoader: () => completer.future);
+    final storage = CachedProfileSessionStore(
+      cachedProfile: const UserProfile(
+        id: 'user-1',
+        email: 'cached@example.com',
+        username: 'cached-user',
+        nickname: '缓存资料',
+        quotaBytes: 10 * 1024 * 1024 * 1024,
+        usedBytes: 2 * 1024 * 1024 * 1024,
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AuthenticatedShell(
+          syncHome: const Scaffold(body: Text('同步工作区')),
+          storage: storage,
+          profileGateway: gateway,
+          avatarStore: MemoryAvatarStore(),
+          platform: 'macos',
+          serverAddress: 'https://files.example.com',
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('profile_navigation_destination')),
+    );
+    await tester.pump();
+
+    expect(find.text('缓存资料'), findsOneWidget);
+    expect(find.text('cached@example.com'), findsOneWidget);
+    expect(gateway.loadCount, 1);
+
+    completer.complete(gateway.profile);
+    await tester.pumpAndSettle();
+    expect(find.text('Alice'), findsOneWidget);
+  });
+
   testWidgets('profile theme settings exposes Chinese presets', (tester) async {
     VaultThemePreset? selected;
     await tester.pumpWidget(
@@ -602,4 +644,17 @@ class FakeSessionStore implements SessionStore {
 
   @override
   Future<void> saveDevice(RegisteredDevice device) async {}
+}
+
+class CachedProfileSessionStore extends FakeSessionStore
+    implements UserProfileCacheStore {
+  final UserProfile cachedProfile;
+
+  CachedProfileSessionStore({required this.cachedProfile});
+
+  @override
+  Future<UserProfile?> loadCachedUserProfile() async => cachedProfile;
+
+  @override
+  Future<void> saveCachedUserProfile(UserProfile profile) async {}
 }

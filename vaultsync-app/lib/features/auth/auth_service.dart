@@ -1,3 +1,4 @@
+import '../../core/network/api_exception.dart';
 import '../../core/network/api_client.dart';
 import 'auth_models.dart';
 
@@ -27,6 +28,12 @@ abstract interface class UserProfileGateway {
   });
 }
 
+abstract interface class AvatarGateway {
+  Future<List<int>?> loadAvatar(String token);
+
+  Future<void> saveAvatar({required String token, required List<int> bytes});
+}
+
 abstract interface class StorageUsageGateway {
   Future<StorageUsage> loadStorageUsage(String token);
 
@@ -45,6 +52,7 @@ class AuthService
     implements
         AuthGateway,
         UserProfileGateway,
+        AvatarGateway,
         StorageUsageGateway,
         AppReleaseGateway {
   final ApiClient apiClient;
@@ -88,6 +96,27 @@ class AuthService
   Future<UserProfile> loadProfile(String token) async {
     final data = await apiClient.get('/api/v1/auth/me', token: token);
     return UserProfile.fromJson(data);
+  }
+
+  @override
+  Future<List<int>?> loadAvatar(String token) async {
+    try {
+      return await apiClient.getBytes('/api/v1/auth/avatar', token: token);
+    } on ApiException catch (error) {
+      if (error.statusCode == 404) {
+        return null;
+      }
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> saveAvatar({required String token, required List<int> bytes}) {
+    return apiClient.putBytes(
+      '/api/v1/auth/avatar',
+      bytes: bytes,
+      token: token,
+    );
   }
 
   @override

@@ -13,6 +13,13 @@ type User struct {
 	CreatedAt    string `json:"created_at"`
 }
 
+type UserAvatar struct {
+	UserID      string `json:"user_id"`
+	ContentHash string `json:"content_hash"`
+	SizeBytes   int64  `json:"size_bytes"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
 type StorageUsage struct {
 	QuotaBytes int64                `json:"quota_bytes"`
 	UsedBytes  int64                `json:"used_bytes"`

@@ -95,6 +95,13 @@ void main() {
     expect(find.text('/Users/alice/Photos'), findsOneWidget);
     expect(find.textContaining('1 个文件'), findsWidgets);
     expect(find.text('待上传'), findsWidgets);
+    expect(find.byKey(const ValueKey('file_tree_search_field')), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('open_search_center_button')));
+    await tester.pumpAndSettle();
+    expect(find.text('搜索中心'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
 
     expect(find.text('2026'), findsOneWidget);
     await tester.tap(find.text('2026'));
@@ -112,7 +119,16 @@ void main() {
     await tester.tap(find.text('2026'));
     await tester.pumpAndSettle();
     expect(find.textContaining('2.0 KB'), findsNothing);
-    expect(find.text('清理策略：上传后删除'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('sync_root_quick_actions_root-1')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('目录详情'));
+    await tester.pumpAndSettle();
+    expect(find.text('清理策略'), findsOneWidget);
+    expect(find.text('上传后删除'), findsOneWidget);
+    await tester.tap(find.byTooltip('关闭'));
+    await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const ValueKey('file_tree_view_mode_button')));
     await tester.pumpAndSettle();
@@ -1611,12 +1627,20 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('已备份'), findsOneWidget);
-    expect(find.text('本地已清理：1'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('sync_root_quick_actions_root-1')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('目录详情'));
+    await tester.pumpAndSettle();
+    expect(find.text('本地已清理'), findsOneWidget);
+    expect(find.textContaining('删除策略下，1 个文件已完成服务器备份'), findsOneWidget);
+    await tester.tap(find.byTooltip('关闭'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('2026'));
     await tester.pumpAndSettle();
     expect(find.text('服务器已备份，本地已删除'), findsNothing);
     expect(find.byTooltip('服务器已备份，本地已删除'), findsOneWidget);
-    expect(find.text('删除策略下，1 个文件已完成服务器备份，本地已按策略清理。'), findsOneWidget);
   });
 
   testWidgets(
@@ -1683,7 +1707,13 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('待清理'), findsWidgets);
-      expect(find.text('本地已清理：1'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('sync_root_quick_actions_root-1')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('目录详情'));
+      await tester.pumpAndSettle();
+      expect(find.text('本地已清理'), findsOneWidget);
     },
   );
 
@@ -4971,7 +5001,14 @@ void main() {
     expect(syncRoots.updatedSyncRootId, 'root-1');
     expect(syncRoots.updatedCleanupPolicy, 'delete');
     expect(mappings.saved.single.cleanupPolicy, 'delete');
-    expect(find.text('清理策略：上传后删除'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('sync_root_quick_actions_root-1')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('目录详情'));
+    await tester.pumpAndSettle();
+    expect(find.text('清理策略'), findsOneWidget);
+    expect(find.text('上传后删除'), findsOneWidget);
   });
 
   testWidgets(

@@ -113,6 +113,32 @@ ThemeData buildVaultTheme(VaultThemePreset preset) {
     colorScheme: colorScheme,
     scaffoldBackgroundColor: preset.surface,
     useMaterial3: true,
+    inputDecorationTheme: const InputDecorationTheme(
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.all(Radius.circular(8)),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.all(Radius.circular(8)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.all(Radius.circular(8)),
+      ),
+      contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(8)),
+        ),
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(8)),
+        ),
+      ),
+    ),
     cardTheme: const CardThemeData(
       elevation: 0,
       margin: EdgeInsets.zero,
@@ -131,6 +157,18 @@ ThemeData buildVaultTheme(VaultThemePreset preset) {
         preset.surface,
       ),
       indicatorColor: colorScheme.primaryContainer,
+    ),
+    snackBarTheme: SnackBarThemeData(
+      behavior: SnackBarBehavior.floating,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.all(Radius.circular(8)),
+      ),
+      backgroundColor: colorScheme.inverseSurface,
+      contentTextStyle: TextStyle(color: colorScheme.onInverseSurface),
+    ),
+    progressIndicatorTheme: ProgressIndicatorThemeData(
+      color: preset.primary,
+      linearTrackColor: colorScheme.surfaceContainerHighest,
     ),
     dividerTheme: DividerThemeData(color: colorScheme.outlineVariant),
   );

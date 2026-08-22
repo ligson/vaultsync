@@ -19,6 +19,15 @@ CREATE TABLE IF NOT EXISTS users (
     nickname TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS user_avatars (
+    user_id TEXT PRIMARY KEY,
+    content_path TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
     token_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,

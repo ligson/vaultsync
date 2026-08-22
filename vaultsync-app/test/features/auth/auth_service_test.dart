@@ -7,6 +7,22 @@ import 'package:vaultsync_app/core/network/api_client.dart';
 import 'package:vaultsync_app/features/auth/auth_service.dart';
 
 void main() {
+  test('avatar gateway uploads ciphertext', () async {
+    var requestCount = 0;
+    final service = AuthService(
+      ApiClient(
+        baseUrl: Uri.parse('http://127.0.0.1:8080'),
+        httpClient: MockClient((request) async {
+          requestCount += 1;
+          return http.Response('', 204);
+        }),
+      ),
+    );
+
+    await service.saveAvatar(token: 'server-token', bytes: [1, 2, 3]);
+    expect(requestCount, 1);
+  });
+
   test('register posts credentials and returns registered user', () async {
     final service = AuthService(
       ApiClient(

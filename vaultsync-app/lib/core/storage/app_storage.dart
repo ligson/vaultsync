@@ -24,6 +24,12 @@ abstract interface class SessionStore {
   Future<void> saveDevice(RegisteredDevice device);
 }
 
+abstract interface class UserProfileCacheStore {
+  Future<UserProfile?> loadCachedUserProfile();
+
+  Future<void> saveCachedUserProfile(UserProfile profile);
+}
+
 List<Map<String, Object?>> _decodeUploadTaskJsonItems(List<String> rawItems) {
   return rawItems
       .map((raw) => (jsonDecode(raw) as Map).cast<String, Object?>())
@@ -205,6 +211,7 @@ class AppStorage
         SyncOperationStatusStore,
         SyncHistoryStore,
         FileBrowserPreferenceStore,
+        UserProfileCacheStore,
         LocalSessionCleaner {
   final PasswordUploadKeyDeriver uploadKeyDeriver;
   final UploadTaskDirectoryProvider uploadTaskDirectoryProvider;
@@ -225,6 +232,7 @@ class AppStorage
   static const _deviceIdKey = 'vaultsync.device.id';
   static const _deviceNameKey = 'vaultsync.device.name';
   static const _devicePlatformKey = 'vaultsync.device.platform';
+  static const _cachedProfileKey = 'vaultsync.profile.cache';
   static const _syncRootMappingsKey = 'vaultsync.sync_roots.mappings';
   static const _uploadTasksKey = 'vaultsync.upload_tasks';
   static const _uploadTaskManifestFileName = 'manifest.json';
@@ -340,6 +348,7 @@ class AppStorage
       _deviceIdKey,
       _deviceNameKey,
       _devicePlatformKey,
+      _cachedProfileKey,
       _remoteCursorKey,
       _remoteVersionIndexesKey,
       _syncIssuesKey,
@@ -350,6 +359,29 @@ class AppStorage
     ]) {
       await prefs.remove(key);
     }
+  }
+
+  @override
+  Future<UserProfile?> loadCachedUserProfile() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_cachedProfileKey);
+    if (raw == null || raw.isEmpty) {
+      return null;
+    }
+    try {
+      return UserProfile.fromJson(
+        (jsonDecode(raw) as Map).cast<String, Object?>(),
+      );
+    } catch (_) {
+      await prefs.remove(_cachedProfileKey);
+      return null;
+    }
+  }
+
+  @override
+  Future<void> saveCachedUserProfile(UserProfile profile) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_cachedProfileKey, jsonEncode(profile.toJson()));
   }
 
   @override

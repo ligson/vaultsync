@@ -27,6 +27,7 @@ import 'local_sync_scanner.dart';
 import 'local_upload_executor.dart';
 import 'local_upload_planner.dart';
 import 'remote_metadata_decrypter.dart';
+import 'search_center_screen.dart';
 import 'sync_models.dart';
 import 'sync_pull_executor.dart';
 import 'sync_service.dart';
@@ -160,6 +161,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
   var _hasReconciledUploadProgress = false;
   var _loadGeneration = 0;
   var _showSlowServerNotice = false;
+  SearchIndexEntry? _searchFocus;
   late AppLifecycleState _appLifecycleState;
 
   @override
@@ -2272,6 +2274,12 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
         title: const Text('同步'),
         actions: [
           IconButton(
+            key: const ValueKey('open_search_center_button'),
+            tooltip: '搜索',
+            onPressed: _openSearchCenter,
+            icon: const Icon(Icons.search),
+          ),
+          IconButton(
             key: const ValueKey('open_sync_status_button'),
             tooltip: '同步状态',
             onPressed: _openSyncStatusPage,
@@ -2401,6 +2409,130 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     }
   }
 
+  Future<void> _openSearchCenter() async {
+    final data = _cachedHomeData;
+    if (data == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('同步目录正在加载，请稍后再搜索')));
+      return;
+    }
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => SearchCenterScreen(
+          entries: const [],
+          loadEntries: () async {
+            await Future<void>.delayed(Duration.zero);
+            return _buildSearchIndexEntries(data);
+          },
+          indexComplete: !data.remoteContentLoading,
+          onPreview: _previewSearchEntry,
+          onDownload: _downloadSearchEntry,
+          onDetails: _showSearchEntryDetails,
+          onLocate: _locateSearchEntry,
+        ),
+      ),
+    );
+  }
+
+  Future<List<SearchIndexEntry>> _buildSearchIndexEntries(
+    _SyncHomeData data,
+  ) async {
+    final entries = <SearchIndexEntry>[];
+    var processedFiles = 0;
+    for (final rootView in data.rootViews) {
+      for (final file in rootView.fileEntries) {
+        entries.add(
+          SearchIndexEntry(
+            rootId: rootView.root.id,
+            rootName: rootView.displayName,
+            deviceId: rootView.root.deviceId,
+            deviceName: rootView.deviceDisplayName,
+            isCurrentDevice: rootView.isCurrentDeviceRoot,
+            path: file.path,
+            sizeBytes: file.backup?.sizeBytes ?? file.task?.sizeBytes,
+            updatedAt: _unifiedFileUpdatedAt(file),
+            statusLabel: rootView.fileStatusLabel(file),
+            canPreview: file.canPreview,
+            canDownload: file.canDownload,
+          ),
+        );
+        processedFiles += 1;
+        if (processedFiles % 200 == 0) {
+          await Future<void>.delayed(Duration.zero);
+        }
+      }
+    }
+    return entries;
+  }
+
+  (_SyncRootViewData, _UnifiedFileRecord)? _resolveSearchEntry(
+    SearchIndexEntry entry,
+  ) {
+    final data = _cachedHomeData;
+    if (data == null) {
+      return null;
+    }
+    for (final rootView in data.rootViews) {
+      if (rootView.root.id != entry.rootId) {
+        continue;
+      }
+      for (final file in rootView.fileEntries) {
+        if (file.path == entry.path) {
+          return (rootView, file);
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<void> _previewSearchEntry(SearchIndexEntry entry) async {
+    final resolved = _resolveSearchEntry(entry);
+    if (resolved == null) {
+      return;
+    }
+    await _openFilePreview(resolved.$2);
+  }
+
+  Future<void> _downloadSearchEntry(SearchIndexEntry entry) async {
+    final resolved = _resolveSearchEntry(entry);
+    if (resolved == null) {
+      return;
+    }
+    await _downloadRemoteFile(resolved.$2);
+  }
+
+  Future<void> _showSearchEntryDetails(SearchIndexEntry entry) async {
+    final resolved = _resolveSearchEntry(entry);
+    if (resolved == null || !mounted) {
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _FilePropertiesDialog(
+        file: resolved.$2,
+        rootView: resolved.$1,
+        statusLabel: resolved.$1.fileStatusLabel(resolved.$2),
+      ),
+    );
+  }
+
+  Future<void> _locateSearchEntry(SearchIndexEntry entry) async {
+    if (!mounted) {
+      return;
+    }
+    Navigator.of(context).pop();
+    setState(() {
+      _selectedDeviceFilterId = _DeviceFilterOption.allId;
+      _searchFocus = entry;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        setState(() => _searchFocus = null);
+      }
+    });
+  }
+
   Widget _buildHomeContent(
     BuildContext context,
     _SyncHomeData data, {
@@ -2412,7 +2544,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     final filterOptions = _DeviceFilterOption.fromRootViews(allRootViews);
     final selectedFilterId = _resolveSelectedDeviceFilterId(filterOptions);
     final rootViews = _filterRootViews(allRootViews, selectedFilterId);
-    final children = <Widget>[
+    final headerChildren = <Widget>[
       if (_showSlowServerNotice) ...[
         _SlowServerNotice(showingLocalData: data.isLocalSnapshot),
         const SizedBox(height: 10),
@@ -2452,60 +2584,27 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
               textAlign: TextAlign.center,
             ),
           ),
-        )
-      else
-        for (final rootView in rootViews)
-          _SyncRootPanel(
-            key: ValueKey('sync_root_panel_${rootView.root.id}'),
-            rootView: rootView,
-            initiallyExpanded: rootViews.length == 1,
-            mediaThumbnails: widget.mediaThumbnails,
-            remoteFileThumbnails: widget.remoteFileThumbnails,
-            fileBrowserPreferences: widget.storage is FileBrowserPreferenceStore
-                ? widget.storage as FileBrowserPreferenceStore
-                : null,
-            onManage: rootView.isCurrentDeviceRoot
-                ? () => _openManageSyncRootDialog(rootView)
-                : null,
-            onScan: rootView.canRunLocalSync
-                ? () => _scanLocalFiles(syncRootId: rootView.root.id)
-                : null,
-            onBind:
-                rootView.isCurrentDeviceRoot &&
-                    (!rootView.isWechatBackupRoot ||
-                        _wechatBackupFeatureEnabled)
-                ? rootView.isWechatBackupRoot
-                      ? () => _openCreateSyncRootDialog(wechatOnly: true)
-                      : () => _bindLocalFolder(rootView)
-                : null,
-            onUpload: widget.uploadExecutor == null || !rootView.canRunLocalSync
-                ? null
-                : () => _executePendingUploads(syncRootId: rootView.root.id),
-            onRetryFailed:
-                widget.uploadExecutor == null ||
-                    rootView.failedTaskCount == 0 ||
-                    !rootView.isCurrentDeviceRoot
-                ? null
-                : () => _retryFailedUploads(syncRootId: rootView.root.id),
-            onDeleteFile: rootView.isCurrentDeviceRoot
-                ? (file) => _deleteRemoteFile(rootView, file)
-                : null,
-            onDeleteFolder: rootView.isCurrentDeviceRoot
-                ? (folderPath) => _deleteRemoteFolder(rootView, folderPath)
-                : null,
-            onPreviewFile: widget.remoteFilePreviews == null
-                ? null
-                : (file) => _openFilePreview(file),
-            onDownloadFile: widget.remoteFileDownloads == null
-                ? null
-                : (file) => _downloadRemoteFile(file),
-          ),
+        ),
     ];
     return Stack(
       children: [
-        ListView(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 88),
-          children: children,
+        CustomScrollView(
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 88),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate((context, index) {
+                  if (index < headerChildren.length) {
+                    return headerChildren[index];
+                  }
+                  final rootView = rootViews[index - headerChildren.length];
+                  return RepaintBoundary(
+                    child: _buildSyncRootPanel(rootView, rootViews.length),
+                  );
+                }, childCount: headerChildren.length + rootViews.length),
+              ),
+            ),
+          ],
         ),
         if (isRefreshing)
           const Positioned(
@@ -2515,6 +2614,81 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
             child: LinearProgressIndicator(minHeight: 2),
           ),
       ],
+    );
+  }
+
+  Widget _buildSyncRootPanel(_SyncRootViewData rootView, int rootCount) {
+    return _SyncRootPanel(
+      key: ValueKey('sync_root_panel_${rootView.root.id}'),
+      rootView: rootView,
+      initiallyExpanded:
+          rootCount == 1 || _searchFocus?.rootId == rootView.root.id,
+      focusPath: _searchFocus?.rootId == rootView.root.id
+          ? _searchFocus?.path
+          : null,
+      mediaThumbnails: widget.mediaThumbnails,
+      remoteFileThumbnails: widget.remoteFileThumbnails,
+      fileBrowserPreferences: widget.storage is FileBrowserPreferenceStore
+          ? widget.storage as FileBrowserPreferenceStore
+          : null,
+      onManage: rootView.isCurrentDeviceRoot
+          ? () => _openManageSyncRootDialog(rootView)
+          : null,
+      onScan: rootView.canRunLocalSync
+          ? () => _scanLocalFiles(syncRootId: rootView.root.id)
+          : null,
+      onBind:
+          rootView.isCurrentDeviceRoot &&
+              (!rootView.isWechatBackupRoot || _wechatBackupFeatureEnabled)
+          ? rootView.isWechatBackupRoot
+                ? () => _openCreateSyncRootDialog(wechatOnly: true)
+                : () => _bindLocalFolder(rootView)
+          : null,
+      onUpload: widget.uploadExecutor == null || !rootView.canRunLocalSync
+          ? null
+          : () => _executePendingUploads(syncRootId: rootView.root.id),
+      onRetryFailed:
+          widget.uploadExecutor == null ||
+              rootView.failedTaskCount == 0 ||
+              !rootView.isCurrentDeviceRoot
+          ? null
+          : () => _retryFailedUploads(syncRootId: rootView.root.id),
+      onDeleteFile: rootView.isCurrentDeviceRoot
+          ? (file) => _deleteRemoteFile(rootView, file)
+          : null,
+      onDeleteFolder: rootView.isCurrentDeviceRoot
+          ? (folderPath) => _deleteRemoteFolder(rootView, folderPath)
+          : null,
+      onPreviewFile: widget.remoteFilePreviews == null
+          ? null
+          : (file) => _openFilePreview(file),
+      onDownloadFile: widget.remoteFileDownloads == null
+          ? null
+          : (file) => _downloadRemoteFile(file),
+      onShowFileDetails: (file) => _showSearchFileDetails(rootView, file),
+      onShowDetails: () => _showSyncRootDetails(rootView),
+    );
+  }
+
+  Future<void> _showSearchFileDetails(
+    _SyncRootViewData rootView,
+    _UnifiedFileRecord file,
+  ) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _FilePropertiesDialog(
+        file: file,
+        rootView: rootView,
+        statusLabel: rootView.fileStatusLabel(file),
+      ),
+    );
+  }
+
+  Future<void> _showSyncRootDetails(_SyncRootViewData rootView) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _SyncRootDetailsSheet(rootView: rootView),
     );
   }
 
@@ -3260,11 +3434,34 @@ class _SyncHomeData {
     );
   }
 
-  List<LocalSyncIssue> get openIssues {
-    return [
-      for (final issue in issues)
-        if (issue.status == 'open') issue,
-    ];
+  late final List<LocalSyncIssue> openIssues = [
+    for (final issue in issues)
+      if (issue.status == 'open') issue,
+  ];
+
+  late final Map<String, LocalSyncRootMapping> _mappingsByRoot = {
+    for (final mapping in mappings) mapping.syncRootId: mapping,
+  };
+  late final Map<String, List<LocalUploadTask>> _tasksByRoot = _groupByRoot(
+    uploadTasks,
+    (task) => task.syncRootId,
+  );
+  late final Map<String, List<LocalSyncIssue>> _issuesByRoot = _groupByRoot(
+    openIssues,
+    (issue) => issue.syncRootId,
+  );
+  late final Map<String, List<LocalSyncOperationStatus>> _operationsByRoot =
+      _groupByRoot(operationStatuses, (operation) => operation.syncRootId);
+
+  static Map<String, List<T>> _groupByRoot<T>(
+    Iterable<T> values,
+    String Function(T value) rootId,
+  ) {
+    final grouped = <String, List<T>>{};
+    for (final value in values) {
+      grouped.putIfAbsent(rootId(value), () => <T>[]).add(value);
+    }
+    return grouped;
   }
 
   List<_SyncRootViewData>? _rootViewsCache;
@@ -3273,20 +3470,11 @@ class _SyncHomeData {
     for (final root in roots)
       _SyncRootViewData(
         root: root,
-        mapping: _mappingFor(root.id),
-        tasks: [
-          for (final task in uploadTasks)
-            if (task.syncRootId == root.id) task,
-        ],
-        issues: [
-          for (final issue in openIssues)
-            if (issue.syncRootId == root.id) issue,
-        ],
+        mapping: _mappingsByRoot[root.id],
+        tasks: _tasksByRoot[root.id] ?? const [],
+        issues: _issuesByRoot[root.id] ?? const [],
         remoteBackups: remoteBackupEntries[root.id] ?? const [],
-        operations: [
-          for (final operation in operationStatuses)
-            if (operation.syncRootId == root.id) operation,
-        ],
+        operations: _operationsByRoot[root.id] ?? const [],
         currentDeviceId: currentDeviceId,
         currentDeviceName: currentDeviceName,
       ),
@@ -3353,15 +3541,6 @@ class _SyncHomeData {
       0,
       (total, rootView) => total + rootView.fileEntries.length,
     );
-  }
-
-  LocalSyncRootMapping? _mappingFor(String syncRootId) {
-    for (final mapping in mappings) {
-      if (mapping.syncRootId == syncRootId) {
-        return mapping;
-      }
-    }
-    return null;
   }
 }
 
@@ -5938,6 +6117,7 @@ class _StatusMetric extends StatelessWidget {
 class _SyncRootPanel extends StatefulWidget {
   final _SyncRootViewData rootView;
   final bool initiallyExpanded;
+  final String? focusPath;
   final FileBrowserPreferenceStore? fileBrowserPreferences;
   final MediaAssetThumbnailGateway? mediaThumbnails;
   final RemoteFileThumbnailGateway? remoteFileThumbnails;
@@ -5950,11 +6130,14 @@ class _SyncRootPanel extends StatefulWidget {
   final ValueChanged<String>? onDeleteFolder;
   final ValueChanged<_UnifiedFileRecord>? onPreviewFile;
   final ValueChanged<_UnifiedFileRecord>? onDownloadFile;
+  final ValueChanged<_UnifiedFileRecord>? onShowFileDetails;
+  final VoidCallback? onShowDetails;
 
   const _SyncRootPanel({
     super.key,
     required this.rootView,
     required this.initiallyExpanded,
+    required this.focusPath,
     required this.fileBrowserPreferences,
     required this.mediaThumbnails,
     required this.remoteFileThumbnails,
@@ -5967,6 +6150,8 @@ class _SyncRootPanel extends StatefulWidget {
     required this.onDeleteFolder,
     required this.onPreviewFile,
     required this.onDownloadFile,
+    required this.onShowFileDetails,
+    required this.onShowDetails,
   });
 
   @override
@@ -5989,6 +6174,7 @@ class _SyncRootPanelState extends State<_SyncRootPanel> {
 
   _SyncRootViewData get rootView => widget.rootView;
   bool get initiallyExpanded => widget.initiallyExpanded;
+  String? get focusPath => widget.focusPath;
   FileBrowserPreferenceStore? get fileBrowserPreferences =>
       widget.fileBrowserPreferences;
   MediaAssetThumbnailGateway? get mediaThumbnails => widget.mediaThumbnails;
@@ -6003,6 +6189,9 @@ class _SyncRootPanelState extends State<_SyncRootPanel> {
   ValueChanged<String>? get onDeleteFolder => widget.onDeleteFolder;
   ValueChanged<_UnifiedFileRecord>? get onPreviewFile => widget.onPreviewFile;
   ValueChanged<_UnifiedFileRecord>? get onDownloadFile => widget.onDownloadFile;
+  ValueChanged<_UnifiedFileRecord>? get onShowFileDetails =>
+      widget.onShowFileDetails;
+  VoidCallback? get onShowDetails => widget.onShowDetails;
 
   @override
   void didUpdateWidget(covariant _SyncRootPanel oldWidget) {
@@ -6051,6 +6240,9 @@ class _SyncRootPanelState extends State<_SyncRootPanel> {
       child: ExpansionTile(
         initiallyExpanded: initiallyExpanded,
         onExpansionChanged: _handleExpansionChanged,
+        tilePadding: const EdgeInsets.fromLTRB(16, 8, 12, 8),
+        expandedCrossAxisAlignment: CrossAxisAlignment.start,
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         leading: Icon(
           rootView.isCurrentDeviceRoot
               ? Icons.folder_outlined
@@ -6074,23 +6266,25 @@ class _SyncRootPanelState extends State<_SyncRootPanel> {
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 2),
-            Text(
-              rootView.deviceLine,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: rootView.isCurrentDeviceRoot
-                    ? colorScheme.primary
-                    : colorScheme.outline,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              runSpacing: 4,
+            Row(
               children: [
-                if (!rootView.isCurrentDeviceRoot)
+                Expanded(
+                  child: Text(
+                    rootView.deviceLine,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: rootView.isCurrentDeviceRoot
+                          ? colorScheme.primary
+                          : colorScheme.outline,
+                    ),
+                  ),
+                ),
+                if (!rootView.isCurrentDeviceRoot) ...[
+                  const SizedBox(width: 6),
                   const _StatusBadge(label: '只读'),
+                ],
+                const SizedBox(width: 6),
                 _StatusBadge(label: rootView.statusLabel),
               ],
             ),
@@ -6104,6 +6298,8 @@ class _SyncRootPanelState extends State<_SyncRootPanel> {
               tooltip: '目录操作',
               onSelected: (action) {
                 switch (action) {
+                  case _SyncRootQuickAction.details:
+                    onShowDetails?.call();
                   case _SyncRootQuickAction.bind:
                     onBind?.call();
                   case _SyncRootQuickAction.scan:
@@ -6115,9 +6311,20 @@ class _SyncRootPanelState extends State<_SyncRootPanel> {
                 }
               },
               itemBuilder: (context) {
+                final items = <PopupMenuEntry<_SyncRootQuickAction>>[
+                  if (onShowDetails != null)
+                    const PopupMenuItem(
+                      value: _SyncRootQuickAction.details,
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(Icons.info_outline),
+                        title: Text('目录详情'),
+                      ),
+                    ),
+                ];
                 if (!rootView.isCurrentDeviceRoot) {
-                  return const [
-                    PopupMenuItem(
+                  items.add(
+                    const PopupMenuItem(
                       enabled: false,
                       child: ListTile(
                         dense: true,
@@ -6125,9 +6332,10 @@ class _SyncRootPanelState extends State<_SyncRootPanel> {
                         title: Text('其他设备目录仅可查看'),
                       ),
                     ),
-                  ];
+                  );
+                  return items;
                 }
-                return [
+                items.addAll([
                   if (rootView.canBindLocalPath)
                     PopupMenuItem(
                       value: _SyncRootQuickAction.bind,
@@ -6168,7 +6376,8 @@ class _SyncRootPanelState extends State<_SyncRootPanel> {
                         title: Text('重试失败任务'),
                       ),
                     ),
-                ];
+                ]);
+                return items;
               },
             ),
             if (onManage != null)
@@ -6180,7 +6389,6 @@ class _SyncRootPanelState extends State<_SyncRootPanel> {
               ),
           ],
         ),
-        childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
         children: [
           if (!_contentReady)
             const _DeferredRootContentIndicator()
@@ -6189,12 +6397,6 @@ class _SyncRootPanelState extends State<_SyncRootPanel> {
             if (!rootView.isCurrentDeviceRoot) ...[
               const SizedBox(height: 8),
               _ReadOnlyDeviceNotice(deviceLine: rootView.deviceLine),
-            ],
-            if (rootView.shouldShowDeletePolicyNotice) ...[
-              const SizedBox(height: 8),
-              _DeletePolicyNotice(
-                backedUpCount: rootView.backedUpDeletedLocalCount,
-              ),
             ],
             const SizedBox(height: 8),
             if (rootView.fileEntries.isEmpty)
@@ -6206,6 +6408,7 @@ class _SyncRootPanelState extends State<_SyncRootPanel> {
             else
               _UnifiedFileTree(
                 rootView: rootView,
+                focusPath: focusPath,
                 preferences: fileBrowserPreferences,
                 mediaThumbnails: mediaThumbnails,
                 remoteFileThumbnails: remoteFileThumbnails,
@@ -6213,6 +6416,7 @@ class _SyncRootPanelState extends State<_SyncRootPanel> {
                 onDeleteFolder: onDeleteFolder,
                 onPreviewFile: onPreviewFile,
                 onDownloadFile: onDownloadFile,
+                onShowFileDetails: onShowFileDetails,
               ),
           ],
         ],
@@ -6267,7 +6471,7 @@ class _TreeIndexLoadingIndicator extends StatelessWidget {
   }
 }
 
-enum _SyncRootQuickAction { bind, scan, upload, retryFailed }
+enum _SyncRootQuickAction { details, bind, scan, upload, retryFailed }
 
 class _RootMetaRow extends StatelessWidget {
   final _SyncRootViewData rootView;
@@ -6276,50 +6480,210 @@ class _RootMetaRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 6,
+    final chips = <Widget>[
+      if (rootView.pendingTaskCount > 0)
+        _MetaChip(
+          icon: Icons.cloud_upload_outlined,
+          label: '待上传 ${rootView.pendingTaskCount}',
+        ),
+      _MetaChip(
+        icon: Icons.insert_drive_file_outlined,
+        label: '${rootView.fileEntries.length} 个文件',
+      ),
+      if (rootView.waitingStableTaskCount > 0)
+        _MetaChip(
+          icon: Icons.hourglass_top_outlined,
+          label: '等待写入 ${rootView.waitingStableTaskCount}',
+        ),
+      if (rootView.failedTaskCount > 0)
+        _MetaChip(
+          icon: Icons.error_outline,
+          label: '上传失败 ${rootView.failedTaskCount}',
+        ),
+      if (rootView.issues.isNotEmpty)
+        _MetaChip(
+          icon: Icons.error_outline,
+          label: '问题 ${rootView.issues.length}',
+        ),
+    ];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final stretched = constraints.maxWidth >= 700 && chips.length > 1;
+        if (stretched) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var index = 0; index < chips.length; index += 1) ...[
+                if (index > 0) const SizedBox(width: 8),
+                Expanded(
+                  child: _MetaChip(
+                    icon: (chips[index] as _MetaChip).icon,
+                    label: (chips[index] as _MetaChip).label,
+                    expanded: true,
+                  ),
+                ),
+              ],
+            ],
+          );
+        }
+        return Wrap(
+          spacing: 8,
+          runSpacing: 6,
+          alignment: WrapAlignment.start,
+          children: chips,
+        );
+      },
+    );
+  }
+}
+
+class _SyncRootDetailsSheet extends StatelessWidget {
+  final _SyncRootViewData rootView;
+
+  const _SyncRootDetailsSheet({required this.rootView});
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.78,
+        ),
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
+          children: [
+            Row(
+              children: [
+                Icon(Icons.info_outline, color: colorScheme.primary),
+                const SizedBox(width: 10),
+                Expanded(child: Text('目录详情', style: textTheme.titleLarge)),
+                IconButton(
+                  tooltip: '关闭',
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(rootView.displayName, style: textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text(rootView.subtitle, style: textTheme.bodyMedium),
+            Text(
+              rootView.deviceLine,
+              style: textTheme.bodySmall?.copyWith(
+                color: rootView.isCurrentDeviceRoot
+                    ? colorScheme.primary
+                    : colorScheme.outline,
+              ),
+            ),
+            const SizedBox(height: 18),
+            _SyncRootDetailsSection(
+              title: '同步状态',
+              children: [
+                _SyncRootDetailLine(label: '当前状态', value: rootView.statusLabel),
+                _SyncRootDetailLine(
+                  label: '文件总数',
+                  value: '${rootView.fileEntries.length} 个',
+                ),
+                if (rootView.pendingTaskCount > 0)
+                  _SyncRootDetailLine(
+                    label: '待上传',
+                    value: '${rootView.pendingTaskCount} 个',
+                  ),
+                if (rootView.waitingStableTaskCount > 0)
+                  _SyncRootDetailLine(
+                    label: '等待写入完成',
+                    value: '${rootView.waitingStableTaskCount} 个',
+                  ),
+                if (rootView.failedTaskCount > 0)
+                  _SyncRootDetailLine(
+                    label: '上传失败',
+                    value: '${rootView.failedTaskCount} 个',
+                  ),
+                if (rootView.issues.isNotEmpty)
+                  _SyncRootDetailLine(
+                    label: '待处理问题',
+                    value: '${rootView.issues.length} 个',
+                  ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            _SyncRootDetailsSection(
+              title: '存储与清理',
+              children: [
+                _SyncRootDetailLine(
+                  label: '存储方式',
+                  value: rootView.root.encryptionEnabled ? '加密' : '普通',
+                ),
+                _SyncRootDetailLine(
+                  label: '清理策略',
+                  value: _cleanupPolicyLabel(rootView.root.cleanupPolicy),
+                ),
+                if (rootView.backedUpDeletedLocalCount > 0)
+                  _SyncRootDetailLine(
+                    label: '本地已清理',
+                    value: '${rootView.backedUpDeletedLocalCount} 个',
+                  ),
+              ],
+            ),
+            if (rootView.shouldShowDeletePolicyNotice) ...[
+              const SizedBox(height: 14),
+              Text(
+                '删除策略下，${rootView.backedUpDeletedLocalCount} 个文件已完成服务器备份，本地已按策略清理。',
+                style: textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SyncRootDetailsSection extends StatelessWidget {
+  final String title;
+  final List<Widget> children;
+
+  const _SyncRootDetailsSection({required this.title, required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _MetaChip(
-          icon: rootView.root.encryptionEnabled
-              ? Icons.lock_outline
-              : Icons.lock_open_outlined,
-          label: rootView.root.encryptionEnabled ? '存储：加密' : '存储：普通',
-        ),
-        _MetaChip(
-          icon: Icons.cleaning_services_outlined,
-          label: '清理策略：${_cleanupPolicyLabel(rootView.root.cleanupPolicy)}',
-        ),
-        _MetaChip(
-          icon: Icons.insert_drive_file_outlined,
-          label: '文件：${rootView.fileEntries.length}',
-        ),
-        if (rootView.pendingTaskCount > 0)
-          _MetaChip(
-            icon: Icons.cloud_upload_outlined,
-            label: '待上传：${rootView.pendingTaskCount}',
-          ),
-        if (rootView.waitingStableTaskCount > 0)
-          _MetaChip(
-            icon: Icons.hourglass_top_outlined,
-            label: '等待写入：${rootView.waitingStableTaskCount}',
-          ),
-        if (rootView.failedTaskCount > 0)
-          _MetaChip(
-            icon: Icons.error_outline,
-            label: '上传失败：${rootView.failedTaskCount}',
-          ),
-        if (rootView.backedUpDeletedLocalCount > 0)
-          _MetaChip(
-            icon: Icons.cloud_done_outlined,
-            label: '本地已清理：${rootView.backedUpDeletedLocalCount}',
-          ),
-        if (rootView.issues.isNotEmpty)
-          _MetaChip(
-            icon: Icons.error_outline,
-            label: '问题：${rootView.issues.length}',
-          ),
+        Text(title, style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 6),
+        ...children,
       ],
+    );
+  }
+}
+
+class _SyncRootDetailLine extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _SyncRootDetailLine({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 112,
+            child: Text(label, style: Theme.of(context).textTheme.bodySmall),
+          ),
+          Expanded(child: Text(value)),
+        ],
+      ),
     );
   }
 }
@@ -6327,18 +6691,25 @@ class _RootMetaRow extends StatelessWidget {
 class _MetaChip extends StatelessWidget {
   final IconData icon;
   final String label;
+  final bool expanded;
 
-  const _MetaChip({required this.icon, required this.label});
+  const _MetaChip({
+    required this.icon,
+    required this.label,
+    this.expanded = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     return Container(
+      width: expanded ? double.infinity : null,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
         color: colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(8),
       ),
+      alignment: Alignment.centerLeft,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -6380,6 +6751,7 @@ class _ReadOnlyDeviceNotice extends StatelessWidget {
 
 class _UnifiedFileTree extends StatefulWidget {
   final _SyncRootViewData rootView;
+  final String? focusPath;
   final FileBrowserPreferenceStore? preferences;
   final MediaAssetThumbnailGateway? mediaThumbnails;
   final RemoteFileThumbnailGateway? remoteFileThumbnails;
@@ -6387,9 +6759,11 @@ class _UnifiedFileTree extends StatefulWidget {
   final ValueChanged<String>? onDeleteFolder;
   final ValueChanged<_UnifiedFileRecord>? onPreviewFile;
   final ValueChanged<_UnifiedFileRecord>? onDownloadFile;
+  final ValueChanged<_UnifiedFileRecord>? onShowFileDetails;
 
   const _UnifiedFileTree({
     required this.rootView,
+    required this.focusPath,
     required this.preferences,
     required this.mediaThumbnails,
     required this.remoteFileThumbnails,
@@ -6397,6 +6771,7 @@ class _UnifiedFileTree extends StatefulWidget {
     required this.onDeleteFolder,
     required this.onPreviewFile,
     required this.onDownloadFile,
+    required this.onShowFileDetails,
   });
 
   @override
@@ -6407,13 +6782,11 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
   static const _entryBatchSize = 80;
   static const _gridEntryBatchSize = 24;
 
-  final _queryController = TextEditingController();
   var _visibleEntryLimit = _entryBatchSize;
   var _viewMode = _FileViewMode.list;
   var _sortMode = _FileSortMode.name;
   var _sortAscending = true;
   var _preferencesChanged = false;
-  var _query = '';
   var _currentDirectory = '';
   List<_UnifiedFileRecord>? _cachedFilteredFiles;
   _UnifiedFolderSummaries? _cachedFolderSummaries;
@@ -6423,6 +6796,13 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
   @override
   void initState() {
     super.initState();
+    final focusPath = widget.focusPath;
+    if (focusPath != null && focusPath.isNotEmpty) {
+      final parts = _pathParts(focusPath);
+      _currentDirectory = parts.length <= 1
+          ? ''
+          : parts.take(parts.length - 1).join('/');
+    }
     unawaited(_restorePreferences());
     unawaited(_prepareFolderSummaries());
   }
@@ -6507,7 +6887,6 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
 
   @override
   void dispose() {
-    _queryController.dispose();
     super.dispose();
   }
 
@@ -6520,6 +6899,23 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
       _cachedDirectoryEntries = null;
       unawaited(_prepareFolderSummaries());
     }
+    if (oldWidget.focusPath != widget.focusPath &&
+        widget.focusPath != null &&
+        widget.focusPath!.isNotEmpty) {
+      _focusPath(widget.focusPath!);
+    }
+  }
+
+  void _focusPath(String path) {
+    final parts = _pathParts(path);
+    final directory = parts.length <= 1
+        ? ''
+        : parts.take(parts.length - 1).join('/');
+    setState(() {
+      _currentDirectory = directory;
+      _visibleEntryLimit = _batchSizeFor(_viewMode);
+      _invalidateDirectoryEntries();
+    });
   }
 
   void _invalidateSortedEntries() {
@@ -6532,15 +6928,9 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
   }
 
   void _openDirectory(String path) {
-    final queryChanged = _query.trim().isNotEmpty;
     setState(() {
       _currentDirectory = path;
-      _query = '';
-      _queryController.clear();
       _visibleEntryLimit = _batchSizeFor(_viewMode);
-      if (queryChanged) {
-        _cachedFilteredFiles = null;
-      }
       _invalidateDirectoryEntries();
     });
   }
@@ -6564,16 +6954,10 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
     if (cached != null) {
       return cached;
     }
-    final query = _query.trim().toLowerCase();
-    if (query.isEmpty && _sortMode == _FileSortMode.name && _sortAscending) {
+    if (_sortMode == _FileSortMode.name && _sortAscending) {
       return _cachedFilteredFiles = widget.rootView.fileEntries;
     }
-    final files = widget.rootView.fileEntries.where((file) {
-      if (query.isEmpty) {
-        return true;
-      }
-      return file.path.toLowerCase().contains(query);
-    }).toList();
+    final files = widget.rootView.fileEntries.toList();
     if (_sortMode != _FileSortMode.name || !_sortAscending) {
       files.sort((left, right) {
         final result = switch (_sortMode) {
@@ -6619,17 +7003,6 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
     final cached = _cachedDirectoryEntries;
     if (cached != null) {
       return cached;
-    }
-    if (_query.trim().isNotEmpty) {
-      return _cachedDirectoryEntries = [
-        for (final file in files)
-          _UnifiedFileEntry(
-            name: _pathParts(file.path).last,
-            path: file.path,
-            depth: 0,
-            file: file,
-          ),
-      ];
     }
     final entries = <_UnifiedTreeEntry>[
       ...(folderSummaries.entriesByDirectory[_currentDirectory] ?? const []),
@@ -6709,7 +7082,6 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
         _DirectoryBreadcrumbs(
           rootName: widget.rootView.displayName,
           currentPath: _currentDirectory,
-          isSearching: _query.trim().isNotEmpty,
           onRoot: _navigateToRoot,
           onUp: _navigateUp,
           onSegment: _openDirectory,
@@ -6718,18 +7090,8 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
           viewMode: _viewMode,
           sortMode: _sortMode,
           sortAscending: _sortAscending,
-          query: _query,
-          queryController: _queryController,
           itemCount: allVisibleEntries.length,
           totalFileCount: widget.rootView.fileEntries.length,
-          isSearching: _query.trim().isNotEmpty,
-          onQueryChanged: (query) {
-            setState(() {
-              _query = query;
-              _visibleEntryLimit = _batchSizeFor(_viewMode);
-              _invalidateSortedEntries();
-            });
-          },
           onViewModeChanged: (mode) {
             setState(() {
               _viewMode = mode;
@@ -6793,7 +7155,9 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
         onDelete: widget.onDeleteFile == null
             ? null
             : () => widget.onDeleteFile?.call(entry.file),
-        onDetails: () => _showFileProperties(entry.file),
+        onDetails: widget.onShowFileDetails == null
+            ? () => _showFileProperties(entry.file)
+            : () => widget.onShowFileDetails!.call(entry.file),
       ),
     };
   }
@@ -6833,7 +7197,9 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
               onDelete: widget.onDeleteFile == null
                   ? null
                   : () => widget.onDeleteFile?.call(entry.file),
-              onDetails: () => _showFileProperties(entry.file),
+              onDetails: widget.onShowFileDetails == null
+                  ? () => _showFileProperties(entry.file)
+                  : () => widget.onShowFileDetails!.call(entry.file),
             ),
           },
       ],
@@ -6889,7 +7255,9 @@ class _UnifiedFileTreeState extends State<_UnifiedFileTree> {
                       onDelete: widget.onDeleteFile == null
                           ? null
                           : () => widget.onDeleteFile?.call(entry.file),
-                      onDetails: () => _showFileProperties(entry.file),
+                      onDetails: widget.onShowFileDetails == null
+                          ? () => _showFileProperties(entry.file)
+                          : () => widget.onShowFileDetails!.call(entry.file),
                     ),
                   },
                 ),
@@ -6935,12 +7303,8 @@ class _FileTreeToolbar extends StatelessWidget {
   final _FileViewMode viewMode;
   final _FileSortMode sortMode;
   final bool sortAscending;
-  final String query;
-  final TextEditingController queryController;
   final int itemCount;
   final int totalFileCount;
-  final bool isSearching;
-  final ValueChanged<String> onQueryChanged;
   final ValueChanged<_FileViewMode> onViewModeChanged;
   final ValueChanged<_FileSortMode> onSortModeChanged;
   final VoidCallback onSortDirectionChanged;
@@ -6949,12 +7313,8 @@ class _FileTreeToolbar extends StatelessWidget {
     required this.viewMode,
     required this.sortMode,
     required this.sortAscending,
-    required this.query,
-    required this.queryController,
     required this.itemCount,
     required this.totalFileCount,
-    required this.isSearching,
-    required this.onQueryChanged,
     required this.onViewModeChanged,
     required this.onSortModeChanged,
     required this.onSortDirectionChanged,
@@ -6965,27 +7325,6 @@ class _FileTreeToolbar extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 700;
-        final search = TextField(
-          key: const ValueKey('file_tree_search_field'),
-          onChanged: onQueryChanged,
-          controller: queryController,
-          decoration: InputDecoration(
-            isDense: true,
-            prefixIcon: const Icon(Icons.search, size: 20),
-            hintText: '搜索文件名或路径',
-            suffixIcon: query.isEmpty
-                ? null
-                : IconButton(
-                    tooltip: '清除搜索',
-                    onPressed: () {
-                      queryController.clear();
-                      onQueryChanged('');
-                    },
-                    icon: const Icon(Icons.clear, size: 18),
-                  ),
-            border: const OutlineInputBorder(),
-          ),
-        );
         final controls = <Widget>[
           _buildViewSelector(compact: compact),
           PopupMenuButton<_FileSortMode>(
@@ -7010,9 +7349,7 @@ class _FileTreeToolbar extends StatelessWidget {
           ),
         ];
         final count = Text(
-          isSearching
-              ? '找到 $itemCount 项'
-              : '当前 $itemCount 项 · 共 $totalFileCount 个文件',
+          '当前 $itemCount 项 · 共 $totalFileCount 个文件',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           textAlign: TextAlign.end,
@@ -7020,29 +7357,13 @@ class _FileTreeToolbar extends StatelessWidget {
         );
         return Padding(
           padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
-          child: compact
-              ? Column(
-                  children: [
-                    SizedBox(width: double.infinity, child: search),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        ...controls,
-                        const SizedBox(width: 4),
-                        Expanded(child: count),
-                      ],
-                    ),
-                  ],
-                )
-              : Row(
-                  children: [
-                    SizedBox(width: 280, child: search),
-                    const SizedBox(width: 8),
-                    ...controls,
-                    const SizedBox(width: 8),
-                    Expanded(child: count),
-                  ],
-                ),
+          child: Row(
+            children: [
+              ...controls,
+              const SizedBox(width: 4),
+              Expanded(child: count),
+            ],
+          ),
         );
       },
     );
@@ -7099,7 +7420,6 @@ class _FileTreeToolbar extends StatelessWidget {
 class _DirectoryBreadcrumbs extends StatelessWidget {
   final String rootName;
   final String currentPath;
-  final bool isSearching;
   final VoidCallback onRoot;
   final VoidCallback onUp;
   final ValueChanged<String> onSegment;
@@ -7107,7 +7427,6 @@ class _DirectoryBreadcrumbs extends StatelessWidget {
   const _DirectoryBreadcrumbs({
     required this.rootName,
     required this.currentPath,
-    required this.isSearching,
     required this.onRoot,
     required this.onUp,
     required this.onSegment,
@@ -7122,7 +7441,7 @@ class _DirectoryBreadcrumbs extends StatelessWidget {
         height: 40,
         child: Row(
           children: [
-            if (parts.isNotEmpty && !isSearching)
+            if (parts.isNotEmpty)
               IconButton(
                 key: const ValueKey('file_tree_up_button'),
                 tooltip: '返回上级目录',
@@ -7146,15 +7465,10 @@ class _DirectoryBreadcrumbs extends StatelessWidget {
                     for (var index = 0; index < parts.length; index += 1) ...[
                       const Icon(Icons.chevron_right, size: 18),
                       TextButton(
-                        onPressed: isSearching
-                            ? null
-                            : () => onSegment(parts.take(index + 1).join('/')),
+                        onPressed: () =>
+                            onSegment(parts.take(index + 1).join('/')),
                         child: Text(parts[index]),
                       ),
-                    ],
-                    if (isSearching) ...[
-                      const Icon(Icons.chevron_right, size: 18),
-                      const Text('搜索结果'),
                     ],
                   ],
                 ),
@@ -8670,34 +8984,6 @@ class _FileTreeSubtitle extends StatelessWidget {
 enum _FileTreeAction { details, preview, download, delete }
 
 enum _FolderTreeAction { delete }
-
-class _DeletePolicyNotice extends StatelessWidget {
-  final int backedUpCount;
-
-  const _DeletePolicyNotice({required this.backedUpCount});
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: colorScheme.primaryContainer.withValues(alpha: 0.35),
-        border: Border.all(color: colorScheme.outlineVariant),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.cloud_done_outlined, size: 18, color: colorScheme.primary),
-          const SizedBox(width: 8),
-          Expanded(child: Text('删除策略下，$backedUpCount 个文件已完成服务器备份，本地已按策略清理。')),
-        ],
-      ),
-    );
-  }
-}
 
 class _EmptyFileHint extends StatelessWidget {
   final String? message;

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:file_selector/file_selector.dart';
@@ -10,6 +11,8 @@ import '../../core/storage/app_storage.dart';
 import '../../core/theme/app_theme.dart';
 import '../auth/auth_models.dart';
 import '../auth/auth_service.dart';
+import '../sync/upload_key_store.dart';
+import 'avatar_crypto.dart';
 import 'app_permission_gateway.dart';
 import 'app_permissions_screen.dart';
 import 'avatar_store.dart';
@@ -21,6 +24,8 @@ class ProfileScreen extends StatefulWidget {
   final UserProfileGateway profileGateway;
   final AppReleaseGateway? releaseGateway;
   final AvatarStore avatarStore;
+  final AvatarGateway? avatarGateway;
+  final UploadKeyStore? avatarKeys;
   final AppPermissionGateway? permissionGateway;
   final String platform;
   final String serverAddress;
@@ -38,6 +43,8 @@ class ProfileScreen extends StatefulWidget {
     required this.profileGateway,
     this.releaseGateway,
     required this.avatarStore,
+    this.avatarGateway,
+    this.avatarKeys,
     this.permissionGateway,
     required this.platform,
     required this.serverAddress,
@@ -55,15 +62,19 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
+  static const _profileRequestTimeout = Duration(seconds: 12);
+
   Future<UserProfile>? _profileFuture;
+  UserProfile? _cachedProfile;
   Future<Uint8List?> _avatarFuture = Future.value(null);
   String _appVersion = '';
 
   @override
   void initState() {
     super.initState();
+    _primeCachedProfile();
     if (widget.active) {
-      _profileFuture = _loadProfile();
+      _startProfileLoad();
     }
     _loadAppVersion();
   }
@@ -72,8 +83,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void didUpdateWidget(ProfileScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.active && !oldWidget.active && _profileFuture == null) {
-      _profileFuture = _loadProfile();
+      _startProfileLoad();
     }
+  }
+
+  void _primeCachedProfile() {
+    final cache = widget.storage is UserProfileCacheStore
+        ? widget.storage as UserProfileCacheStore
+        : null;
+    if (cache != null) {
+      unawaited(_loadCachedProfile(cache));
+    }
+  }
+
+  void _startProfileLoad() {
+    _profileFuture = _loadProfile();
+  }
+
+  Future<void> _loadCachedProfile(UserProfileCacheStore cache) async {
+    final profile = await cache.loadCachedUserProfile();
+    if (!mounted || profile == null || _cachedProfile != null) {
+      return;
+    }
+    setState(() {
+      _cachedProfile = profile;
+      // Show the local avatar with the cached profile while the remote refresh runs.
+      _avatarFuture = _loadLocalAvatar(profile.id);
+    });
   }
 
   Future<String> _token() async {
@@ -89,13 +125,61 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<UserProfile> _loadProfile() async {
-    final profile = await widget.profileGateway.loadProfile(await _token());
+    late final UserProfile profile;
+    try {
+      profile = await widget.profileGateway
+          .loadProfile(await _token())
+          .timeout(_profileRequestTimeout);
+    } on TimeoutException {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'profile_timeout',
+        message: '个人资料加载超时，请检查网络后重试',
+      );
+    }
+    _cachedProfile = profile;
+    final cache = widget.storage is UserProfileCacheStore
+        ? widget.storage as UserProfileCacheStore
+        : null;
+    if (cache != null) {
+      unawaited(cache.saveCachedUserProfile(profile));
+    }
     if (mounted) {
       setState(() {
-        _avatarFuture = widget.avatarStore.load(profile.id);
+        _avatarFuture = _loadAvatar(profile);
       });
     }
     return profile;
+  }
+
+  Future<Uint8List?> _loadAvatar(UserProfile profile) async {
+    final gateway = widget.avatarGateway;
+    final keys = widget.avatarKeys;
+    if (gateway == null || keys == null) {
+      return _loadLocalAvatar(profile.id);
+    }
+    try {
+      final encrypted = await gateway.loadAvatar(await _token());
+      if (encrypted != null) {
+        final bytes = await AvatarCrypto(keys).decrypt(encrypted);
+        final decoded = Uint8List.fromList(bytes);
+        await widget.avatarStore.save(profile.id, decoded);
+        return decoded;
+      }
+      final local = await _loadLocalAvatar(profile.id);
+      if (local != null) {
+        final migrated = await AvatarCrypto(keys).encrypt(local);
+        await gateway.saveAvatar(token: await _token(), bytes: migrated);
+      }
+      return local;
+    } catch (_) {
+      return _loadLocalAvatar(profile.id);
+    }
+  }
+
+  Future<Uint8List?> _loadLocalAvatar(String userId) async {
+    final bytes = await widget.avatarStore.load(userId);
+    return bytes == null ? null : Uint8List.fromList(bytes);
   }
 
   Future<void> _loadAppVersion() async {
@@ -125,6 +209,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
       body: FutureBuilder<UserProfile>(
         future: _profileFuture,
         builder: (context, snapshot) {
+          final cachedProfile = _cachedProfile ?? snapshot.data;
+          if (cachedProfile != null) {
+            return _buildProfileContent(cachedProfile);
+          }
           if (_profileFuture == null) {
             return const _ProfileLoadingSkeleton();
           }
@@ -138,109 +226,111 @@ class _ProfileScreenState extends State<ProfileScreen> {
             );
           }
           final profile = snapshot.data!;
-          return RefreshIndicator(
-            onRefresh: _refresh,
-            child: ListView(
-              key: const ValueKey('profile_settings_list'),
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.only(bottom: 32),
-              children: [
-                _buildProfileHeader(profile),
-                _buildStorageSummary(profile),
-                _SectionLabel('账号与安全'),
-                ListTile(
-                  key: const ValueKey('edit_profile_tile'),
-                  leading: const Icon(Icons.badge_outlined),
-                  title: const Text('个人资料'),
-                  subtitle: Text('@${profile.effectiveUsername}'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => _editProfile(profile),
-                ),
-                ListTile(
-                  key: const ValueKey('change_password_tile'),
-                  leading: const Icon(Icons.lock_outline),
-                  title: const Text('修改密码'),
-                  subtitle: const Text('使用当前密码验证身份'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: _changePassword,
-                ),
-                const Divider(height: 1, indent: 56),
-                _SectionLabel('存储与服务'),
-                ListTile(
-                  key: const ValueKey('storage_usage_tile'),
-                  leading: const Icon(Icons.devices_outlined),
-                  title: const Text('设备与空间'),
-                  subtitle: const Text('查看设备、同步目录和空间占用'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: _openDeviceStorage,
-                ),
-                ListTile(
-                  key: const ValueKey('server_settings_tile'),
-                  leading: const Icon(Icons.dns_outlined),
-                  title: const Text('服务器设置'),
-                  subtitle: Text(
-                    widget.serverAddress,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: widget.onConfigureServer,
-                ),
-                ListTile(
-                  key: const ValueKey('app_permissions_tile'),
-                  leading: const Icon(Icons.shield_outlined),
-                  title: const Text('权限与存储'),
-                  subtitle: const Text('检查相册和文件夹访问权限'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: _openPermissions,
-                ),
-                const Divider(height: 1, indent: 56),
-                _SectionLabel('应用'),
-                ListTile(
-                  key: const ValueKey('theme_settings_tile'),
-                  leading: const Icon(Icons.palette_outlined),
-                  title: const Text('主题外观'),
-                  subtitle: Text('当前：${widget.selectedTheme.label}'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: _openThemeSettings,
-                ),
-                ListTile(
-                  key: const ValueKey('app_update_tile'),
-                  leading: const Icon(Icons.system_update_outlined),
-                  title: const Text('App 更新'),
-                  subtitle: Text(
-                    _appVersion.isEmpty ? '正在读取版本' : '当前版本 $_appVersion',
-                  ),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: _checkForUpdate,
-                ),
-                ListTile(
-                  key: const ValueKey('about_tile'),
-                  leading: const Icon(Icons.info_outline),
-                  title: const Text('关于 VaultSync'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: _showAbout,
-                ),
-                const SizedBox(height: 24),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: OutlinedButton.icon(
-                    key: const ValueKey('sign_out_button'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Theme.of(context).colorScheme.error,
-                      side: BorderSide(
-                        color: Theme.of(context).colorScheme.error,
-                      ),
-                    ),
-                    onPressed: _confirmSignOut,
-                    icon: const Icon(Icons.logout),
-                    label: const Text('退出登录'),
-                  ),
-                ),
-              ],
-            ),
-          );
+          return _buildProfileContent(profile);
         },
+      ),
+    );
+  }
+
+  Widget _buildProfileContent(UserProfile profile) {
+    return RefreshIndicator(
+      onRefresh: _refresh,
+      child: ListView(
+        key: const ValueKey('profile_settings_list'),
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.only(bottom: 32),
+        children: [
+          _buildProfileHeader(profile),
+          _buildStorageSummary(profile),
+          _SectionLabel('账号与安全'),
+          ListTile(
+            key: const ValueKey('edit_profile_tile'),
+            leading: const Icon(Icons.badge_outlined),
+            title: const Text('个人资料'),
+            subtitle: Text('@${profile.effectiveUsername}'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _editProfile(profile),
+          ),
+          ListTile(
+            key: const ValueKey('change_password_tile'),
+            leading: const Icon(Icons.lock_outline),
+            title: const Text('修改密码'),
+            subtitle: const Text('使用当前密码验证身份'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _changePassword,
+          ),
+          const Divider(height: 1, indent: 56),
+          _SectionLabel('存储与服务'),
+          ListTile(
+            key: const ValueKey('storage_usage_tile'),
+            leading: const Icon(Icons.devices_outlined),
+            title: const Text('设备与空间'),
+            subtitle: const Text('查看设备、同步目录和空间占用'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _openDeviceStorage,
+          ),
+          ListTile(
+            key: const ValueKey('server_settings_tile'),
+            leading: const Icon(Icons.dns_outlined),
+            title: const Text('服务器设置'),
+            subtitle: Text(
+              widget.serverAddress,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: widget.onConfigureServer,
+          ),
+          ListTile(
+            key: const ValueKey('app_permissions_tile'),
+            leading: const Icon(Icons.shield_outlined),
+            title: const Text('权限与存储'),
+            subtitle: const Text('检查相册和文件夹访问权限'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _openPermissions,
+          ),
+          const Divider(height: 1, indent: 56),
+          _SectionLabel('应用'),
+          ListTile(
+            key: const ValueKey('theme_settings_tile'),
+            leading: const Icon(Icons.palette_outlined),
+            title: const Text('主题外观'),
+            subtitle: Text('当前：${widget.selectedTheme.label}'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _openThemeSettings,
+          ),
+          ListTile(
+            key: const ValueKey('app_update_tile'),
+            leading: const Icon(Icons.system_update_outlined),
+            title: const Text('App 更新'),
+            subtitle: Text(
+              _appVersion.isEmpty ? '正在读取版本' : '当前版本 $_appVersion',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _checkForUpdate,
+          ),
+          ListTile(
+            key: const ValueKey('about_tile'),
+            leading: const Icon(Icons.info_outline),
+            title: const Text('关于 VaultSync'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _showAbout,
+          ),
+          const SizedBox(height: 24),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: OutlinedButton.icon(
+              key: const ValueKey('sign_out_button'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Theme.of(context).colorScheme.error,
+                side: BorderSide(color: Theme.of(context).colorScheme.error),
+              ),
+              onPressed: _confirmSignOut,
+              icon: const Icon(Icons.logout),
+              label: const Text('退出登录'),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -390,11 +480,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
       return;
     }
     try {
+      final gateway = widget.avatarGateway;
+      final keys = widget.avatarKeys;
+      if (gateway != null && keys != null) {
+        final encrypted = await AvatarCrypto(keys).encrypt(bytes);
+        await gateway.saveAvatar(token: await _token(), bytes: encrypted);
+      }
       await widget.avatarStore.save(profile.id, bytes);
       if (mounted) {
         setState(() {
           _avatarFuture = Future.value(bytes);
         });
+        _showMessage('头像已更新并同步到服务端');
       }
     } catch (error) {
       _showMessage(userReadableErrorMessage(error));
@@ -481,8 +578,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
     if (updated != null && mounted) {
       setState(() {
+        _cachedProfile = updated;
         _profileFuture = Future.value(updated);
       });
+      final cache = widget.storage is UserProfileCacheStore
+          ? widget.storage as UserProfileCacheStore
+          : null;
+      if (cache != null) {
+        unawaited(cache.saveCachedUserProfile(updated));
+      }
       _showMessage('个人资料已更新');
     }
   }

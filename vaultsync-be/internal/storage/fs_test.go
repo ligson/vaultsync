@@ -1,10 +1,40 @@
 package storage
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestStoreAvatarReplacesAtomicallyAndEnforcesSize(t *testing.T) {
+	dataDir := t.TempDir()
+	storage := NewFSStorage(dataDir)
+
+	path, hashValue, size, err := storage.StoreAvatar(
+		"user-1",
+		bytes.NewReader([]byte("encrypted-avatar")),
+		1024,
+	)
+	if err != nil {
+		t.Fatalf("store avatar: %v", err)
+	}
+	if path != "avatars/user-1/avatar.bin" || size != 16 || hashValue == "" {
+		t.Fatalf("unexpected avatar metadata: path=%q size=%d hash=%q", path, size, hashValue)
+	}
+	content, err := os.ReadFile(filepath.Join(dataDir, "avatars/user-1/avatar.bin"))
+	if err != nil {
+		t.Fatalf("read avatar: %v", err)
+	}
+	if string(content) != "encrypted-avatar" {
+		t.Fatalf("avatar content = %q", string(content))
+	}
+
+	_, _, _, err = storage.StoreAvatar("user-1", bytes.NewReader(make([]byte, 1025)), 1024)
+	if err != ErrMaxSizeExceeded {
+		t.Fatalf("expected max size error, got %v", err)
+	}
+}
 
 func TestFinalizeUploadReusesExistingFinalizedFile(t *testing.T) {
 	dataDir := t.TempDir()

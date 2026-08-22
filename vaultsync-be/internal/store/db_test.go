@@ -27,6 +27,7 @@ func TestOpenRunsMigrationsAndEnablesWAL(t *testing.T) {
 
 	wantColumns := map[string][]string{
 		"users":             {"id", "email", "password_hash", "role", "status", "quota_bytes", "used_bytes", "created_at", "username", "nickname"},
+		"user_avatars":      {"user_id", "content_path", "content_hash", "size_bytes", "updated_at"},
 		"sessions":          {"token_id", "user_id", "device_id", "created_at", "expires_at", "refresh_token_hash", "refresh_expires_at", "revoked_at"},
 		"devices":           {"id", "user_id", "name", "platform", "client_key", "created_at"},
 		"sync_roots":        {"id", "user_id", "device_id", "encrypted_path", "encryption_enabled", "cleanup_policy", "archive_path", "created_at"},

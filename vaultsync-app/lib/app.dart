@@ -396,6 +396,10 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
       return AuthenticatedShell(
         storage: widget.storage,
         profileGateway: profileGateway,
+        avatarGateway: profileGateway is AvatarGateway
+            ? profileGateway as AvatarGateway
+            : null,
+        avatarKeys: widget.uploadKeys,
         releaseGateway: releaseGateway,
         permissionGateway: PlatformAppPermissionGateway(
           platform: deviceProfile.platform,

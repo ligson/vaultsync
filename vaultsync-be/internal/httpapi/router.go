@@ -11,6 +11,7 @@ import (
 
 type Dependencies struct {
 	AuthHandler     *handlers.AuthHandler
+	AvatarHandler   *handlers.AvatarHandler
 	DeviceHandler   *handlers.DeviceHandler
 	SyncRootHandler *handlers.SyncRootHandler
 	UploadHandler   *handlers.UploadHandler
@@ -40,6 +41,8 @@ func RegisterRoutes(mux *http.ServeMux, deps Dependencies) {
 
 	secured := http.NewServeMux()
 	secured.HandleFunc("GET /api/v1/auth/me", deps.AuthHandler.Me)
+	secured.HandleFunc("GET /api/v1/auth/avatar", deps.AvatarHandler.Get)
+	secured.HandleFunc("PUT /api/v1/auth/avatar", deps.AvatarHandler.Put)
 	secured.HandleFunc("GET /api/v1/auth/storage-usage", deps.AuthHandler.StorageUsage)
 	secured.HandleFunc("PATCH /api/v1/auth/me", deps.AuthHandler.UpdateMe)
 	secured.HandleFunc("POST /api/v1/auth/change-password", deps.AuthHandler.ChangePassword)
@@ -75,6 +78,7 @@ func RegisterRoutes(mux *http.ServeMux, deps Dependencies) {
 	admin.HandleFunc("DELETE /api/v1/admin/downloads/{platform}/file", deps.AdminHandler.DeleteDownloadFile)
 	mux.Handle("/downloads/", http.StripPrefix("/downloads/", http.FileServer(http.Dir(deps.DownloadDir))))
 	mux.Handle("/api/v1/auth/me", middleware.Auth(deps.AuthService, secured))
+	mux.Handle("/api/v1/auth/avatar", middleware.Auth(deps.AuthService, secured))
 	mux.Handle("/api/v1/auth/storage-usage", middleware.Auth(deps.AuthService, secured))
 	mux.Handle("/api/v1/auth/change-password", middleware.Auth(deps.AuthService, secured))
 	mux.Handle("/api/v1/devices", middleware.Auth(deps.AuthService, secured))

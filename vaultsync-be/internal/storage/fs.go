@@ -15,6 +15,8 @@ type FSStorage struct {
 	rootDir string
 }
 
+var ErrMaxSizeExceeded = errors.New("content exceeds maximum size")
+
 func NewFSStorage(rootDir string) *FSStorage {
 	return &FSStorage{rootDir: rootDir}
 }
@@ -32,6 +34,53 @@ func (s *FSStorage) AppendChunk(userID, sessionID string, chunk io.Reader) (int6
 	defer file.Close()
 
 	return io.Copy(file, chunk)
+}
+
+func (s *FSStorage) StoreAvatar(userID string, content io.Reader, maxSize int64) (string, string, int64, error) {
+	userID, err := safeSegment(userID, "user_id")
+	if err != nil {
+		return "", "", 0, err
+	}
+	directory := filepath.Join(s.rootDir, "avatars", userID)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return "", "", 0, err
+	}
+	temporary, err := os.CreateTemp(directory, ".avatar-*.part")
+	if err != nil {
+		return "", "", 0, err
+	}
+	temporaryPath := temporary.Name()
+	defer func() { _ = os.Remove(temporaryPath) }()
+
+	size, err := io.CopyN(temporary, content, maxSize+1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		_ = temporary.Close()
+		return "", "", 0, err
+	}
+	if size > maxSize {
+		_ = temporary.Close()
+		return "", "", 0, ErrMaxSizeExceeded
+	}
+	if err := temporary.Close(); err != nil {
+		return "", "", 0, err
+	}
+	hashValue, size, err := hashFile(temporaryPath)
+	if err != nil {
+		return "", "", 0, err
+	}
+	targetPath := filepath.Join(directory, "avatar.bin")
+	if err := os.Rename(temporaryPath, targetPath); err != nil {
+		return "", "", 0, err
+	}
+	return filepath.ToSlash(filepath.Join("avatars", userID, "avatar.bin")), hashValue, size, nil
+}
+
+func (s *FSStorage) OpenAvatar(userID string) (*os.File, error) {
+	userID, err := safeSegment(userID, "user_id")
+	if err != nil {
+		return nil, err
+	}
+	return os.Open(filepath.Join(s.rootDir, "avatars", userID, "avatar.bin"))
 }
 
 type UploadObjectPlacement struct {

@@ -1,7 +1,9 @@
 package integration
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -179,6 +181,41 @@ func TestUserCanReadAndUpdateProfile(t *testing.T) {
 	if updated.Username != "alice.cloud" || updated.Nickname != "Alice" {
 		t.Fatalf("unexpected updated profile: %+v", updated)
 	}
+}
+
+func TestUserCanStoreAndReadEncryptedAvatar(t *testing.T) {
+	app, token := testutil.NewAuthenticatedServer(t)
+
+	resp := testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/auth/avatar", "", token)
+	testutil.AssertStatus(t, resp, http.StatusNotFound)
+	_ = resp.Body.Close()
+
+	ciphertext := []byte(`{"format":"VSAV001","ciphertext":"opaque"}`)
+	resp = testutil.BinaryRequest(t, app, http.MethodPut, "/api/v1/auth/avatar", ciphertext, token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	payload := testutil.DecodeJSONEnvelope(t, resp)
+	var avatar struct {
+		ContentHash string `json:"content_hash"`
+		SizeBytes   int64  `json:"size_bytes"`
+	}
+	if err := json.Unmarshal(payload.Data, &avatar); err != nil {
+		t.Fatalf("decode avatar response: %v", err)
+	}
+	if avatar.ContentHash == "" || avatar.SizeBytes != int64(len(ciphertext)) {
+		t.Fatalf("unexpected avatar metadata: %+v", avatar)
+	}
+
+	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/auth/avatar", "", token)
+	testutil.AssertStatus(t, resp, http.StatusOK)
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read avatar response: %v", err)
+	}
+	_ = resp.Body.Close()
+	if !bytes.Equal(got, ciphertext) {
+		t.Fatalf("avatar response = %q, want %q", string(got), string(ciphertext))
+	}
+	testutil.AssertHeader(t, resp, "ETag", `"`+avatar.ContentHash+`"`)
 }
 
 func TestUserCanChangePasswordWithCurrentPassword(t *testing.T) {

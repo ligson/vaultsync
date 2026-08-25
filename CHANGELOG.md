@@ -2,6 +2,10 @@
 
 所有有意义的项目变更都应记录在这里。
 
+## 2026-08-25
+
+- `v1.0.0+2026082203` 已完成 GitHub Release 并同步到 NAS 下载页：Actions run `32578267010` 的 13 个 job 全部成功，Release 包含 Android 正式签名 APK/AAB、iOS/macOS/Windows unsigned 客户端、前端 zip、四个后端 tar.gz 和 `SHA256SUMS.txt` 共 12 个制品；NAS 更新前使用 SQLite backup API 备份数据库，并将旧 Compose 和 5 个旧客户端包保存到 `data/backups/client-downloads-20260825-110023-2026082203/`，备份数据库 `PRAGMA quick_check` 为 `ok`。更新后 6 条 `download_releases` 记录、5 个公网客户端下载文件的大小和 SHA-256 均与 GitHub 清单一致，健康接口、6 个版本接口和 5 个下载 URL 均回查正常。本次只替换客户端制品和下载元数据，后端容器与前端容器保持原镜像运行，未清理用户、设备、同步目录、上传队列、同步历史、服务器密文或加密密钥。
+
 ## 2026-08-21
 
 - 修复 macOS 打开“权限与存储”时因缺少照片图库用途声明导致的 TCC 崩溃；新增 `NSPhotoLibraryUsageDescription`，并将 macOS 的系统设置入口指向照片隐私设置。权限检查和文件夹访问提示按 Android、Apple 移动端、macOS、其他桌面平台分别处理，不修改本地同步数据、服务器密文或加密密钥。

@@ -136,3 +136,12 @@ func TestInspectRecoverableUploadDoesNotMovePartFile(t *testing.T) {
 		t.Fatalf("content path should not be created during inspection: %v", err)
 	}
 }
+
+func TestValidateRelativePathRejectsAbsolutePath(t *testing.T) {
+	if err := ValidateRelativePath("/2026/08/photo.jpg"); err == nil {
+		t.Fatal("expected absolute path to be rejected")
+	}
+	if err := ValidateRelativePath("Camera/2026/08/photo.jpg"); err != nil {
+		t.Fatalf("expected valid relative path, got %v", err)
+	}
+}

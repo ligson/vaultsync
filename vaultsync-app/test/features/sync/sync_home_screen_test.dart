@@ -1819,6 +1819,67 @@ void main() {
     );
   });
 
+  testWidgets('media backup displays legacy Recent files under Camera', (
+    tester,
+  ) async {
+    const root = SyncRoot(
+      id: 'media-root',
+      userId: 'user-1',
+      deviceId: 'device-1',
+      encryptedPath: 'media-backup:v1:root',
+      cleanupPolicy: 'keep',
+      archivePath: '',
+      createdAt: '2026-06-27T00:00:00Z',
+    );
+    final remoteBackups = FakeRemoteBackupGateway([
+      const RemoteBackupObject(
+        cursorValue: 1,
+        syncRootId: 'media-root',
+        objectId: 'object-1',
+        versionId: 'version-1',
+        encryptedName: 'enc:photo',
+        contentHash: 'sha256:photo',
+        sizeBytes: 4096,
+        metadataJson: '{}',
+        updatedAt: '2026-09-06T10:00:00Z',
+      ),
+    ]);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: FakeSyncRootMappingStore(),
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: FakeSyncRootGateway([root]),
+          remoteBackups: remoteBackups,
+          remoteMetadataDecrypter: const FakeRemoteMetadataDecrypter({
+            'object-1': RemoteBackupEntry(
+              syncRootId: 'media-root',
+              objectId: 'object-1',
+              versionId: 'version-1',
+              name: 'IMG_20260906.jpg',
+              relativePath: 'Recent/2026/09/IMG_20260906.jpg',
+              sizeBytes: 4096,
+              updatedAt: '2026-09-06T10:00:00Z',
+            ),
+          }),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Camera'), findsOneWidget);
+    await tester.tap(find.text('Camera'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('2026'));
+    await tester.pumpAndSettle();
+    expect(find.text('09'), findsOneWidget);
+  });
+
   testWidgets(
     'returning from sync status without changes does not reload remote objects',
     (tester) async {

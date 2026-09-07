@@ -187,6 +187,9 @@ func (s *UploadService) Complete(ctx context.Context, userID, sessionID string) 
 		if err != nil {
 			return domain.FileVersion{}, err
 		}
+		if err := storage.ValidateRelativePath(relativePath); err != nil {
+			return domain.FileVersion{}, InvalidRequest("普通存储文件路径无效，请重新扫描后重试")
+		}
 	}
 	contentPath, hashValue, size, err := s.storage.FinalizeUpload(storage.UploadObjectPlacement{
 		UserID:       userID,

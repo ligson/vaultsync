@@ -71,11 +71,18 @@ class PhotoManagerMediaGateway
     LocalMediaBackupSource source,
   ) async {
     final paths = await PhotoManager.getAssetPathList(
+      hasAll: false,
       type: _requestTypeFor(source.mediaTypes),
     );
     final selectedAlbumIds = source.albumIds.toSet();
     final snapshots = <MediaAssetSnapshot>[];
     for (final path in paths) {
+      // Recent is PhotoManager's aggregate album, not a real camera folder.
+      // Reading it duplicates every asset and makes the virtual backup tree
+      // depend on album ordering.
+      if (path.isAll) {
+        continue;
+      }
       if (source.albumScope == 'selected' &&
           !selectedAlbumIds.contains(path.id)) {
         continue;

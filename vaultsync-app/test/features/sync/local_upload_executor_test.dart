@@ -62,6 +62,55 @@ void main() {
   );
 
   test(
+    'executePendingUploads repairs an old absolute media path before retry',
+    () async {
+      final uploadTasks = FakeUploadTaskStore([
+        LocalUploadTask(
+          id: 'media-root:asset-1',
+          syncRootId: 'media-root',
+          localPath: '',
+          relativePath: '/2026/08/vaultsync-wechat-dialog.png',
+          sizeBytes: 3,
+          modifiedAt: DateTime.utc(2026, 8, 11, 9),
+          status: 'failed',
+          attempts: 81,
+          createdAt: DateTime.utc(2026, 8, 11, 10),
+          sourceType: 'media_asset',
+          assetId: 'asset-1',
+          assetMediaType: 'image',
+          uploadSessionId: 'stale-session',
+          uploadPayloadHash: 'stale-payload',
+        ),
+      ]);
+      final payloadPreparer = RecordingRelativePathUploadPayloadPreparer();
+      final executor = LocalUploadExecutor(
+        sessionStore: FakeSessionStore(
+          token: 'server-token',
+          deviceId: 'device-1',
+        ),
+        uploadTasks: uploadTasks,
+        uploads: FakeUploadGateway(),
+        payloadPreparer: payloadPreparer,
+        objectIdForTask: (_) => 'object-1',
+        versionIdForTask: (_) => 'version-1',
+        chunkSize: 3,
+      );
+
+      final result = await executor.executePendingUploads();
+
+      expect(result.uploadedCount, 1);
+      expect(
+        payloadPreparer.relativePath,
+        'Camera/2026/08/vaultsync-wechat-dialog.png',
+      );
+      expect(
+        uploadTasks.saved.single.relativePath,
+        'Camera/2026/08/vaultsync-wechat-dialog.png',
+      );
+    },
+  );
+
+  test(
     'executePendingUploads waits until an ordinary file is stable',
     () async {
       final directory = await Directory.systemTemp.createTemp(
@@ -1004,6 +1053,26 @@ class FakeUploadPayloadPreparer implements UploadPayloadPreparer {
       encryptedName: 'enc:a.jpg',
       metadataJson: '{"relative_path":"a.jpg"}',
       sourceContentHash: sourceContentHash,
+    );
+  }
+}
+
+class RecordingRelativePathUploadPayloadPreparer
+    implements UploadPayloadPreparer {
+  String? relativePath;
+
+  @override
+  Future<PreparedUploadPayload> prepare(
+    LocalUploadTask task, {
+    required String objectId,
+    required String versionId,
+  }) async {
+    relativePath = task.relativePath;
+    return const PreparedUploadPayload(
+      bytes: [1, 2, 3],
+      encryptedName: 'enc:vaultsync-wechat-dialog.png',
+      metadataJson:
+          '{"relative_path":"Camera/2026/08/vaultsync-wechat-dialog.png"}',
     );
   }
 }

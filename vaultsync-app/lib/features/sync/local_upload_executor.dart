@@ -373,13 +373,14 @@ class LocalUploadExecutor
         continue;
       }
       processedTaskCount += 1;
-      lastPath = task.relativePath.isNotEmpty
-          ? task.relativePath
-          : task.localPath;
       var currentTask = _syncTaskWithCurrentMapping(
         task,
         mappingsByRootId[task.syncRootId],
       );
+      currentTask = _normalizeMediaUploadPath(currentTask);
+      lastPath = currentTask.relativePath.isNotEmpty
+          ? currentTask.relativePath
+          : currentTask.localPath;
       PreparedUploadPayload? preparedPayload;
       try {
         _throwIfSyncRootUploadPaused(currentTask.syncRootId);
@@ -983,6 +984,45 @@ class LocalUploadExecutor
       assetId: task.assetId,
       assetMediaType: task.assetMediaType,
       encryptionEnabled: mapping.encryptionEnabled,
+    );
+  }
+
+  LocalUploadTask _normalizeMediaUploadPath(LocalUploadTask task) {
+    if (task.sourceType != 'media_asset') {
+      return task;
+    }
+    var normalized = task.relativePath.trim().replaceAll('\\', '/');
+    final hadLeadingSlash = normalized.startsWith('/');
+    normalized = normalized.replaceFirst(RegExp(r'^/+'), '');
+    if (normalized.isEmpty) {
+      return task;
+    }
+    final targetPath = hadLeadingSlash ? 'Camera/$normalized' : normalized;
+    if (task.relativePath == targetPath) {
+      return task;
+    }
+    return LocalUploadTask(
+      id: task.id,
+      syncRootId: task.syncRootId,
+      localPath: task.localPath,
+      relativePath: targetPath,
+      sizeBytes: task.sizeBytes,
+      modifiedAt: task.modifiedAt,
+      status: task.status,
+      attempts: task.attempts,
+      createdAt: task.createdAt,
+      stabilityObservedAt: task.stabilityObservedAt,
+      sourceContentHash: task.sourceContentHash,
+      lastError: task.lastError,
+      uploadSessionId: '',
+      uploadPayloadHash: '',
+      uploadTotalSize: 0,
+      uploadChunkSize: 0,
+      uploadedBytes: 0,
+      sourceType: task.sourceType,
+      assetId: task.assetId,
+      assetMediaType: task.assetMediaType,
+      encryptionEnabled: task.encryptionEnabled,
     );
   }
 

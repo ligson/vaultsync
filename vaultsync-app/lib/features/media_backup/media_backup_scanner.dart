@@ -70,9 +70,27 @@ class MediaBackupScanner {
   String _relativePath(MediaAssetSnapshot asset) {
     final date = asset.createdAt.toUtc();
     final month = date.month.toString().padLeft(2, '0');
-    final fileName = asset.fileName.isEmpty
+    final fallbackFileName = asset.fileName.isEmpty
         ? '${asset.id}.${asset.extension}'
         : asset.fileName;
-    return '${asset.albumName}/${date.year}/$month/$fileName';
+    final albumName = _safeDirectoryName(asset.albumName);
+    final fileName = _safeFileName(fallbackFileName, asset);
+    return '$albumName/${date.year}/$month/$fileName';
+  }
+
+  String _safeDirectoryName(String value) {
+    final normalized = value.trim().replaceAll(RegExp(r'[\\/]'), '_');
+    if (normalized.isEmpty || normalized == '.' || normalized == '..') {
+      return 'Camera';
+    }
+    return normalized;
+  }
+
+  String _safeFileName(String value, MediaAssetSnapshot asset) {
+    final normalized = value.trim().replaceAll(RegExp(r'[\\/]'), '_');
+    if (normalized.isNotEmpty && normalized != '.' && normalized != '..') {
+      return normalized;
+    }
+    return '${asset.id}.${asset.extension}';
   }
 }

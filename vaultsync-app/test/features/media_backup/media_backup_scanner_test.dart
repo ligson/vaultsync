@@ -49,6 +49,83 @@ void main() {
     expect(store.tasks.single.relativePath, '相机胶卷/2026/07/IMG_0001.JPG');
     expect(store.tasks.single.encryptionEnabled, isFalse);
   });
+
+  test(
+    'media backup scanner uses a relative fallback path without an album',
+    () async {
+      final store = FakeUploadTaskStore();
+      final scanner = MediaBackupScanner(
+        media: FakeMediaBackupGateway([
+          MediaAssetSnapshot(
+            id: 'asset-2',
+            albumId: 'album-2',
+            albumName: '',
+            mediaType: 'image',
+            fileName: 'vaultsync-wechat-dialog.png',
+            extension: 'png',
+            sizeBytes: 10,
+            createdAt: DateTime.utc(2026, 8, 3),
+            modifiedAt: DateTime.utc(2026, 8, 3),
+          ),
+        ]),
+        uploadTasks: store,
+      );
+
+      await scanner.scan(_source());
+
+      expect(
+        store.tasks.single.relativePath,
+        'Camera/2026/08/vaultsync-wechat-dialog.png',
+      );
+    },
+  );
+
+  test(
+    'media backup scanner removes separators from path components',
+    () async {
+      final store = FakeUploadTaskStore();
+      final scanner = MediaBackupScanner(
+        media: FakeMediaBackupGateway([
+          MediaAssetSnapshot(
+            id: 'asset-3',
+            albumId: 'album-3',
+            albumName: '/Travel\\2026/',
+            mediaType: 'image',
+            fileName: '/photo.jpg',
+            extension: 'jpg',
+            sizeBytes: 10,
+            createdAt: DateTime.utc(2026, 8, 3),
+            modifiedAt: DateTime.utc(2026, 8, 3),
+          ),
+        ]),
+        uploadTasks: store,
+      );
+
+      await scanner.scan(_source());
+
+      expect(
+        store.tasks.single.relativePath,
+        '_Travel_2026_/2026/08/_photo.jpg',
+      );
+    },
+  );
+}
+
+LocalMediaBackupSource _source() {
+  return LocalMediaBackupSource(
+    id: 'source-1',
+    syncRootId: 'root-1',
+    name: '相册备份',
+    mediaTypes: 'image_video',
+    albumScope: 'all',
+    albumIds: const [],
+    cleanupPolicy: 'keep',
+    encryptionEnabled: false,
+    wifiOnly: true,
+    autoBackupEnabled: true,
+    createdAt: DateTime.utc(2026, 7, 3, 8),
+    updatedAt: DateTime.utc(2026, 7, 3, 8),
+  );
 }
 
 class FakeMediaBackupGateway implements MediaBackupGateway {

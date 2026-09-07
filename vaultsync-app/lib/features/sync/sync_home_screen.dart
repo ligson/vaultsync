@@ -157,6 +157,8 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
   var _isPulling = false;
   var _isAutoSyncing = false;
   var _isAutoCleaningMedia = false;
+  var _isLifecycleMediaScanning = false;
+  DateTime? _lastLifecycleMediaScanAt;
   var _isSyncStatusOpen = false;
   var _hasReconciledUploadProgress = false;
   var _loadGeneration = 0;
@@ -178,6 +180,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appLifecycleState = state;
     if (state == AppLifecycleState.resumed) {
+      unawaited(_scanMediaBackupOnResume());
       unawaited(_autoCleanupUploadedMedia());
     }
   }
@@ -197,16 +200,49 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     if (!widget.autoSyncEnabled) {
       return;
     }
-    _initialAutoSyncTimer = Timer(
-      widget.autoSyncInitialDelay,
-      () => _runAutoSync(scanAndUpload: false, resumeUploads: true),
-    );
+    _initialAutoSyncTimer = Timer(widget.autoSyncInitialDelay, () async {
+      await _scanMediaBackupOnResume();
+      await _runAutoSync(scanAndUpload: false, resumeUploads: true);
+    });
     _autoSyncTimer = Timer.periodic(
       widget.autoSyncInterval,
       (_) => _runAutoSync(scanAndUpload: true),
     );
     _startLocalSyncMonitor();
     unawaited(_androidSyncKeepAlive.start(_devicePlatform));
+  }
+
+  Future<void> _scanMediaBackupOnResume() async {
+    final mediaSources = _mediaBackupSourcesStore;
+    if (mediaSources == null || widget.mediaGateway == null) {
+      return;
+    }
+    if (_isLifecycleMediaScanning) {
+      return;
+    }
+    final now = DateTime.now();
+    final lastScan = _lastLifecycleMediaScanAt;
+    if (lastScan != null &&
+        now.difference(lastScan) < const Duration(seconds: 30)) {
+      return;
+    }
+    _isLifecycleMediaScanning = true;
+    _lastLifecycleMediaScanAt = now;
+    try {
+      final rootIds = await _resolveCurrentDeviceActionSyncRootIds();
+      await _scanMediaBackupSources(allowedSyncRootIds: rootIds);
+      final tasks = await widget.uploadTasks.loadUploadTasks();
+      if (!mounted || _cachedHomeData == null) {
+        return;
+      }
+      setState(() {
+        _cachedHomeData = _cachedHomeData!.copyWith(uploadTasks: tasks);
+      });
+    } catch (error) {
+      debugPrint('VaultSync media scan on resume failed: $error');
+    } finally {
+      _isLifecycleMediaScanning = false;
+    }
   }
 
   String get _devicePlatform =>
@@ -9176,18 +9212,30 @@ class _SyncRootViewData {
   List<_UnifiedFileRecord> _buildFileEntries() {
     final records = <String, _UnifiedFileRecord>{};
     for (final task in tasks) {
-      final path = _normalizeRelativePath(task.relativePath);
+      final path = _displayPath(task.relativePath);
       records[path] = (records[path] ?? _UnifiedFileRecord(path: path))
           .copyWith(task: task);
     }
     for (final backup in remoteBackups) {
-      final path = _normalizeRelativePath(backup.relativePath);
+      final path = _displayPath(backup.relativePath);
       records[path] = (records[path] ?? _UnifiedFileRecord(path: path))
           .copyWith(backup: backup);
     }
     final files = records.values.toList()
       ..sort((left, right) => left.path.compareTo(right.path));
     return files;
+  }
+
+  String _displayPath(String path) {
+    final normalized = _normalizeRelativePath(path);
+    if (!isMediaBackupRoot) {
+      return normalized;
+    }
+    final parts = _pathParts(normalized);
+    if (parts.length > 1 && parts.first.toLowerCase() == 'recent') {
+      return ['Camera', ...parts.skip(1)].join('/');
+    }
+    return normalized;
   }
 
   String fileStatusLabel(_UnifiedFileRecord file) {

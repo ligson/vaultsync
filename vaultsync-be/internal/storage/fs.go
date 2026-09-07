@@ -236,6 +236,13 @@ func safeRelativePath(value string) (string, error) {
 	return cleaned, nil
 }
 
+// ValidateRelativePath checks a client-provided path without touching storage.
+// Callers can use it to return a client-visible validation error before finalize.
+func ValidateRelativePath(value string) error {
+	_, err := safeRelativePath(value)
+	return err
+}
+
 func publishPlainMirror(sourcePath, mirrorPath string) error {
 	if err := os.MkdirAll(filepath.Dir(mirrorPath), 0o755); err != nil {
 		return err

@@ -21,7 +21,7 @@ func TestRegisterAndManageSyncRoots(t *testing.T) {
 	rootBody := fmt.Sprintf(`{"device_id":"%s","encrypted_path":"base64:path","cleanup_policy":"delete","archive_path":""}`, deviceID)
 	resp = testutil.JSONRequest(t, app, http.MethodPost, "/api/v1/sync-roots", rootBody, token)
 	testutil.AssertStatus(t, resp, http.StatusCreated)
-	testutil.AssertJSONContains(t, resp, `"encryption_enabled":true`)
+	testutil.AssertJSONContains(t, resp, `"encryption_enabled":false`)
 
 	resp = testutil.JSONRequest(t, app, http.MethodGet, "/api/v1/sync-roots", "", token)
 	testutil.AssertStatus(t, resp, http.StatusOK)

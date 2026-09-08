@@ -1,3 +1,7 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+
 class SyncRoot {
   final String id;
   final String userId;
@@ -127,6 +131,7 @@ class LocalUploadTask {
   final String sourceType;
   final String assetId;
   final String assetMediaType;
+  final DateTime? capturedAt;
   final bool encryptionEnabled;
 
   const LocalUploadTask({
@@ -150,6 +155,7 @@ class LocalUploadTask {
     this.sourceType = 'file',
     this.assetId = '',
     this.assetMediaType = '',
+    this.capturedAt,
     this.encryptionEnabled = true,
   });
 
@@ -175,6 +181,7 @@ class LocalUploadTask {
       sourceType: json['source_type'] as String? ?? 'file',
       assetId: json['asset_id'] as String? ?? '',
       assetMediaType: json['asset_media_type'] as String? ?? '',
+      capturedAt: _optionalDateTime(json['captured_at']),
       encryptionEnabled: json['encryption_enabled'] as bool? ?? true,
     );
   }
@@ -201,9 +208,23 @@ class LocalUploadTask {
       'source_type': sourceType,
       'asset_id': assetId,
       'asset_media_type': assetMediaType,
+      'captured_at': capturedAt?.toIso8601String(),
       'encryption_enabled': encryptionEnabled,
     };
   }
+}
+
+String objectIdForUploadTask(LocalUploadTask task) {
+  return 'obj-${_stableUploadTaskHash(task)}';
+}
+
+String versionIdForUploadTask(LocalUploadTask task) {
+  return 'ver-${_stableUploadTaskHash(task)}-${task.modifiedAt.microsecondsSinceEpoch}';
+}
+
+String _stableUploadTaskHash(LocalUploadTask task) {
+  final digest = sha256.convert(utf8.encode(task.id));
+  return base64Url.encode(digest.bytes).replaceAll('=', '');
 }
 
 class AutoSyncStatus {

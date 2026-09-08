@@ -3,7 +3,25 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vaultsync_app/features/media_backup/media_backup_screen.dart';
 
 void main() {
-  testWidgets('media backup screen can save plain storage option', (
+  testWidgets('media backup screen defaults to plain storage', (tester) async {
+    bool? encryptionEnabled;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaBackupScreen(
+          onSave: (draft) async {
+            encryptionEnabled = draft.encryptionEnabled;
+          },
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('save_media_backup_button')));
+    await tester.pumpAndSettle();
+
+    expect(encryptionEnabled, isFalse);
+  });
+
+  testWidgets('media backup screen can enable encrypted storage', (
     tester,
   ) async {
     bool? encryptionEnabled;
@@ -22,7 +40,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('save_media_backup_button')));
     await tester.pumpAndSettle();
 
-    expect(encryptionEnabled, isFalse);
+    expect(encryptionEnabled, isTrue);
   });
 
   testWidgets('media backup screen saves delete cleanup policy after confirm', (

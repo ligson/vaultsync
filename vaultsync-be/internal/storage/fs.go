@@ -83,6 +83,56 @@ func (s *FSStorage) OpenAvatar(userID string) (*os.File, error) {
 	return os.Open(filepath.Join(s.rootDir, "avatars", userID, "avatar.bin"))
 }
 
+func (s *FSStorage) StoreMediaThumbnail(userID, mediaID string, content io.Reader, maxSize int64) (string, int64, error) {
+	userID, err := safeSegment(userID, "user_id")
+	if err != nil {
+		return "", 0, err
+	}
+	mediaID, err = safeSegment(mediaID, "media_id")
+	if err != nil {
+		return "", 0, err
+	}
+	directory := filepath.Join(s.rootDir, "media-thumbnails", userID)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return "", 0, err
+	}
+	temporary, err := os.CreateTemp(directory, ".thumbnail-*.part")
+	if err != nil {
+		return "", 0, err
+	}
+	temporaryPath := temporary.Name()
+	defer func() { _ = os.Remove(temporaryPath) }()
+	size, err := io.CopyN(temporary, content, maxSize+1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		_ = temporary.Close()
+		return "", 0, err
+	}
+	if size > maxSize {
+		_ = temporary.Close()
+		return "", 0, ErrMaxSizeExceeded
+	}
+	if err := temporary.Close(); err != nil {
+		return "", 0, err
+	}
+	targetPath := filepath.Join(directory, mediaID+".bin")
+	if err := os.Rename(temporaryPath, targetPath); err != nil {
+		return "", 0, err
+	}
+	return filepath.ToSlash(filepath.Join("media-thumbnails", userID, mediaID+".bin")), size, nil
+}
+
+func (s *FSStorage) OpenMediaThumbnail(userID, mediaID string) (*os.File, error) {
+	userID, err := safeSegment(userID, "user_id")
+	if err != nil {
+		return nil, err
+	}
+	mediaID, err = safeSegment(mediaID, "media_id")
+	if err != nil {
+		return nil, err
+	}
+	return os.Open(filepath.Join(s.rootDir, "media-thumbnails", userID, mediaID+".bin"))
+}
+
 type UploadObjectPlacement struct {
 	UserID       string
 	DeviceID     string

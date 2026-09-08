@@ -21,6 +21,7 @@ type App struct {
 	deviceService   *service.DeviceService
 	syncRootService *service.SyncRootService
 	uploadService   *service.UploadService
+	mediaService    *service.MediaService
 	changeService   *service.ChangeService
 	downloadService *service.DownloadService
 	deleteService   *service.DeleteService
@@ -39,6 +40,7 @@ func New(cfg config.Config) (*App, error) {
 	deviceRepo := store.NewDeviceRepo(db)
 	syncRootRepo := store.NewSyncRootRepo(db)
 	objectRepo := store.NewObjectRepo(db)
+	mediaRepo := store.NewMediaRepo(db)
 	fsStorage := storage.NewFSStorage(cfg.DataDir)
 	adminService := service.NewAdminService(adminRepo, cfg.AdminRegistrationEnabled, cfg.DefaultUserQuotaBytes, cfg.DataDir)
 	adminService.SetRuntimePaths(cfg.HTTPAddr, cfg.DatabasePath)
@@ -52,7 +54,8 @@ func New(cfg config.Config) (*App, error) {
 		avatarService:   service.NewAvatarService(avatarRepo, fsStorage),
 		deviceService:   service.NewDeviceService(deviceRepo),
 		syncRootService: service.NewSyncRootService(syncRootRepo, deviceRepo, objectRepo),
-		uploadService:   service.NewUploadService(objectRepo, deviceRepo, syncRootRepo, fsStorage),
+		uploadService:   service.NewUploadService(objectRepo, deviceRepo, syncRootRepo, mediaRepo, fsStorage),
+		mediaService:    service.NewMediaService(mediaRepo, syncRootRepo, fsStorage),
 		changeService:   service.NewChangeService(db, deviceRepo, cfg.DataDir),
 		downloadService: service.NewDownloadService(db, cfg.DataDir),
 		deleteService:   service.NewDeleteService(db, deviceRepo, syncRootRepo),
@@ -67,6 +70,7 @@ func (a *App) Dependencies() httpapi.Dependencies {
 		DeviceHandler:   handlers.NewDeviceHandler(a.deviceService),
 		SyncRootHandler: handlers.NewSyncRootHandler(a.syncRootService),
 		UploadHandler:   handlers.NewUploadHandler(a.uploadService),
+		MediaHandler:    handlers.NewMediaHandler(a.mediaService),
 		ChangeHandler:   handlers.NewChangeHandler(a.changeService),
 		DownloadHandler: handlers.NewDownloadHandler(a.downloadService),
 		DeleteHandler:   handlers.NewDeleteHandler(a.deleteService),

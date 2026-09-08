@@ -36,7 +36,8 @@ class _MediaBackupScreenState extends State<MediaBackupScreen> {
   String _mediaTypes = 'image_video';
   String _cleanupPolicy = 'keep';
   bool _deletePolicyConfirmed = false;
-  bool _encryptionEnabled = true;
+  // 新建相册备份默认保存明文；用户可按需开启客户端加密。
+  bool _encryptionEnabled = false;
   bool _wifiOnly = true;
   bool _autoBackupEnabled = true;
   bool _isSaving = false;

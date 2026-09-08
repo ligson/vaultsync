@@ -17,6 +17,7 @@ import 'features/download/download_service.dart';
 import 'features/download/remote_file_download.dart';
 import 'features/media_backup/media_upload_content_reader.dart';
 import 'features/media_backup/photo_manager_media_gateway.dart';
+import 'features/media_timeline/media_timeline_service.dart';
 import 'features/preview/remote_file_preview.dart';
 import 'features/preview/remote_file_thumbnail.dart';
 import 'features/profile/authenticated_shell.dart';
@@ -324,6 +325,21 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
     );
     final deviceProfile = _deviceProfile;
     final mediaGateway = const PhotoManagerMediaGateway();
+    final mediaTimeline = MediaTimelineApiService(
+      apiClient: apiClient,
+      sessionStore: widget.storage,
+      keyStore: widget.uploadKeys,
+      uploadTasks: widget.uploadTasks,
+      localThumbnails: mediaGateway,
+    );
+    final mediaThumbnailPublisher =
+        resolvedUploads is MediaThumbnailUploadGateway
+        ? EncryptedMediaThumbnailPublisher(
+            thumbnails: mediaGateway,
+            keyStore: widget.uploadKeys,
+            uploads: resolvedUploads as MediaThumbnailUploadGateway,
+          )
+        : null;
     final resolvedUploadExecutor =
         widget.uploadExecutor ??
         LocalUploadExecutor(
@@ -359,6 +375,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
             uploadTasks: widget.uploadTasks,
             mediaCleaner: mediaGateway,
           ),
+          mediaThumbnailPublisher: mediaThumbnailPublisher,
           progress: _uploadProgress,
         );
     final resolvedRemotePullExecutor =
@@ -433,6 +450,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
               : null,
           mediaGateway: mediaGateway,
           mediaThumbnails: mediaGateway,
+          mediaTimeline: mediaTimeline,
           currentDeviceDisplayName: deviceProfile.name,
           autoSyncEnabled: widget.autoSyncEnabled,
           serverAddress: _apiBaseUrl.toString(),

@@ -4,12 +4,60 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vaultsync_app/core/storage/app_storage.dart';
 import 'package:vaultsync_app/features/media_backup/media_backup_gateway.dart';
+import 'package:vaultsync_app/features/media_timeline/media_timeline_service.dart';
 import 'package:vaultsync_app/features/sync/local_cleanup_executor.dart';
 import 'package:vaultsync_app/features/sync/local_upload_executor.dart';
 import 'package:vaultsync_app/features/sync/sync_models.dart';
 import 'package:vaultsync_app/features/sync/upload_api_service.dart';
 
 void main() {
+  test('media upload sends index and publishes encrypted thumbnail', () async {
+    final capturedAt = DateTime.utc(2026, 9, 8, 12);
+    final uploadTasks = FakeUploadTaskStore([
+      LocalUploadTask(
+        id: 'media-root:asset-1',
+        syncRootId: 'media-root',
+        localPath: '',
+        relativePath: 'Camera/2026/09/a.jpg',
+        sizeBytes: 3,
+        modifiedAt: DateTime.utc(2026, 9, 8, 13),
+        capturedAt: capturedAt,
+        status: 'pending',
+        attempts: 0,
+        createdAt: DateTime.utc(2026, 9, 8, 14),
+        sourceType: 'media_asset',
+        assetId: 'asset-1',
+        assetMediaType: 'image',
+      ),
+    ]);
+    final uploads = FakeMediaUploadGateway();
+    final publisher = RecordingThumbnailPublisher();
+    final executor = LocalUploadExecutor(
+      sessionStore: FakeSessionStore(
+        token: 'server-token',
+        deviceId: 'device-1',
+      ),
+      uploadTasks: uploadTasks,
+      uploads: uploads,
+      payloadPreparer: const FakeUploadPayloadPreparer(),
+      mediaThumbnailPublisher: publisher,
+      objectIdForTask: (_) => 'object-1',
+      versionIdForTask: (_) => 'version-1',
+      chunkSize: 3,
+    );
+
+    final result = await executor.executePendingUploads();
+
+    expect(result.uploadedCount, 1);
+    expect(uploads.mediaIndex?.mediaType, 'image');
+    expect(uploads.mediaIndex?.capturedAt, capturedAt);
+    expect(uploads.mediaIndex?.capturedYear, 2026);
+    expect(uploads.mediaIndex?.capturedMonth, 9);
+    expect(publisher.mediaId, 'media-1');
+    expect(publisher.versionId, 'version-1');
+    expect(publisher.assetId, 'asset-1');
+  });
+
   test(
     'executePendingUploads uploads prepared ciphertext and marks task uploaded',
     () async {
@@ -1253,6 +1301,64 @@ class FakeUploadGateway implements UploadGateway {
     required String sessionId,
   }) async {
     return const UploadedFileVersion(id: 'version-1');
+  }
+}
+
+class FakeMediaUploadGateway extends FakeUploadGateway
+    implements MediaIndexedUploadGateway {
+  MediaUploadIndex? mediaIndex;
+
+  @override
+  Future<UploadSession> createMediaUploadSession({
+    required String token,
+    required String deviceId,
+    required String syncRootId,
+    required String objectId,
+    required String versionId,
+    required int totalSize,
+    required int chunkSize,
+    required String encryptedName,
+    required String metadataJson,
+    required MediaUploadIndex mediaIndex,
+  }) {
+    this.mediaIndex = mediaIndex;
+    return createUploadSession(
+      token: token,
+      deviceId: deviceId,
+      syncRootId: syncRootId,
+      objectId: objectId,
+      versionId: versionId,
+      totalSize: totalSize,
+      chunkSize: chunkSize,
+      encryptedName: encryptedName,
+      metadataJson: metadataJson,
+    );
+  }
+
+  @override
+  Future<UploadedFileVersion> completeUploadSession({
+    required String token,
+    required String sessionId,
+  }) async {
+    return const UploadedFileVersion(id: 'version-1', mediaId: 'media-1');
+  }
+}
+
+class RecordingThumbnailPublisher implements MediaPostUploadThumbnailPublisher {
+  String? mediaId;
+  String? versionId;
+  String? assetId;
+
+  @override
+  Future<void> publish({
+    required String token,
+    required LocalUploadTask task,
+    required String mediaId,
+    required String versionId,
+  }) async {
+    this.mediaId = mediaId;
+    this.versionId = versionId;
+    assetId = task.assetId;
   }
 }
 

@@ -80,19 +80,71 @@ type SyncRoot struct {
 }
 
 type UploadSession struct {
+	ID             string `json:"id"`
+	UserID         string `json:"user_id"`
+	DeviceID       string `json:"device_id"`
+	SyncRootID     string `json:"sync_root_id"`
+	ObjectID       string `json:"object_id"`
+	VersionID      string `json:"version_id"`
+	EncryptedName  string `json:"encrypted_name"`
+	TotalSize      int64  `json:"total_size"`
+	ChunkSize      int64  `json:"chunk_size"`
+	ReceivedSize   int64  `json:"received_size"`
+	Status         string `json:"status"`
+	MetadataJSON   string `json:"metadata_json"`
+	MediaIndexJSON string `json:"-"`
+	MediaID        string `json:"media_id,omitempty"`
+	CreatedAt      string `json:"created_at"`
+}
+
+type MediaIndexInput struct {
+	MediaType     string `json:"media_type"`
+	CapturedAt    string `json:"captured_at"`
+	CapturedYear  int    `json:"captured_year,omitempty"`
+	CapturedMonth int    `json:"captured_month,omitempty"`
+	Width         int    `json:"width"`
+	Height        int    `json:"height"`
+	DurationMS    int64  `json:"duration_ms"`
+}
+
+type MediaBackfillInput struct {
+	SyncRootID string `json:"sync_root_id"`
+	ObjectID   string `json:"object_id"`
+	VersionID  string `json:"version_id"`
+	MediaIndexInput
+}
+
+type MediaAsset struct {
 	ID            string `json:"id"`
-	UserID        string `json:"user_id"`
 	DeviceID      string `json:"device_id"`
+	DeviceName    string `json:"device_name"`
 	SyncRootID    string `json:"sync_root_id"`
 	ObjectID      string `json:"object_id"`
 	VersionID     string `json:"version_id"`
 	EncryptedName string `json:"encrypted_name"`
-	TotalSize     int64  `json:"total_size"`
-	ChunkSize     int64  `json:"chunk_size"`
-	ReceivedSize  int64  `json:"received_size"`
-	Status        string `json:"status"`
 	MetadataJSON  string `json:"metadata_json"`
-	CreatedAt     string `json:"created_at"`
+	ContentHash   string `json:"content_hash"`
+	SizeBytes     int64  `json:"size_bytes"`
+	MediaType     string `json:"media_type"`
+	CapturedAt    string `json:"captured_at"`
+	CapturedYear  int    `json:"captured_year"`
+	CapturedMonth int    `json:"captured_month"`
+	Width         int    `json:"width"`
+	Height        int    `json:"height"`
+	DurationMS    int64  `json:"duration_ms"`
+	HasThumbnail  bool   `json:"has_thumbnail"`
+}
+
+type MediaMonth struct {
+	Year  int   `json:"year"`
+	Month int   `json:"month"`
+	Count int64 `json:"count"`
+}
+
+type MediaAssetPage struct {
+	Items      []MediaAsset `json:"items"`
+	NextCursor string       `json:"next_cursor"`
+	HasMore    bool         `json:"has_more"`
 }
 
 type FileVersion struct {
@@ -106,6 +158,7 @@ type FileVersion struct {
 	SizeBytes     int64  `json:"size_bytes"`
 	MetadataJSON  string `json:"metadata_json"`
 	CreatedAt     string `json:"created_at"`
+	MediaID       string `json:"media_id,omitempty"`
 }
 
 type CursorChange struct {

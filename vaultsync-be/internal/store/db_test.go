@@ -31,7 +31,8 @@ func TestOpenRunsMigrationsAndEnablesWAL(t *testing.T) {
 		"sessions":          {"token_id", "user_id", "device_id", "created_at", "expires_at", "refresh_token_hash", "refresh_expires_at", "revoked_at"},
 		"devices":           {"id", "user_id", "name", "platform", "client_key", "created_at"},
 		"sync_roots":        {"id", "user_id", "device_id", "encrypted_path", "encryption_enabled", "cleanup_policy", "archive_path", "created_at"},
-		"upload_sessions":   {"id", "user_id", "device_id", "sync_root_id", "object_id", "version_id", "total_size", "chunk_size", "received_size", "status", "metadata_json", "created_at"},
+		"upload_sessions":   {"id", "user_id", "device_id", "sync_root_id", "object_id", "version_id", "total_size", "chunk_size", "received_size", "status", "metadata_json", "media_index_json", "created_at"},
+		"media_assets":      {"id", "user_id", "device_id", "sync_root_id", "object_id", "version_id", "media_type", "captured_at", "captured_year", "captured_month", "width", "height", "duration_ms", "thumbnail_path", "thumbnail_size_bytes", "updated_at"},
 		"file_versions":     {"id", "user_id", "sync_root_id", "object_id", "encrypted_name", "content_path", "content_hash", "size_bytes", "metadata_json", "created_at"},
 		"file_tombstones":   {"id", "user_id", "device_id", "sync_root_id", "object_id", "metadata_json", "created_at"},
 		"sync_events":       {"id", "user_id", "change_type", "version_id", "tombstone_id", "sync_root_id", "object_id", "created_at"},
@@ -83,6 +84,14 @@ func TestOpenRunsMigrationsAndEnablesWAL(t *testing.T) {
 				t.Fatalf("table %s column %d mismatch: got %q want %q (full=%v)", table, i, got[i], column, got)
 			}
 		}
+	}
+
+	var mediaTimelineIndex string
+	if err := db.QueryRow(`
+		SELECT name FROM sqlite_master
+		WHERE type = 'index' AND name = 'idx_media_assets_month_timeline'
+	`).Scan(&mediaTimelineIndex); err != nil {
+		t.Fatalf("media month timeline index missing: %v", err)
 	}
 }
 
@@ -138,6 +147,47 @@ func TestMigrateAddsRefreshSessionColumnsWithoutChangingExistingSessions(t *test
 		WHERE type = 'index' AND name = 'idx_sessions_refresh_token_hash'
 	`).Scan(&indexName); err != nil {
 		t.Fatalf("read refresh token index: %v", err)
+	}
+}
+
+func TestMigrateAddsMediaIndexWithoutChangingLegacyUploadSessions(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "legacy-media.db"))
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`
+		CREATE TABLE upload_sessions (
+			id TEXT PRIMARY KEY, user_id TEXT NOT NULL, device_id TEXT NOT NULL,
+			sync_root_id TEXT NOT NULL, object_id TEXT NOT NULL, version_id TEXT NOT NULL,
+			total_size INTEGER NOT NULL, chunk_size INTEGER NOT NULL,
+			received_size INTEGER NOT NULL, status TEXT NOT NULL,
+			metadata_json TEXT NOT NULL, created_at TEXT NOT NULL
+		);
+		INSERT INTO upload_sessions VALUES (
+			'session-1', 'user-1', 'device-1', 'root-1', 'object-1', 'version-1',
+			10, 5, 5, 'pending', '{}', '2026-09-01T00:00:00Z'
+		);
+	`); err != nil {
+		t.Fatalf("seed legacy upload session: %v", err)
+	}
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate legacy media database: %v", err)
+	}
+	var status, mediaIndexJSON string
+	var receivedSize int64
+	if err := db.QueryRow(`
+		SELECT status, received_size, media_index_json
+		FROM upload_sessions WHERE id = 'session-1'
+	`).Scan(&status, &receivedSize, &mediaIndexJSON); err != nil {
+		t.Fatalf("read migrated upload session: %v", err)
+	}
+	if status != "pending" || receivedSize != 5 || mediaIndexJSON != "" {
+		t.Fatalf("legacy upload session changed: status=%q received=%d media=%q", status, receivedSize, mediaIndexJSON)
+	}
+	var mediaTable string
+	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='media_assets'`).Scan(&mediaTable); err != nil {
+		t.Fatalf("media_assets table missing: %v", err)
 	}
 }
 

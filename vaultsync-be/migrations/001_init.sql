@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS sync_roots (
     user_id TEXT NOT NULL,
     device_id TEXT NOT NULL,
     encrypted_path TEXT NOT NULL,
+    encryption_enabled INTEGER NOT NULL DEFAULT 0,
     cleanup_policy TEXT NOT NULL,
     archive_path TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
@@ -64,10 +65,52 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
     received_size INTEGER NOT NULL,
     status TEXT NOT NULL,
     metadata_json TEXT NOT NULL,
+    media_index_json TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id),
     FOREIGN KEY (device_id) REFERENCES devices(id),
     FOREIGN KEY (sync_root_id) REFERENCES sync_roots(id)
+);
+
+CREATE TABLE IF NOT EXISTS media_assets (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    sync_root_id TEXT NOT NULL,
+    object_id TEXT NOT NULL,
+    version_id TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    captured_at TEXT NOT NULL,
+    captured_year INTEGER NOT NULL,
+    captured_month INTEGER NOT NULL,
+    width INTEGER NOT NULL DEFAULT 0,
+    height INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    thumbnail_path TEXT NOT NULL DEFAULT '',
+    thumbnail_size_bytes INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id, sync_root_id, object_id),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (device_id) REFERENCES devices(id),
+    FOREIGN KEY (sync_root_id) REFERENCES sync_roots(id),
+    FOREIGN KEY (version_id) REFERENCES file_versions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_assets_timeline
+ON media_assets(user_id, captured_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_media_assets_device_timeline
+ON media_assets(user_id, device_id, captured_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_media_assets_type_timeline
+ON media_assets(user_id, media_type, captured_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_media_assets_months
+ON media_assets(user_id, captured_year DESC, captured_month DESC);
+
+CREATE INDEX IF NOT EXISTS idx_media_assets_month_timeline
+ON media_assets(
+    user_id, captured_year, captured_month, captured_at DESC, id DESC
 );
 
 CREATE TABLE IF NOT EXISTS file_versions (

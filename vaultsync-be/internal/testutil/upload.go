@@ -17,7 +17,8 @@ func NewUploadReadyServer(t *testing.T) (*httptest.Server, string, string, strin
 	AssertStatus(t, resp, http.StatusCreated)
 	deviceID := MustReadJSONField(t, resp, "id")
 
-	rootBody := fmt.Sprintf(`{"device_id":"%s","encrypted_path":"base64:path","cleanup_policy":"delete","archive_path":""}`, deviceID)
+	// 密文上传辅助函数需明确建立加密目录，避免依赖接口默认值。
+	rootBody := fmt.Sprintf(`{"device_id":"%s","encrypted_path":"base64:path","encryption_enabled":true,"cleanup_policy":"delete","archive_path":""}`, deviceID)
 	resp = JSONRequest(t, app, http.MethodPost, "/api/v1/sync-roots", rootBody, token)
 	AssertStatus(t, resp, http.StatusCreated)
 	rootID := MustReadJSONField(t, resp, "id")

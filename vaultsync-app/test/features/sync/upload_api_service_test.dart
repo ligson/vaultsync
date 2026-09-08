@@ -68,6 +68,64 @@ void main() {
     expect(session.status, 'pending');
   });
 
+  test('createMediaUploadSession posts low sensitivity media index', () async {
+    final service = UploadApiService(
+      ApiClient(
+        baseUrl: Uri.parse('http://127.0.0.1:8080'),
+        httpClient: MockClient((request) async {
+          final body = jsonDecode(request.body) as Map<String, Object?>;
+          expect(body['media_index'], {
+            'media_type': 'video',
+            'captured_at': '2026-09-08T12:00:00.000Z',
+            'captured_year': 2026,
+            'captured_month': 9,
+            'width': 1920,
+            'height': 1080,
+            'duration_ms': 5000,
+          });
+          return http.Response(
+            jsonEncode({
+              'success': true,
+              'message': '',
+              'httpCode': 201,
+              'data': {
+                'id': 'session-media',
+                'status': 'pending',
+                'total_size': 3,
+                'chunk_size': 3,
+                'received_size': 0,
+              },
+            }),
+            201,
+          );
+        }),
+      ),
+    );
+
+    final session = await service.createMediaUploadSession(
+      token: 'server-token',
+      deviceId: 'device-1',
+      syncRootId: 'root-1',
+      objectId: 'object-1',
+      versionId: 'version-1',
+      totalSize: 3,
+      chunkSize: 3,
+      encryptedName: 'cipher',
+      metadataJson: '{}',
+      mediaIndex: MediaUploadIndex(
+        mediaType: 'video',
+        capturedAt: DateTime.utc(2026, 9, 8, 12),
+        capturedYear: 2026,
+        capturedMonth: 9,
+        width: 1920,
+        height: 1080,
+        durationMs: 5000,
+      ),
+    );
+
+    expect(session.id, 'session-media');
+  });
+
   test('uploadPart and complete call upload session endpoints', () async {
     final requestedPaths = <String>[];
     final service = UploadApiService(

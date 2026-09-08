@@ -8,7 +8,6 @@ import '../download/download_service.dart';
 import 'encrypted_download_payload_decrypter.dart';
 import 'local_download_writer.dart';
 import 'local_remote_delete_handler.dart';
-import 'local_upload_executor.dart';
 import 'remote_metadata_decrypter.dart';
 import 'sync_models.dart';
 import 'sync_service.dart';

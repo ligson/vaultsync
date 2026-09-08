@@ -2044,6 +2044,111 @@ void main() {
   );
 
   testWidgets(
+    'media timeline combines media roots from all account devices without reload',
+    (tester) async {
+      final syncRoots = FakeSyncRootGateway(const [
+        SyncRoot(
+          id: 'root-phone',
+          userId: 'user-1',
+          deviceId: 'device-phone',
+          deviceName: 'Pixel',
+          encryptedPath: 'media-backup:v1:phone',
+          cleanupPolicy: 'keep',
+          archivePath: '',
+          createdAt: '2026-09-01T00:00:00Z',
+        ),
+        SyncRoot(
+          id: 'root-tablet',
+          userId: 'user-1',
+          deviceId: 'device-tablet',
+          deviceName: 'iPad',
+          encryptedPath: 'media-backup:v1:tablet',
+          cleanupPolicy: 'keep',
+          archivePath: '',
+          createdAt: '2026-08-01T00:00:00Z',
+        ),
+      ]);
+      final remoteBackups = FakeRemoteBackupGateway(const [
+        RemoteBackupObject(
+          cursorValue: 1,
+          syncRootId: 'root-phone',
+          objectId: 'phone-image',
+          versionId: 'version-phone',
+          encryptedName: 'enc:phone',
+          contentHash: 'sha256:phone',
+          sizeBytes: 1024,
+          metadataJson: '{}',
+          updatedAt: '2026-09-08T10:00:00Z',
+        ),
+        RemoteBackupObject(
+          cursorValue: 2,
+          syncRootId: 'root-tablet',
+          objectId: 'tablet-video',
+          versionId: 'version-tablet',
+          encryptedName: 'enc:tablet',
+          contentHash: 'sha256:tablet',
+          sizeBytes: 2048,
+          metadataJson: '{}',
+          updatedAt: '2026-08-02T10:00:00Z',
+        ),
+      ]);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SyncHomeScreen(
+            storage: FakeSessionStore(
+              token: 'server-token',
+              deviceId: 'device-phone',
+            ),
+            syncRootMappings: FakeSyncRootMappingStore(),
+            uploadTasks: FakeUploadTaskStore(),
+            syncRoots: syncRoots,
+            remoteBackups: remoteBackups,
+            remoteMetadataDecrypter: const FakeRemoteMetadataDecrypter({
+              'phone-image': RemoteBackupEntry(
+                syncRootId: 'root-phone',
+                objectId: 'phone-image',
+                versionId: 'version-phone',
+                name: 'phone.jpg',
+                relativePath: 'Camera/2026/09/phone.jpg',
+                sizeBytes: 1024,
+                updatedAt: '2026-09-08T10:00:00Z',
+              ),
+              'tablet-video': RemoteBackupEntry(
+                syncRootId: 'root-tablet',
+                objectId: 'tablet-video',
+                versionId: 'version-tablet',
+                name: 'tablet.mp4',
+                relativePath: 'Camera/2026/08/tablet.mp4',
+                sizeBytes: 2048,
+                updatedAt: '2026-08-02T10:00:00Z',
+              ),
+            }),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(remoteBackups.listCallCount, 2);
+      await tester.tap(
+        find.byKey(const ValueKey('open_media_timeline_button')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('媒体'), findsOneWidget);
+      expect(find.text('Pixel'), findsOneWidget);
+      expect(find.text('iPad'), findsOneWidget);
+      expect(find.text('9 月'), findsOneWidget);
+      expect(find.text('8 月'), findsOneWidget);
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(remoteBackups.listCallCount, 2);
+      expect(syncRoots.listCallCount, 1);
+    },
+  );
+
+  testWidgets(
     'sync file tree keeps deep long names readable on narrow screens',
     (tester) async {
       tester.view.physicalSize = const Size(360, 800);
@@ -2932,6 +3037,7 @@ void main() {
     expect(syncRoots.createdToken, 'server-token');
     expect(syncRoots.createdDeviceId, 'device-1');
     expect(syncRoots.createdEncryptedPath, 'base64:new-path');
+    expect(syncRoots.createdEncryptionEnabled, isFalse);
     expect(syncRoots.createdCleanupPolicy, 'keep');
     expect(mappings.saved.single.syncRootId, 'root-1');
     expect(mappings.saved.single.localPath, '');

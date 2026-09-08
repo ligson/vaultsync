@@ -675,6 +675,7 @@ class LocalCleanupExecutor implements LocalPostUploadCleaner {
       sourceType: task.sourceType,
       assetId: task.assetId,
       assetMediaType: task.assetMediaType,
+      capturedAt: task.capturedAt,
       encryptionEnabled: task.encryptionEnabled,
     );
   }

@@ -15,6 +15,7 @@ type Dependencies struct {
 	DeviceHandler   *handlers.DeviceHandler
 	SyncRootHandler *handlers.SyncRootHandler
 	UploadHandler   *handlers.UploadHandler
+	MediaHandler    *handlers.MediaHandler
 	ChangeHandler   *handlers.ChangeHandler
 	DownloadHandler *handlers.DownloadHandler
 	DeleteHandler   *handlers.DeleteHandler
@@ -57,6 +58,12 @@ func RegisterRoutes(mux *http.ServeMux, deps Dependencies) {
 	secured.HandleFunc("GET /api/v1/upload-sessions/{sessionID}", deps.UploadHandler.GetSession)
 	secured.HandleFunc("PUT /api/v1/upload-sessions/{sessionID}/parts/{partIndex}", deps.UploadHandler.UploadPart)
 	secured.HandleFunc("POST /api/v1/upload-sessions/{sessionID}/complete", deps.UploadHandler.Complete)
+	secured.HandleFunc("GET /api/v1/media/months", deps.MediaHandler.Months)
+	secured.HandleFunc("GET /api/v1/media/items", deps.MediaHandler.Items)
+	secured.HandleFunc("GET /api/v1/media/candidates", deps.MediaHandler.Candidates)
+	secured.HandleFunc("POST /api/v1/media/indexes", deps.MediaHandler.Backfill)
+	secured.HandleFunc("PUT /api/v1/media/{mediaID}/thumbnail", deps.MediaHandler.PutThumbnail)
+	secured.HandleFunc("GET /api/v1/media/{mediaID}/thumbnail", deps.MediaHandler.GetThumbnail)
 	secured.HandleFunc("GET /api/v1/changes", deps.ChangeHandler.List)
 	secured.HandleFunc("GET /api/v1/objects/{versionID}", deps.DownloadHandler.Download)
 	secured.HandleFunc("DELETE /api/v1/objects/{objectID}", deps.DeleteHandler.DeleteObject)
@@ -87,6 +94,7 @@ func RegisterRoutes(mux *http.ServeMux, deps Dependencies) {
 	mux.Handle("/api/v1/sync-roots/", middleware.Auth(deps.AuthService, secured))
 	mux.Handle("/api/v1/upload-sessions", middleware.Auth(deps.AuthService, secured))
 	mux.Handle("/api/v1/upload-sessions/", middleware.Auth(deps.AuthService, secured))
+	mux.Handle("/api/v1/media/", middleware.Auth(deps.AuthService, secured))
 	mux.Handle("/api/v1/changes", middleware.Auth(deps.AuthService, secured))
 	mux.Handle("/api/v1/objects/", middleware.Auth(deps.AuthService, secured))
 	mux.Handle("/api/v1/admin/", middleware.Auth(deps.AuthService, middleware.AdminOnly(deps.AdminService, admin)))

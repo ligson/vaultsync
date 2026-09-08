@@ -32,7 +32,8 @@ func (h *SyncRootHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	encryptionEnabled := true
+	// 仅影响未提供该字段的新建目录；已有目录状态不会被这里改写。
+	encryptionEnabled := false
 	if req.EncryptionEnabled != nil {
 		encryptionEnabled = *req.EncryptionEnabled
 	}

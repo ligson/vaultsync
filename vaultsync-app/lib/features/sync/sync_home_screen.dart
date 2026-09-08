@@ -13,6 +13,9 @@ import '../media_backup/media_backup_models.dart';
 import '../media_backup/media_backup_screen.dart';
 import '../media_backup/media_backup_gateway.dart';
 import '../media_backup/media_backup_scanner.dart';
+import '../media_timeline/media_timeline_models.dart';
+import '../media_timeline/media_timeline_screen.dart';
+import '../media_timeline/media_timeline_service.dart';
 import '../preview/file_preview_screen.dart';
 import '../preview/remote_file_preview.dart';
 import '../preview/remote_file_thumbnail.dart';
@@ -88,6 +91,7 @@ class SyncHomeScreen extends StatefulWidget {
   final MediaBackupSourceStore? mediaBackupSources;
   final MediaBackupGateway? mediaGateway;
   final MediaAssetThumbnailGateway? mediaThumbnails;
+  final MediaTimelineGateway? mediaTimeline;
   final String? devicePlatform;
   final String? currentDeviceDisplayName;
   final String? serverAddress;
@@ -125,6 +129,7 @@ class SyncHomeScreen extends StatefulWidget {
     this.mediaBackupSources,
     this.mediaGateway,
     this.mediaThumbnails,
+    this.mediaTimeline,
     this.devicePlatform,
     this.currentDeviceDisplayName,
     this.serverAddress,
@@ -2324,6 +2329,12 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
         title: const Text('同步'),
         actions: [
           IconButton(
+            key: const ValueKey('open_media_timeline_button'),
+            tooltip: '媒体',
+            onPressed: _openMediaTimeline,
+            icon: const Icon(Icons.photo_library_outlined),
+          ),
+          IconButton(
             key: const ValueKey('open_search_center_button'),
             tooltip: '搜索',
             onPressed: _openSearchCenter,
@@ -2481,6 +2492,165 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
           onDetails: _showSearchEntryDetails,
           onLocate: _locateSearchEntry,
         ),
+      ),
+    );
+  }
+
+  Future<void> _openMediaTimeline() async {
+    if (widget.mediaTimeline != null) {
+      final currentDeviceId = await widget.storage.loadDeviceId() ?? '';
+      if (!mounted) return;
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => MediaTimelineScreen(
+            currentDeviceId: currentDeviceId,
+            timeline: widget.mediaTimeline,
+            onOpen: _openMediaTimelineEntry,
+            onDownload: _downloadMediaTimelineEntry,
+          ),
+        ),
+      );
+      return;
+    }
+    final data = _cachedHomeData;
+    if (data == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('媒体目录正在加载，请稍后再试')));
+      return;
+    }
+    final entries = await _buildMediaTimelineEntries(data);
+    if (!mounted) {
+      return;
+    }
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => MediaTimelineScreen(
+          entries: entries,
+          indexComplete: !data.remoteContentLoading,
+          currentDeviceId: data.currentDeviceId,
+          mediaThumbnails: widget.mediaThumbnails,
+          remoteFileThumbnails: widget.remoteFileThumbnails,
+          onOpen: _openMediaTimelineEntry,
+          onDownload: _downloadMediaTimelineEntry,
+        ),
+      ),
+    );
+  }
+
+  Future<List<MediaTimelineEntry>> _buildMediaTimelineEntries(
+    _SyncHomeData data,
+  ) async {
+    final entries = <MediaTimelineEntry>[];
+    var processed = 0;
+    for (final rootView in data.rootViews) {
+      if (!rootView.isMediaBackupRoot) {
+        continue;
+      }
+      for (final file in rootView.fileEntries) {
+        final mediaType = _timelineMediaType(file);
+        if (mediaType == null) {
+          continue;
+        }
+        final task = file.task;
+        final backup = file.backup;
+        final name = backup?.name ?? _displayFileName(file.path);
+        entries.add(
+          MediaTimelineEntry(
+            id: '${rootView.root.id}:${backup?.objectId ?? task?.id ?? file.path}',
+            deviceId: rootView.root.deviceId,
+            deviceName: rootView.deviceDisplayName,
+            syncRootId: rootView.root.id,
+            name: name,
+            relativePath: file.path,
+            capturedAt: _timelineCapturedAt(file),
+            mediaType: mediaType,
+            assetId: task?.sourceType == 'media_asset'
+                ? task!.assetId.trim()
+                : '',
+            remoteBackup: backup,
+          ),
+        );
+        processed += 1;
+        if (processed % 200 == 0) {
+          await Future<void>.delayed(Duration.zero);
+        }
+      }
+    }
+    return entries;
+  }
+
+  String? _timelineMediaType(_UnifiedFileRecord file) {
+    final taskType = file.task?.assetMediaType.trim().toLowerCase() ?? '';
+    if (taskType == 'image' || taskType == 'video') {
+      return taskType;
+    }
+    final kind = remoteFilePreviewKindFor(file.backup?.name ?? file.path);
+    return switch (kind) {
+      RemoteFilePreviewKind.image => 'image',
+      RemoteFilePreviewKind.video => 'video',
+      _ => null,
+    };
+  }
+
+  DateTime _timelineCapturedAt(_UnifiedFileRecord file) {
+    final task = file.task;
+    if (task != null) {
+      return task.modifiedAt;
+    }
+    final updatedAt = DateTime.tryParse(file.backup?.updatedAt ?? '');
+    final pathDate = _timelineMonthFromPath(file.path, updatedAt);
+    return pathDate ?? updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  DateTime? _timelineMonthFromPath(String path, DateTime? fallback) {
+    final parts = path.replaceAll('\\', '/').split('/');
+    for (var index = 0; index + 1 < parts.length; index += 1) {
+      final year = int.tryParse(parts[index]);
+      final month = int.tryParse(parts[index + 1]);
+      if (year == null ||
+          month == null ||
+          year < 1970 ||
+          year > 9999 ||
+          month < 1 ||
+          month > 12) {
+        continue;
+      }
+      final fallbackLocal = fallback?.toLocal();
+      final day = fallbackLocal?.year == year && fallbackLocal?.month == month
+          ? fallbackLocal!.day
+          : 1;
+      return DateTime(year, month, day);
+    }
+    return null;
+  }
+
+  void _openMediaTimelineEntry(MediaTimelineEntry entry) {
+    final backup = entry.remoteBackup;
+    if (backup == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('此媒体尚未完成云端备份')));
+      return;
+    }
+    unawaited(
+      _openFilePreview(
+        _UnifiedFileRecord(path: entry.relativePath, backup: backup),
+      ),
+    );
+  }
+
+  void _downloadMediaTimelineEntry(MediaTimelineEntry entry) {
+    final backup = entry.remoteBackup;
+    if (backup == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('此媒体尚未完成云端备份')));
+      return;
+    }
+    unawaited(
+      _downloadRemoteFile(
+        _UnifiedFileRecord(path: entry.relativePath, backup: backup),
       ),
     );
   }
@@ -3335,6 +3505,7 @@ LocalUploadTask _copyUploadTask(
     sourceType: task.sourceType,
     assetId: task.assetId,
     assetMediaType: task.assetMediaType,
+    capturedAt: task.capturedAt,
     encryptionEnabled: encryptionEnabled ?? task.encryptionEnabled,
   );
 }
@@ -9746,7 +9917,8 @@ class _CreateSyncRootDialogState extends State<_CreateSyncRootDialog> {
   final _localPathController = TextEditingController();
   final _encryptedPathController = TextEditingController();
   String _cleanupPolicy = 'keep';
-  bool _encryptionEnabled = true;
+  // 新建同步目录默认保存明文；用户可按需开启客户端加密。
+  bool _encryptionEnabled = false;
   final Set<String> _includedTypes = {'image', 'video', 'document'};
   String _wechatMode = 'archive';
   String? _folderErrorMessage;

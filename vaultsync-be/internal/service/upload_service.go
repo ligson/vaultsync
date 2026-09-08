@@ -17,21 +17,23 @@ type UploadService struct {
 	repo         *store.ObjectRepo
 	deviceRepo   *store.DeviceRepo
 	syncRootRepo *store.SyncRootRepo
+	mediaRepo    *store.MediaRepo
 	storage      *storage.FSStorage
 	now          func() time.Time
 }
 
-func NewUploadService(repo *store.ObjectRepo, deviceRepo *store.DeviceRepo, syncRootRepo *store.SyncRootRepo, storage *storage.FSStorage) *UploadService {
+func NewUploadService(repo *store.ObjectRepo, deviceRepo *store.DeviceRepo, syncRootRepo *store.SyncRootRepo, mediaRepo *store.MediaRepo, storage *storage.FSStorage) *UploadService {
 	return &UploadService{
 		repo:         repo,
 		deviceRepo:   deviceRepo,
 		syncRootRepo: syncRootRepo,
+		mediaRepo:    mediaRepo,
 		storage:      storage,
 		now:          func() time.Time { return time.Now().UTC() },
 	}
 }
 
-func (s *UploadService) CreateSession(ctx context.Context, userID, deviceID, syncRootID, objectID, versionID, encryptedName, metadataJSON string, totalSize, chunkSize int64) (domain.UploadSession, error) {
+func (s *UploadService) CreateSession(ctx context.Context, userID, deviceID, syncRootID, objectID, versionID, encryptedName, metadataJSON string, totalSize, chunkSize int64, mediaIndex *domain.MediaIndexInput) (domain.UploadSession, error) {
 	if strings.TrimSpace(deviceID) == "" {
 		return domain.UploadSession{}, InvalidRequest("设备 ID 不能为空")
 	}
@@ -64,12 +66,17 @@ func (s *UploadService) CreateSession(ctx context.Context, userID, deviceID, syn
 	if root.DeviceID != strings.TrimSpace(deviceID) {
 		return domain.UploadSession{}, InvalidRequest("同步目录不属于当前设备")
 	}
+	mediaIndexJSON, err := validateMediaIndex(root, mediaIndex)
+	if err != nil {
+		return domain.UploadSession{}, err
+	}
 
 	mergedMetadata, err := mergeUploadMetadata(metadataJSON, encryptedName)
 	if err != nil {
 		return domain.UploadSession{}, err
 	}
 	if version, err := s.repo.GetFileVersion(ctx, userID, strings.TrimSpace(versionID)); err == nil {
+		version.MediaID = s.mediaID(ctx, userID, version.ID)
 		return completedUploadSession(
 			userID,
 			strings.TrimSpace(deviceID),
@@ -78,26 +85,27 @@ func (s *UploadService) CreateSession(ctx context.Context, userID, deviceID, syn
 			strings.TrimSpace(versionID),
 			chunkSize,
 			version,
-			mergedMetadata,
+			mergedMetadata, version.MediaID,
 		), nil
 	} else if err != store.ErrNotFound {
 		return domain.UploadSession{}, err
 	}
 
 	session := domain.UploadSession{
-		ID:            newID(),
-		UserID:        userID,
-		DeviceID:      deviceID,
-		SyncRootID:    syncRootID,
-		ObjectID:      objectID,
-		VersionID:     versionID,
-		EncryptedName: encryptedName,
-		TotalSize:     totalSize,
-		ChunkSize:     chunkSize,
-		ReceivedSize:  0,
-		Status:        "pending",
-		MetadataJSON:  mergedMetadata,
-		CreatedAt:     s.now().Format(time.RFC3339),
+		ID:             newID(),
+		UserID:         userID,
+		DeviceID:       deviceID,
+		SyncRootID:     syncRootID,
+		ObjectID:       objectID,
+		VersionID:      versionID,
+		EncryptedName:  encryptedName,
+		TotalSize:      totalSize,
+		ChunkSize:      chunkSize,
+		ReceivedSize:   0,
+		Status:         "pending",
+		MetadataJSON:   mergedMetadata,
+		MediaIndexJSON: mediaIndexJSON,
+		CreatedAt:      s.now().Format(time.RFC3339),
 	}
 	return s.repo.CreateUploadSession(ctx, session)
 }
@@ -116,6 +124,7 @@ func (s *UploadService) GetSession(ctx context.Context, userID, sessionID string
 	}
 	if session.Status == "pending" {
 		if version, err := s.repo.GetFileVersion(ctx, userID, session.VersionID); err == nil {
+			version.MediaID = s.mediaID(ctx, userID, version.ID)
 			return completedUploadSession(
 				userID,
 				session.DeviceID,
@@ -124,7 +133,7 @@ func (s *UploadService) GetSession(ctx context.Context, userID, sessionID string
 				session.VersionID,
 				session.ChunkSize,
 				version,
-				session.MetadataJSON,
+				session.MetadataJSON, version.MediaID,
 			), nil
 		} else if err != store.ErrNotFound {
 			return domain.UploadSession{}, err
@@ -170,6 +179,7 @@ func (s *UploadService) Complete(ctx context.Context, userID, sessionID string) 
 		return domain.FileVersion{}, InvalidRequest("上传任务状态不允许完成")
 	}
 	if version, err := s.repo.GetFileVersion(ctx, userID, session.VersionID); err == nil {
+		version.MediaID = s.mediaID(ctx, userID, version.ID)
 		return version, nil
 	} else if err != store.ErrNotFound {
 		return domain.FileVersion{}, err
@@ -221,7 +231,82 @@ func (s *UploadService) Complete(ctx context.Context, userID, sessionID string) 
 		MetadataJSON:  session.MetadataJSON,
 		CreatedAt:     s.now().Format(time.RFC3339),
 	}
-	return s.repo.CompleteUpload(ctx, sessionID, version)
+	media, err := mediaAssetFromSession(session, version)
+	if err != nil {
+		return domain.FileVersion{}, err
+	}
+	if media != nil {
+		if existingID, existingErr := s.mediaRepo.GetIDForObject(ctx, userID, session.SyncRootID, session.ObjectID); existingErr == nil {
+			media.ID = existingID
+		}
+	}
+	return s.repo.CompleteUpload(ctx, sessionID, version, media)
+}
+
+func (s *UploadService) mediaID(ctx context.Context, userID, versionID string) string {
+	if s.mediaRepo == nil {
+		return ""
+	}
+	mediaID, err := s.mediaRepo.GetIDForVersion(ctx, userID, versionID)
+	if err != nil {
+		return ""
+	}
+	return mediaID
+}
+
+func validateMediaIndex(root domain.SyncRoot, input *domain.MediaIndexInput) (string, error) {
+	if input == nil {
+		return "", nil
+	}
+	if !strings.HasPrefix(root.EncryptedPath, "media-backup:v1:") {
+		return "", InvalidRequest("只有相册备份目录可以提交媒体索引")
+	}
+	input.MediaType = strings.TrimSpace(input.MediaType)
+	if input.MediaType != "image" && input.MediaType != "video" {
+		return "", InvalidRequest("媒体类型只支持 image 或 video")
+	}
+	capturedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(input.CapturedAt))
+	if err != nil {
+		return "", InvalidRequest("媒体拍摄时间格式不正确")
+	}
+	if input.Width < 0 || input.Height < 0 || input.DurationMS < 0 {
+		return "", InvalidRequest("媒体尺寸或时长不能为负数")
+	}
+	if input.CapturedYear == 0 && input.CapturedMonth == 0 {
+		input.CapturedYear = capturedAt.Year()
+		input.CapturedMonth = int(capturedAt.Month())
+	}
+	if input.CapturedYear < 1970 || input.CapturedYear > 9999 ||
+		input.CapturedMonth < 1 || input.CapturedMonth > 12 {
+		return "", InvalidRequest("媒体拍摄年月不正确")
+	}
+	input.CapturedAt = capturedAt.UTC().Format(time.RFC3339)
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
+func mediaAssetFromSession(session domain.UploadSession, version domain.FileVersion) (*domain.MediaAsset, error) {
+	if strings.TrimSpace(session.MediaIndexJSON) == "" {
+		return nil, nil
+	}
+	var input domain.MediaIndexInput
+	if err := json.Unmarshal([]byte(session.MediaIndexJSON), &input); err != nil {
+		return nil, InvalidRequest("媒体索引格式不正确")
+	}
+	return &domain.MediaAsset{
+		ID:            newID(),
+		DeviceID:      session.DeviceID,
+		MediaType:     input.MediaType,
+		CapturedAt:    input.CapturedAt,
+		CapturedYear:  input.CapturedYear,
+		CapturedMonth: input.CapturedMonth,
+		Width:         input.Width,
+		Height:        input.Height,
+		DurationMS:    input.DurationMS,
+	}, nil
 }
 
 func mergeUploadMetadata(metadataJSON, encryptedName string) (string, error) {
@@ -263,7 +348,7 @@ func extractPlainRelativePath(metadataJSON string) (string, error) {
 	return value, nil
 }
 
-func completedUploadSession(userID, deviceID, syncRootID, objectID, versionID string, chunkSize int64, version domain.FileVersion, metadataJSON string) domain.UploadSession {
+func completedUploadSession(userID, deviceID, syncRootID, objectID, versionID string, chunkSize int64, version domain.FileVersion, metadataJSON, mediaID string) domain.UploadSession {
 	return domain.UploadSession{
 		ID:            "completed:" + versionID,
 		UserID:        userID,
@@ -277,6 +362,7 @@ func completedUploadSession(userID, deviceID, syncRootID, objectID, versionID st
 		ReceivedSize:  version.SizeBytes,
 		Status:        "completed",
 		MetadataJSON:  metadataJSON,
+		MediaID:       mediaID,
 		CreatedAt:     version.CreatedAt,
 	}
 }

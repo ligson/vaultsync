@@ -8,7 +8,6 @@ import 'package:vaultsync_app/features/download/download_service.dart';
 import 'package:vaultsync_app/features/sync/encrypted_download_payload_decrypter.dart';
 import 'package:vaultsync_app/features/sync/local_download_writer.dart';
 import 'package:vaultsync_app/features/sync/local_remote_delete_handler.dart';
-import 'package:vaultsync_app/features/sync/local_upload_executor.dart';
 import 'package:vaultsync_app/features/sync/remote_metadata_decrypter.dart';
 import 'package:vaultsync_app/features/sync/sync_models.dart';
 import 'package:vaultsync_app/features/sync/sync_pull_executor.dart';

@@ -52,6 +52,7 @@ class MediaBackupScanner {
           sourceType: 'media_asset',
           assetId: asset.id,
           assetMediaType: asset.mediaType,
+          capturedAt: asset.createdAt.toUtc(),
           encryptionEnabled: source.encryptionEnabled,
         ),
       );

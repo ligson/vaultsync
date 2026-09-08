@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/storage/app_storage.dart';
 import '../media_backup/media_backup_gateway.dart';
+import '../media_timeline/media_timeline_service.dart';
 import 'sync_models.dart';
 import 'upload_api_service.dart';
 
@@ -201,6 +202,7 @@ class LocalUploadExecutor
   final UploadGateway uploads;
   final UploadPayloadPreparer payloadPreparer;
   final LocalPostUploadCleaner? postUploadCleaner;
+  final MediaPostUploadThumbnailPublisher? mediaThumbnailPublisher;
   final UploadTaskIDFactory objectIdForTask;
   final UploadTaskIDFactory versionIdForTask;
   final int chunkSize;
@@ -218,6 +220,7 @@ class LocalUploadExecutor
     required this.uploads,
     required this.payloadPreparer,
     this.postUploadCleaner,
+    this.mediaThumbnailPublisher,
     this.objectIdForTask = _defaultObjectId,
     this.versionIdForTask = _defaultVersionId,
     this.chunkSize = 1024 * 1024,
@@ -486,6 +489,13 @@ class LocalUploadExecutor
 
         if (session.status == 'completed') {
           _throwIfSyncRootUploadPaused(currentTask.syncRootId);
+          await _publishMediaThumbnail(
+            token: token,
+            task: currentTask,
+            mediaId: session.mediaId,
+            versionId: versionId,
+          );
+          _throwIfSyncRootUploadPaused(currentTask.syncRootId);
           await _saveRemoteVersionBaseline(
             task: currentTask,
             objectId: objectId,
@@ -604,6 +614,12 @@ class LocalUploadExecutor
         final completedVersion = await uploads.completeUploadSession(
           token: token,
           sessionId: session.id,
+        );
+        _throwIfSyncRootUploadPaused(currentTask.syncRootId);
+        await _publishMediaThumbnail(
+          token: token,
+          task: currentTask,
+          completedVersion: completedVersion,
         );
         _throwIfSyncRootUploadPaused(currentTask.syncRootId);
         await _saveRemoteVersionBaseline(
@@ -848,6 +864,7 @@ class LocalUploadExecutor
       sourceType: task.sourceType,
       assetId: task.assetId,
       assetMediaType: task.assetMediaType,
+      capturedAt: task.capturedAt,
       encryptionEnabled: task.encryptionEnabled,
     );
   }
@@ -983,6 +1000,7 @@ class LocalUploadExecutor
       sourceType: task.sourceType,
       assetId: task.assetId,
       assetMediaType: task.assetMediaType,
+      capturedAt: task.capturedAt,
       encryptionEnabled: mapping.encryptionEnabled,
     );
   }
@@ -1022,6 +1040,7 @@ class LocalUploadExecutor
       sourceType: task.sourceType,
       assetId: task.assetId,
       assetMediaType: task.assetMediaType,
+      capturedAt: task.capturedAt,
       encryptionEnabled: task.encryptionEnabled,
     );
   }
@@ -1060,6 +1079,27 @@ class LocalUploadExecutor
         }
       }
     }
+    if (task.sourceType == 'media_asset' &&
+        uploads is MediaIndexedUploadGateway) {
+      final mediaUploads = uploads as MediaIndexedUploadGateway;
+      return mediaUploads.createMediaUploadSession(
+        token: token,
+        deviceId: deviceId,
+        syncRootId: task.syncRootId,
+        objectId: objectId,
+        versionId: versionId,
+        totalSize: payload.length,
+        chunkSize: chunkSize,
+        encryptedName: payload.encryptedName,
+        metadataJson: payload.metadataJson,
+        mediaIndex: MediaUploadIndex(
+          mediaType: task.assetMediaType,
+          capturedAt: task.capturedAt ?? task.modifiedAt,
+          capturedYear: _mediaYearMonth(task).$1,
+          capturedMonth: _mediaYearMonth(task).$2,
+        ),
+      );
+    }
     return uploads.createUploadSession(
       token: token,
       deviceId: deviceId,
@@ -1071,6 +1111,46 @@ class LocalUploadExecutor
       encryptedName: payload.encryptedName,
       metadataJson: payload.metadataJson,
     );
+  }
+
+  (int, int) _mediaYearMonth(LocalUploadTask task) {
+    final parts = task.relativePath.replaceAll('\\', '/').split('/');
+    for (var index = 0; index + 1 < parts.length; index += 1) {
+      final year = int.tryParse(parts[index]);
+      final month = int.tryParse(parts[index + 1]);
+      if (year != null &&
+          year >= 1970 &&
+          month != null &&
+          month >= 1 &&
+          month <= 12) {
+        return (year, month);
+      }
+    }
+    final captured = (task.capturedAt ?? task.modifiedAt).toLocal();
+    return (captured.year, captured.month);
+  }
+
+  Future<void> _publishMediaThumbnail({
+    required String token,
+    required LocalUploadTask task,
+    String mediaId = '',
+    String versionId = '',
+    UploadedFileVersion? completedVersion,
+  }) async {
+    final publisher = mediaThumbnailPublisher;
+    final resolvedMediaId = completedVersion?.mediaId ?? mediaId;
+    final resolvedVersionId = completedVersion?.id ?? versionId;
+    if (publisher == null || resolvedMediaId.isEmpty) return;
+    try {
+      await publisher.publish(
+        token: token,
+        task: task,
+        mediaId: resolvedMediaId,
+        versionId: resolvedVersionId,
+      );
+    } catch (error) {
+      debugPrint('VaultSync media thumbnail upload skipped: $error');
+    }
   }
 
   Future<UploadSession?> _loadKnownSession({
@@ -1227,6 +1307,7 @@ class LocalUploadExecutor
       sourceType: task.sourceType,
       assetId: task.assetId,
       assetMediaType: task.assetMediaType,
+      capturedAt: task.capturedAt,
       encryptionEnabled: task.encryptionEnabled,
     );
   }
@@ -1261,17 +1342,4 @@ class LocalUploadExecutor
 
 class _SyncRootUploadPausedException implements Exception {
   const _SyncRootUploadPausedException();
-}
-
-String objectIdForUploadTask(LocalUploadTask task) {
-  return 'obj-${_stableUploadTaskHash(task)}';
-}
-
-String versionIdForUploadTask(LocalUploadTask task) {
-  return 'ver-${_stableUploadTaskHash(task)}-${task.modifiedAt.microsecondsSinceEpoch}';
-}
-
-String _stableUploadTaskHash(LocalUploadTask task) {
-  final digest = sha256.convert(utf8.encode(task.id));
-  return base64Url.encode(digest.bytes).replaceAll('=', '');
 }

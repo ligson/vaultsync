@@ -18,6 +18,7 @@ void main() {
   test('classifies common online preview formats', () {
     expect(remoteFilePreviewKindFor('photo.JPG'), RemoteFilePreviewKind.image);
     expect(remoteFilePreviewKindFor('clip.mp4'), RemoteFilePreviewKind.video);
+    expect(remoteFilePreviewKindFor('clip.m4'), RemoteFilePreviewKind.video);
     expect(remoteFilePreviewKindFor('manual.pdf'), RemoteFilePreviewKind.pdf);
     expect(remoteFilePreviewKindFor('notes.md'), RemoteFilePreviewKind.text);
     expect(remoteFilePreviewKindFor('archive.zip'), isNull);

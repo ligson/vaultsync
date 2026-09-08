@@ -7,6 +7,7 @@ import 'package:cryptography/cryptography.dart';
 import '../../core/network/api_client.dart';
 import '../../core/storage/app_storage.dart';
 import '../media_backup/media_backup_gateway.dart';
+import '../preview/remote_file_thumbnail.dart';
 import '../sync/sync_models.dart';
 import '../sync/remote_metadata_decrypter.dart';
 import '../sync/upload_api_service.dart';
@@ -24,7 +25,7 @@ abstract interface class MediaTimelineGateway {
     String mediaType = '',
     String deviceId = '',
     String cursor = '',
-    int limit = 60,
+    int limit = 36,
   });
 
   Future<Uint8List?> loadThumbnail(MediaTimelineEntry entry);
@@ -41,6 +42,7 @@ class MediaTimelineApiService
   final UploadKeyStore keyStore;
   final UploadTaskStore? uploadTasks;
   final MediaAssetThumbnailGateway? localThumbnails;
+  final RemoteFileThumbnailGateway? remoteFileThumbnails;
   Future<Map<String, LocalUploadTask>>? _historicalTasksByVersion;
   Future<int>? _backfillInFlight;
   Future<UploadKeyMaterial>? _keysFuture;
@@ -52,6 +54,7 @@ class MediaTimelineApiService
     required this.keyStore,
     this.uploadTasks,
     this.localThumbnails,
+    this.remoteFileThumbnails,
   });
 
   @override
@@ -142,34 +145,41 @@ class MediaTimelineApiService
       }
     }
     final thumbnailGateway = localThumbnails;
-    if (thumbnailGateway == null) return null;
-    final tasks = await (_historicalTasksByVersion ??=
-        _loadHistoricalTasksByVersion());
-    final task = tasks[backup.versionId];
-    if (task == null || task.assetId.isEmpty) return null;
-    final thumbnail = await thumbnailGateway.loadThumbnail(
-      task.assetId,
-      width: 480,
-      height: 480,
-    );
-    if (thumbnail == null || thumbnail.isEmpty) return null;
-    final keys = await _keys();
-    final encrypted = await MediaThumbnailCrypto.encrypt(
-      thumbnail,
-      contentKeyBytes: keys.contentKeyBytes,
-      mediaId: entry.id,
-      versionId: backup.versionId,
-    );
-    try {
-      await apiClient.putBytes(
-        '/api/v1/media/${entry.id}/thumbnail',
-        token: await _token(),
-        bytes: encrypted,
-      );
-    } catch (_) {
-      // The local thumbnail is still useful for this view; retry on next open.
+    if (thumbnailGateway != null) {
+      final tasks = await (_historicalTasksByVersion ??=
+          _loadHistoricalTasksByVersion());
+      final task = tasks[backup.versionId];
+      if (task != null && task.assetId.isNotEmpty) {
+        final thumbnail = await thumbnailGateway.loadThumbnail(
+          task.assetId,
+          width: 480,
+          height: 480,
+        );
+        if (thumbnail != null && thumbnail.isNotEmpty) {
+          final keys = await _keys();
+          final encrypted = await MediaThumbnailCrypto.encrypt(
+            thumbnail,
+            contentKeyBytes: keys.contentKeyBytes,
+            mediaId: entry.id,
+            versionId: backup.versionId,
+          );
+          try {
+            await apiClient.putBytes(
+              '/api/v1/media/${entry.id}/thumbnail',
+              token: await _token(),
+              bytes: encrypted,
+            );
+          } catch (_) {
+            // The local thumbnail is still useful for this view; retry on next open.
+          }
+          return thumbnail;
+        }
+      }
     }
-    return thumbnail;
+    if (entry.mediaType == 'image' && remoteFileThumbnails != null) {
+      return remoteFileThumbnails!.load(backup);
+    }
+    return null;
   }
 
   Future<Map<String, LocalUploadTask>> _loadHistoricalTasksByVersion() async {
@@ -467,6 +477,10 @@ class MediaTimelineApiService
       capturedAt: DateTime.parse(item['captured_at'] as String),
       mediaType: mediaType,
       hasThumbnail: item['has_thumbnail'] as bool? ?? false,
+      sizeBytes: (item['size_bytes'] as num?)?.toInt() ?? backup.sizeBytes,
+      width: (item['width'] as num?)?.toInt() ?? 0,
+      height: (item['height'] as num?)?.toInt() ?? 0,
+      durationMs: (item['duration_ms'] as num?)?.toInt() ?? 0,
       remoteBackup: backup,
     );
   }

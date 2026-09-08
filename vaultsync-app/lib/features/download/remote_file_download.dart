@@ -87,7 +87,7 @@ class PlatformRemoteFileSaveGateway implements RemoteFileSaveGateway {
     required String fileName,
     required String platform,
   }) async {
-    final safeName = _safeFileName(fileName);
+    final safeName = _playableContainerName(_safeFileName(fileName));
     if (platform == 'ios') {
       final documents = await getApplicationDocumentsDirectory();
       final directory = Directory(
@@ -156,6 +156,13 @@ class PlatformRemoteFileSaveGateway implements RemoteFileSaveGateway {
       return 'VaultSync 下载文件';
     }
     return sanitized;
+  }
+
+  String _playableContainerName(String value) {
+    if (value.toLowerCase().endsWith('.m4')) {
+      return '${value.substring(0, value.length - 3)}mp4';
+    }
+    return value;
   }
 
   String _baseName(String path) {

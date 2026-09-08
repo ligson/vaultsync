@@ -331,6 +331,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
       keyStore: widget.uploadKeys,
       uploadTasks: widget.uploadTasks,
       localThumbnails: mediaGateway,
+      remoteFileThumbnails: resolvedRemoteFileThumbnails,
     );
     final mediaThumbnailPublisher =
         resolvedUploads is MediaThumbnailUploadGateway

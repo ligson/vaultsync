@@ -199,6 +199,37 @@ void main() {
     expect(find.byIcon(Icons.download_outlined), findsWidgets);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('long pressing a media tile opens its details callback', (
+    tester,
+  ) async {
+    MediaTimelineEntry? selected;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaTimelineScreen(
+          currentDeviceId: 'phone',
+          entries: [
+            _entry(
+              id: 'detail-image',
+              deviceId: 'phone',
+              deviceName: 'Pixel',
+              mediaType: 'image',
+              capturedAt: DateTime(2026, 9, 8),
+            ),
+          ],
+          onDetails: (entry) => selected = entry,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.longPress(
+      find.byKey(const ValueKey('media_timeline_item_detail-image')),
+    );
+    await tester.pump();
+
+    expect(selected?.id, 'detail-image');
+  });
 }
 
 class _FakeTimelineGateway implements MediaTimelineGateway {

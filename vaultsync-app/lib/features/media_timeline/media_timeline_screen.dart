@@ -16,6 +16,7 @@ class MediaTimelineScreen extends StatefulWidget {
   final RemoteFileThumbnailGateway? remoteFileThumbnails;
   final ValueChanged<MediaTimelineEntry>? onOpen;
   final ValueChanged<MediaTimelineEntry>? onDownload;
+  final ValueChanged<MediaTimelineEntry>? onDetails;
 
   const MediaTimelineScreen({
     super.key,
@@ -27,6 +28,7 @@ class MediaTimelineScreen extends StatefulWidget {
     this.remoteFileThumbnails,
     this.onOpen,
     this.onDownload,
+    this.onDetails,
   });
 
   @override
@@ -314,7 +316,7 @@ class _MediaTimelineScreenState extends State<MediaTimelineScreen> {
                       CustomScrollView(
                         key: const ValueKey('media_timeline_scroll'),
                         controller: _scrollController,
-                        cacheExtent: 900,
+                        cacheExtent: 500,
                         slivers: [
                           for (final month in months) ...[
                             SliverToBoxAdapter(
@@ -428,6 +430,9 @@ class _MediaTimelineScreenState extends State<MediaTimelineScreen> {
             onDownload: widget.onDownload == null
                 ? null
                 : () => widget.onDownload!(entries[index]),
+            onDetails: widget.onDetails == null
+                ? null
+                : () => widget.onDetails!(entries[index]),
           ),
           childCount: visibleCount,
         ),
@@ -595,6 +600,7 @@ class _MediaTimelineTile extends StatefulWidget {
   final MediaTimelineGateway? timeline;
   final VoidCallback? onTap;
   final VoidCallback? onDownload;
+  final VoidCallback? onDetails;
 
   const _MediaTimelineTile({
     super.key,
@@ -604,6 +610,7 @@ class _MediaTimelineTile extends StatefulWidget {
     required this.timeline,
     this.onTap,
     this.onDownload,
+    this.onDetails,
   });
 
   @override
@@ -657,6 +664,7 @@ class _MediaTimelineTileState extends State<_MediaTimelineTile> {
         child: InkWell(
           key: ValueKey('media_timeline_item_${widget.entry.id}'),
           onTap: widget.onTap,
+          onLongPress: widget.onDetails,
           child: Stack(
             fit: StackFit.expand,
             children: [

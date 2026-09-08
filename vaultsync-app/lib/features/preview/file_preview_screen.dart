@@ -273,6 +273,11 @@ class _VideoPreviewState extends State<_VideoPreview> {
       return '.mp4';
     }
     final extension = fileName.substring(dotIndex).toLowerCase();
+    if (extension == '.m4') {
+      // Some exports use .m4 for an MP4 container. AVFoundation selects the
+      // decoder from the suffix before it inspects the file header.
+      return '.mp4';
+    }
     return RegExp(r'^\.[a-z0-9]{1,8}$').hasMatch(extension)
         ? extension
         : '.mp4';

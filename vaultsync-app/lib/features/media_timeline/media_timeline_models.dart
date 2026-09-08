@@ -13,6 +13,10 @@ class MediaTimelineEntry {
   final String mediaType;
   final String assetId;
   final bool hasThumbnail;
+  final int sizeBytes;
+  final int width;
+  final int height;
+  final int durationMs;
   final RemoteBackupEntry? remoteBackup;
 
   const MediaTimelineEntry({
@@ -26,6 +30,10 @@ class MediaTimelineEntry {
     required this.mediaType,
     this.assetId = '',
     this.hasThumbnail = false,
+    this.sizeBytes = 0,
+    this.width = 0,
+    this.height = 0,
+    this.durationMs = 0,
     this.remoteBackup,
   });
 }

@@ -2507,6 +2507,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
             timeline: widget.mediaTimeline,
             onOpen: _openMediaTimelineEntry,
             onDownload: _downloadMediaTimelineEntry,
+            onDetails: _showMediaTimelineDetails,
           ),
         ),
       );
@@ -2533,6 +2534,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
           remoteFileThumbnails: widget.remoteFileThumbnails,
           onOpen: _openMediaTimelineEntry,
           onDownload: _downloadMediaTimelineEntry,
+          onDetails: _showMediaTimelineDetails,
         ),
       ),
     );
@@ -2568,6 +2570,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
             assetId: task?.sourceType == 'media_asset'
                 ? task!.assetId.trim()
                 : '',
+            sizeBytes: backup?.sizeBytes ?? task?.sizeBytes ?? 0,
             remoteBackup: backup,
           ),
         );
@@ -2651,6 +2654,29 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
     unawaited(
       _downloadRemoteFile(
         _UnifiedFileRecord(path: entry.relativePath, backup: backup),
+      ),
+    );
+  }
+
+  Future<void> _showMediaTimelineDetails(MediaTimelineEntry entry) async {
+    if (!mounted) return;
+    final backup = entry.remoteBackup;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => _MediaTimelineDetailsDialog(
+        entry: entry,
+        onOpen: backup == null
+            ? null
+            : () {
+                Navigator.of(dialogContext).pop();
+                _openMediaTimelineEntry(entry);
+              },
+        onDownload: backup == null
+            ? null
+            : () {
+                Navigator.of(dialogContext).pop();
+                _downloadMediaTimelineEntry(entry);
+              },
       ),
     );
   }
@@ -8908,6 +8934,117 @@ class _FileStatusIndicator extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _MediaTimelineDetailsDialog extends StatelessWidget {
+  final MediaTimelineEntry entry;
+  final VoidCallback? onOpen;
+  final VoidCallback? onDownload;
+
+  const _MediaTimelineDetailsDialog({
+    required this.entry,
+    this.onOpen,
+    this.onDownload,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final backup = entry.remoteBackup;
+    final properties = <String, String>{
+      '类型': entry.mediaType == 'video' ? '视频' : '图片',
+      '文件名': entry.name,
+      '所属设备': entry.deviceName,
+      '设备 ID': entry.deviceId,
+      '拍摄时间': _formatDateTime(entry.capturedAt.toLocal()),
+      '文件大小': entry.sizeBytes > 0 ? _formatBytes(entry.sizeBytes) : '-',
+      if (entry.mediaType == 'image' && entry.width > 0 && entry.height > 0)
+        '图片尺寸': '${entry.width} × ${entry.height}',
+      if (entry.mediaType == 'video' && entry.durationMs > 0)
+        '视频时长': _mediaDuration(entry.durationMs),
+      '所属路径': entry.relativePath,
+      '同步目录 ID': entry.syncRootId,
+      '对象 ID': backup?.objectId ?? '-',
+      '版本 ID': backup?.versionId ?? '-',
+      '缩略图': entry.hasThumbnail ? '服务器已有' : '未生成（首次加载可能较慢）',
+    };
+    return AlertDialog(
+      key: const ValueKey('media_timeline_details_dialog'),
+      title: Row(
+        children: [
+          Icon(entry.mediaType == 'video' ? Icons.videocam : Icons.image),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              entry.name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: math.min(
+          640,
+          math.max(280, MediaQuery.sizeOf(context).width - 72),
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            children: [
+              for (final property in properties.entries)
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(property.key),
+                  subtitle: SelectableText(property.value),
+                  trailing: property.key == '所属路径'
+                      ? IconButton(
+                          tooltip: '复制路径',
+                          icon: const Icon(Icons.copy_outlined),
+                          onPressed: () async {
+                            await Clipboard.setData(
+                              ClipboardData(text: property.value),
+                            );
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('路径已复制')),
+                              );
+                            }
+                          },
+                        )
+                      : null,
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        if (onOpen != null)
+          TextButton.icon(
+            onPressed: onOpen,
+            icon: const Icon(Icons.open_in_new),
+            label: const Text('查看'),
+          ),
+        if (onDownload != null)
+          TextButton.icon(
+            onPressed: onDownload,
+            icon: const Icon(Icons.download_outlined),
+            label: const Text('下载'),
+          ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('关闭'),
+        ),
+      ],
+    );
+  }
+
+  String _mediaDuration(int milliseconds) {
+    final duration = Duration(milliseconds: milliseconds);
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return hours > 0 ? '$hours:$minutes:$seconds' : '$minutes:$seconds';
   }
 }
 

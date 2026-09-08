@@ -159,7 +159,7 @@ const _imageExtensions = {
   'heif',
 };
 
-const _videoExtensions = {'mp4', 'm4v', 'mov', 'webm', 'avi', 'mkv'};
+const _videoExtensions = {'mp4', 'm4', 'm4v', 'mov', 'webm', 'avi', 'mkv'};
 
 const _textExtensions = {
   'txt',

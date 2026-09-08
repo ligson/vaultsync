@@ -160,7 +160,7 @@ class PlatformRemoteFileSaveGateway implements RemoteFileSaveGateway {
 
   String _playableContainerName(String value) {
     if (value.toLowerCase().endsWith('.m4')) {
-      return '${value.substring(0, value.length - 3)}mp4';
+      return '${value.substring(0, value.length - 3)}.mp4';
     }
     return value;
   }

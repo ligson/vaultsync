@@ -1296,6 +1296,47 @@ void main() {
     expect(find.textContaining('未绑定目录'), findsNothing);
   });
 
+  testWidgets('sync home restores Android Pictures mapping after reinstall', (
+    tester,
+  ) async {
+    final mappings = FakeSyncRootMappingStore();
+    final protectedPictures = const Sha256LocalPathProtector().protectLocalPath(
+      '/storage/emulated/0/Pictures',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncHomeScreen(
+          storage: FakeSessionStore(
+            token: 'server-token',
+            deviceId: 'device-1',
+          ),
+          syncRootMappings: mappings,
+          uploadTasks: FakeUploadTaskStore(),
+          syncRoots: FakeSyncRootGateway([
+            SyncRoot(
+              id: 'pictures-root',
+              userId: 'user-1',
+              deviceId: 'device-1',
+              encryptedPath: protectedPictures,
+              cleanupPolicy: 'keep',
+              archivePath: '',
+              createdAt: '2026-08-03T00:00:00Z',
+            ),
+          ]),
+          devicePlatform: 'android',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(mappings.saved, hasLength(1));
+    expect(mappings.saved.single.localPath, '/storage/emulated/0/Pictures');
+    expect(find.text('Pictures'), findsWidgets);
+    expect(find.text('/storage/emulated/0/Pictures'), findsOneWidget);
+    expect(find.textContaining('未绑定目录'), findsNothing);
+  });
+
   testWidgets('sync home shows other device root without unbound wording', (
     tester,
   ) async {
@@ -1340,6 +1381,49 @@ void main() {
     expect(find.textContaining('其他设备：HUAWEI NOH-AN00'), findsWidgets);
     expect(find.textContaining('未绑定目录'), findsNothing);
   });
+
+  testWidgets(
+    'sync home names a known Android Pictures root on another device',
+    (tester) async {
+      final protectedPictures = const Sha256LocalPathProtector()
+          .protectLocalPath('/storage/emulated/0/Pictures');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SyncHomeScreen(
+            storage: FakeSessionStore(
+              token: 'server-token',
+              deviceId: 'device-current',
+            ),
+            syncRootMappings: FakeSyncRootMappingStore(),
+            uploadTasks: FakeUploadTaskStore(),
+            syncRoots: FakeSyncRootGateway([
+              SyncRoot(
+                id: 'pictures-other',
+                userId: 'user-1',
+                deviceId: 'device-other',
+                deviceName: 'Google Pixel 7 Pro',
+                encryptedPath: protectedPictures,
+                cleanupPolicy: 'keep',
+                archivePath: '',
+                createdAt: '2026-08-03T00:00:00Z',
+              ),
+            ]),
+            devicePlatform: 'android',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('device_filter_dropdown')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Google Pixel 7 Pro（1）'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Pictures'), findsWidgets);
+      expect(find.text('同步目录 pict'), findsNothing);
+    },
+  );
 
   testWidgets('sync home filters root list by device by default', (
     tester,

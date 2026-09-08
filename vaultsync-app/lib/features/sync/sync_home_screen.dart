@@ -34,6 +34,7 @@ import 'sync_service.dart';
 import 'wechat_folder_discovery.dart';
 
 const _androidDownloadsPath = '/storage/emulated/0/Download';
+const _androidPicturesPath = '/storage/emulated/0/Pictures';
 // 微信私有媒体的可用性仍不足以支撑稳定的用户承诺，暂时只保留历史数据兼容。
 const _wechatBackupFeatureEnabled = false;
 
@@ -762,6 +763,11 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
         root.encryptedPath ==
             widget.pathProtector.protectLocalPath(_androidDownloadsPath)) {
       return _androidDownloadsPath;
+    }
+    if (platform == 'android' &&
+        root.encryptedPath ==
+            widget.pathProtector.protectLocalPath(_androidPicturesPath)) {
+      return _androidPicturesPath;
     }
     return null;
   }
@@ -9498,6 +9504,10 @@ String? _knownDirectoryNameForEncryptedPath(String encryptedPath) {
         _androidDownloadsPath,
       )) {
     return 'Download';
+  }
+  if (encryptedPath ==
+      const Sha256LocalPathProtector().protectLocalPath(_androidPicturesPath)) {
+    return 'Pictures';
   }
   return null;
 }

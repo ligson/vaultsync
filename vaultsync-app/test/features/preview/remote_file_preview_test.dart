@@ -30,6 +30,19 @@ void main() {
     );
   });
 
+  test('diagnoses a valid HEVC MP4 separately from a damaged file', () {
+    final diagnosis = diagnoseRemoteVideoBytes(_hevcMp4Bytes);
+
+    expect(diagnosis.isMp4Container, isTrue);
+    expect(diagnosis.isLikelyComplete, isTrue);
+    expect(diagnosis.videoCodec, 'hvc1');
+    expect(remoteVideoFailureMessage(_hevcMp4Bytes), contains('H.265 / HEVC'));
+  });
+
+  test('diagnoses an invalid decrypted MP4 payload', () {
+    expect(remoteVideoFailureMessage(const [1, 2, 3]), contains('不是有效的 MP4'));
+  });
+
   test('downloads and decrypts a remote preview', () async {
     final downloads = _FakeDownloadGateway();
     final decrypter = _FakeDownloadPayloadDecrypter(
@@ -362,6 +375,41 @@ RemoteBackupEntry _entry({
 
 const _onePixelPngBase64 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/axl3ToAAAAASUVORK5CYII=';
+
+const _hevcMp4Bytes = [
+  0,
+  0,
+  0,
+  0x1c,
+  0x66,
+  0x74,
+  0x79,
+  0x70,
+  0x69,
+  0x73,
+  0x6f,
+  0x6d,
+  0x6d,
+  0x6f,
+  0x6f,
+  0x76,
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+  0x6d,
+  0x64,
+  0x61,
+  0x74,
+  0x00,
+  0x00,
+  0x00,
+  0x04,
+  0x68,
+  0x76,
+  0x63,
+  0x31,
+];
 
 const _jpegBytes = [
   0xff,

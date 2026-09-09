@@ -28,7 +28,12 @@ func NewSyncRootService(repo *store.SyncRootRepo, deviceRepo *store.DeviceRepo, 
 }
 
 func (s *SyncRootService) Create(ctx context.Context, userID, deviceID, encryptedPath, cleanupPolicy, archivePath string, encryptionEnabled bool) (domain.SyncRoot, error) {
+	return s.CreateWithDisplayName(ctx, userID, deviceID, "", encryptedPath, cleanupPolicy, archivePath, encryptionEnabled)
+}
+
+func (s *SyncRootService) CreateWithDisplayName(ctx context.Context, userID, deviceID, encryptedDisplayName, encryptedPath, cleanupPolicy, archivePath string, encryptionEnabled bool) (domain.SyncRoot, error) {
 	deviceID = strings.TrimSpace(deviceID)
+	encryptedDisplayName = strings.TrimSpace(encryptedDisplayName)
 	encryptedPath = strings.TrimSpace(encryptedPath)
 	cleanupPolicy = strings.TrimSpace(cleanupPolicy)
 	if deviceID == "" {
@@ -60,16 +65,36 @@ func (s *SyncRootService) Create(ctx context.Context, userID, deviceID, encrypte
 	}
 
 	root := domain.SyncRoot{
-		ID:                newID(),
-		UserID:            userID,
-		DeviceID:          deviceID,
-		EncryptedPath:     encryptedPath,
-		EncryptionEnabled: encryptionEnabled,
-		CleanupPolicy:     cleanupPolicy,
-		ArchivePath:       archivePath,
-		CreatedAt:         s.now().Format(time.RFC3339),
+		ID:                   newID(),
+		UserID:               userID,
+		DeviceID:             deviceID,
+		EncryptedDisplayName: encryptedDisplayName,
+		EncryptedPath:        encryptedPath,
+		EncryptionEnabled:    encryptionEnabled,
+		CleanupPolicy:        cleanupPolicy,
+		ArchivePath:          archivePath,
+		CreatedAt:            s.now().Format(time.RFC3339),
 	}
 	return s.repo.Create(ctx, root)
+}
+
+func (s *SyncRootService) UpdateDisplayName(ctx context.Context, userID, syncRootID, encryptedDisplayName string) (domain.SyncRoot, error) {
+	syncRootID = strings.TrimSpace(syncRootID)
+	encryptedDisplayName = strings.TrimSpace(encryptedDisplayName)
+	if syncRootID == "" {
+		return domain.SyncRoot{}, InvalidRequest("同步目录 ID 不能为空")
+	}
+	if encryptedDisplayName == "" {
+		return domain.SyncRoot{}, InvalidRequest("同步目录名称密文不能为空")
+	}
+	root, err := s.repo.UpdateDisplayName(ctx, userID, syncRootID, encryptedDisplayName)
+	if err != nil {
+		if err == store.ErrNotFound {
+			return domain.SyncRoot{}, NotFound("同步目录不存在或无权访问")
+		}
+		return domain.SyncRoot{}, err
+	}
+	return root, nil
 }
 
 func (s *SyncRootService) ListByUser(ctx context.Context, userID string) ([]domain.SyncRoot, error) {

@@ -13,11 +13,19 @@ import 'remote_file_preview.dart';
 class FilePreviewScreen extends StatefulWidget {
   final String fileName;
   final Future<RemoteFilePreviewData> Function() loader;
+  final VoidCallback? onDownload;
+  final Future<void> Function({
+    required String fileName,
+    required Uint8List bytes,
+  })?
+  onOpenExternal;
 
   const FilePreviewScreen({
     super.key,
     required this.fileName,
     required this.loader,
+    this.onDownload,
+    this.onOpenExternal,
   });
 
   @override
@@ -59,9 +67,14 @@ class _FilePreviewScreenState extends State<FilePreviewScreen> {
             return _PreviewErrorView(
               message: userReadableErrorMessage(snapshot.error!),
               onRetry: _retry,
+              onDownload: widget.onDownload,
             );
           }
-          return _PreviewContent(data: snapshot.requireData);
+          return _PreviewContent(
+            data: snapshot.requireData,
+            onDownload: widget.onDownload,
+            onOpenExternal: widget.onOpenExternal,
+          );
         },
       ),
     );
@@ -89,8 +102,13 @@ class _PreviewLoadingView extends StatelessWidget {
 class _PreviewErrorView extends StatelessWidget {
   final String message;
   final VoidCallback onRetry;
+  final VoidCallback? onDownload;
 
-  const _PreviewErrorView({required this.message, required this.onRetry});
+  const _PreviewErrorView({
+    required this.message,
+    required this.onRetry,
+    this.onDownload,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -114,10 +132,23 @@ class _PreviewErrorView extends StatelessWidget {
                 style: Theme.of(context).textTheme.bodyLarge,
               ),
               const SizedBox(height: 20),
-              FilledButton.icon(
-                onPressed: onRetry,
-                icon: const Icon(Icons.refresh),
-                label: const Text('重试'),
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 12,
+                runSpacing: 8,
+                children: [
+                  FilledButton.icon(
+                    onPressed: onRetry,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('重试'),
+                  ),
+                  if (onDownload != null)
+                    OutlinedButton.icon(
+                      onPressed: onDownload,
+                      icon: const Icon(Icons.download_outlined),
+                      label: const Text('下载原文件'),
+                    ),
+                ],
               ),
             ],
           ),
@@ -129,8 +160,18 @@ class _PreviewErrorView extends StatelessWidget {
 
 class _PreviewContent extends StatelessWidget {
   final RemoteFilePreviewData data;
+  final VoidCallback? onDownload;
+  final Future<void> Function({
+    required String fileName,
+    required Uint8List bytes,
+  })?
+  onOpenExternal;
 
-  const _PreviewContent({required this.data});
+  const _PreviewContent({
+    required this.data,
+    this.onDownload,
+    this.onOpenExternal,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -139,6 +180,8 @@ class _PreviewContent extends StatelessWidget {
       RemoteFilePreviewKind.video => _VideoPreview(
         fileName: data.name,
         bytes: data.bytes,
+        onDownload: onDownload,
+        onOpenExternal: onOpenExternal,
       ),
       RemoteFilePreviewKind.pdf => PdfViewer.data(
         data.bytes,
@@ -200,8 +243,19 @@ class _TextPreview extends StatelessWidget {
 class _VideoPreview extends StatefulWidget {
   final String fileName;
   final Uint8List bytes;
+  final VoidCallback? onDownload;
+  final Future<void> Function({
+    required String fileName,
+    required Uint8List bytes,
+  })?
+  onOpenExternal;
 
-  const _VideoPreview({required this.fileName, required this.bytes});
+  const _VideoPreview({
+    required this.fileName,
+    required this.bytes,
+    this.onDownload,
+    this.onOpenExternal,
+  });
 
   @override
   State<_VideoPreview> createState() => _VideoPreviewState();
@@ -318,9 +372,20 @@ class _VideoPreviewState extends State<_VideoPreview> {
   @override
   Widget build(BuildContext context) {
     if (_error != null) {
-      return const ColoredBox(
+      return ColoredBox(
         color: Colors.black,
-        child: _MediaError(message: '视频无法播放，可能是设备不支持此编码格式'),
+        child: _MediaError(
+          message: remoteVideoFailureMessage(widget.bytes),
+          onDownload: widget.onDownload,
+          onOpenExternal:
+              !diagnoseRemoteVideoBytes(widget.bytes).isLikelyComplete ||
+                  widget.onOpenExternal == null
+              ? null
+              : () => widget.onOpenExternal!(
+                  fileName: widget.fileName,
+                  bytes: widget.bytes,
+                ),
+        ),
       );
     }
     final controller = _controller;
@@ -440,18 +505,53 @@ class _VideoPreviewState extends State<_VideoPreview> {
 
 class _MediaError extends StatelessWidget {
   final String message;
+  final VoidCallback? onDownload;
+  final Future<void> Function()? onOpenExternal;
 
-  const _MediaError({required this.message});
+  const _MediaError({
+    required this.message,
+    this.onDownload,
+    this.onOpenExternal,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
-        child: Text(
-          message,
-          textAlign: TextAlign.center,
-          style: const TextStyle(color: Colors.white),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white),
+            ),
+            if (onDownload != null) ...[
+              const SizedBox(height: 20),
+              OutlinedButton.icon(
+                onPressed: onDownload,
+                icon: const Icon(Icons.download_outlined),
+                label: const Text('下载原文件'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: const BorderSide(color: Colors.white54),
+                ),
+              ),
+            ],
+            if (onOpenExternal != null) ...[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () => onOpenExternal!(),
+                icon: const Icon(Icons.open_in_new),
+                label: const Text('用其他播放器打开'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: const BorderSide(color: Colors.white54),
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );

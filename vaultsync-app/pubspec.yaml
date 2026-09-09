@@ -1,7 +1,7 @@
 name: vaultsync_app
 description: "VaultSync Flutter client."
 publish_to: 'none'
-version: 1.0.0+2026090803
+version: 1.0.0+2026090902
 
 environment:
   sdk: ^3.11.5

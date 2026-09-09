@@ -18,9 +18,9 @@ func NewSyncRootRepo(db *sql.DB) *SyncRootRepo {
 
 func (r *SyncRootRepo) Create(ctx context.Context, root domain.SyncRoot) (domain.SyncRoot, error) {
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO sync_roots (id, user_id, device_id, encrypted_path, encryption_enabled, cleanup_policy, archive_path, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, root.ID, root.UserID, root.DeviceID, root.EncryptedPath, boolToInt(root.EncryptionEnabled), root.CleanupPolicy, root.ArchivePath, root.CreatedAt)
+		INSERT INTO sync_roots (id, user_id, device_id, encrypted_display_name, encrypted_path, encryption_enabled, cleanup_policy, archive_path, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, root.ID, root.UserID, root.DeviceID, root.EncryptedDisplayName, root.EncryptedPath, boolToInt(root.EncryptionEnabled), root.CleanupPolicy, root.ArchivePath, root.CreatedAt)
 	if err != nil {
 		return domain.SyncRoot{}, err
 	}
@@ -31,12 +31,12 @@ func (r *SyncRootRepo) GetForUser(ctx context.Context, userID, rootID string) (d
 	var root domain.SyncRoot
 	var encryptionEnabled int
 	err := r.db.QueryRowContext(ctx, `
-		SELECT sr.id, sr.user_id, sr.device_id, COALESCE(d.name, ''),
+		SELECT sr.id, sr.user_id, sr.device_id, COALESCE(d.name, ''), COALESCE(sr.encrypted_display_name, ''),
 			sr.encrypted_path, sr.encryption_enabled, sr.cleanup_policy, sr.archive_path, sr.created_at
 		FROM sync_roots sr
 		LEFT JOIN devices d ON d.id = sr.device_id AND d.user_id = sr.user_id
 		WHERE sr.user_id = ? AND sr.id = ?
-	`, userID, rootID).Scan(&root.ID, &root.UserID, &root.DeviceID, &root.DeviceName, &root.EncryptedPath, &encryptionEnabled, &root.CleanupPolicy, &root.ArchivePath, &root.CreatedAt)
+	`, userID, rootID).Scan(&root.ID, &root.UserID, &root.DeviceID, &root.DeviceName, &root.EncryptedDisplayName, &root.EncryptedPath, &encryptionEnabled, &root.CleanupPolicy, &root.ArchivePath, &root.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.SyncRoot{}, ErrNotFound
 	}
@@ -51,14 +51,14 @@ func (r *SyncRootRepo) FindFirstByDeviceAndPathPrefix(ctx context.Context, userI
 	var root domain.SyncRoot
 	var encryptionEnabled int
 	err := r.db.QueryRowContext(ctx, `
-		SELECT sr.id, sr.user_id, sr.device_id, COALESCE(d.name, ''),
+		SELECT sr.id, sr.user_id, sr.device_id, COALESCE(d.name, ''), COALESCE(sr.encrypted_display_name, ''),
 			sr.encrypted_path, sr.encryption_enabled, sr.cleanup_policy, sr.archive_path, sr.created_at
 		FROM sync_roots sr
 		LEFT JOIN devices d ON d.id = sr.device_id AND d.user_id = sr.user_id
 		WHERE sr.user_id = ? AND sr.device_id = ? AND sr.encrypted_path LIKE ?
 		ORDER BY sr.created_at, sr.id
 		LIMIT 1
-	`, userID, deviceID, prefix+"%").Scan(&root.ID, &root.UserID, &root.DeviceID, &root.DeviceName, &root.EncryptedPath, &encryptionEnabled, &root.CleanupPolicy, &root.ArchivePath, &root.CreatedAt)
+	`, userID, deviceID, prefix+"%").Scan(&root.ID, &root.UserID, &root.DeviceID, &root.DeviceName, &root.EncryptedDisplayName, &root.EncryptedPath, &encryptionEnabled, &root.CleanupPolicy, &root.ArchivePath, &root.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.SyncRoot{}, ErrNotFound
 	}
@@ -71,7 +71,7 @@ func (r *SyncRootRepo) FindFirstByDeviceAndPathPrefix(ctx context.Context, userI
 
 func (r *SyncRootRepo) ListByUser(ctx context.Context, userID string) ([]domain.SyncRoot, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT sr.id, sr.user_id, sr.device_id, COALESCE(d.name, ''),
+		SELECT sr.id, sr.user_id, sr.device_id, COALESCE(d.name, ''), COALESCE(sr.encrypted_display_name, ''),
 			sr.encrypted_path, sr.encryption_enabled, sr.cleanup_policy, sr.archive_path, sr.created_at
 		FROM sync_roots sr
 		LEFT JOIN devices d ON d.id = sr.device_id AND d.user_id = sr.user_id
@@ -87,7 +87,7 @@ func (r *SyncRootRepo) ListByUser(ctx context.Context, userID string) ([]domain.
 	for rows.Next() {
 		var root domain.SyncRoot
 		var encryptionEnabled int
-		if err := rows.Scan(&root.ID, &root.UserID, &root.DeviceID, &root.DeviceName, &root.EncryptedPath, &encryptionEnabled, &root.CleanupPolicy, &root.ArchivePath, &root.CreatedAt); err != nil {
+		if err := rows.Scan(&root.ID, &root.UserID, &root.DeviceID, &root.DeviceName, &root.EncryptedDisplayName, &root.EncryptedPath, &encryptionEnabled, &root.CleanupPolicy, &root.ArchivePath, &root.CreatedAt); err != nil {
 			return nil, err
 		}
 		root.EncryptionEnabled = encryptionEnabled != 0
@@ -112,6 +112,25 @@ func (r *SyncRootRepo) UpdateCleanupPolicy(ctx context.Context, userID, rootID, 
 		SET cleanup_policy = ?, archive_path = ?
 		WHERE user_id = ? AND id = ?
 	`, cleanupPolicy, archivePath, userID, rootID)
+	if err != nil {
+		return domain.SyncRoot{}, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return domain.SyncRoot{}, err
+	}
+	if affected == 0 {
+		return domain.SyncRoot{}, ErrNotFound
+	}
+	return r.GetForUser(ctx, userID, rootID)
+}
+
+func (r *SyncRootRepo) UpdateDisplayName(ctx context.Context, userID, rootID, encryptedDisplayName string) (domain.SyncRoot, error) {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE sync_roots
+		SET encrypted_display_name = ?
+		WHERE user_id = ? AND id = ?
+	`, encryptedDisplayName, userID, rootID)
 	if err != nil {
 		return domain.SyncRoot{}, err
 	}

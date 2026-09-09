@@ -30,7 +30,7 @@ func TestOpenRunsMigrationsAndEnablesWAL(t *testing.T) {
 		"user_avatars":      {"user_id", "content_path", "content_hash", "size_bytes", "updated_at"},
 		"sessions":          {"token_id", "user_id", "device_id", "created_at", "expires_at", "refresh_token_hash", "refresh_expires_at", "revoked_at"},
 		"devices":           {"id", "user_id", "name", "platform", "client_key", "created_at"},
-		"sync_roots":        {"id", "user_id", "device_id", "encrypted_path", "encryption_enabled", "cleanup_policy", "archive_path", "created_at"},
+		"sync_roots":        {"id", "user_id", "device_id", "encrypted_display_name", "encrypted_path", "encryption_enabled", "cleanup_policy", "archive_path", "created_at"},
 		"upload_sessions":   {"id", "user_id", "device_id", "sync_root_id", "object_id", "version_id", "total_size", "chunk_size", "received_size", "status", "metadata_json", "media_index_json", "created_at"},
 		"media_assets":      {"id", "user_id", "device_id", "sync_root_id", "object_id", "version_id", "media_type", "captured_at", "captured_year", "captured_month", "width", "height", "duration_ms", "thumbnail_path", "thumbnail_size_bytes", "updated_at"},
 		"file_versions":     {"id", "user_id", "sync_root_id", "object_id", "encrypted_name", "content_path", "content_hash", "size_bytes", "metadata_json", "created_at"},

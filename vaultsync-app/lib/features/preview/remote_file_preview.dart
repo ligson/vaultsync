@@ -8,6 +8,94 @@ import '../sync/wechat_dat_decoder.dart';
 
 enum RemoteFilePreviewKind { image, video, pdf, text }
 
+class RemoteVideoFileDiagnosis {
+  final bool isMp4Container;
+  final bool hasMovieIndex;
+  final bool hasMediaData;
+  final String? videoCodec;
+
+  const RemoteVideoFileDiagnosis({
+    required this.isMp4Container,
+    required this.hasMovieIndex,
+    required this.hasMediaData,
+    required this.videoCodec,
+  });
+
+  bool get isLikelyComplete => isMp4Container && hasMovieIndex && hasMediaData;
+
+  String get codecLabel => switch (videoCodec) {
+    'hvc1' || 'hev1' => 'H.265 / HEVC',
+    'avc1' || 'avc3' => 'H.264 / AVC',
+    'av01' => 'AV1',
+    'vp09' => 'VP9',
+    'vp08' => 'VP8',
+    'mp4v' => 'MPEG-4 Visual',
+    _ => videoCodec == null ? '未知视频编码' : videoCodec!,
+  };
+}
+
+RemoteVideoFileDiagnosis diagnoseRemoteVideoBytes(List<int> bytes) {
+  final isMp4 = _asciiAt(bytes, 4, 'ftyp');
+  return RemoteVideoFileDiagnosis(
+    isMp4Container: isMp4,
+    hasMovieIndex: _containsAscii(bytes, 'moov'),
+    hasMediaData: _containsAscii(bytes, 'mdat'),
+    videoCodec: _knownVideoCodec(bytes),
+  );
+}
+
+String remoteVideoFailureMessage(List<int> bytes) {
+  final diagnosis = diagnoseRemoteVideoBytes(bytes);
+  if (!diagnosis.isMp4Container) {
+    return '解密后的内容不是有效的 MP4 文件，文件可能下载不完整或已损坏。';
+  }
+  if (!diagnosis.isLikelyComplete) {
+    return 'MP4 文件头存在，但索引或媒体数据不完整，文件可能下载不完整或已损坏。';
+  }
+  return '这是完整的 MP4 文件，但视频轨使用 ${diagnosis.codecLabel} 编码，当前设备播放器没有可用的解码器。请先下载原文件，使用系统播放器打开；如仍无法播放，请转换为 H.264 MP4。';
+}
+
+String? _knownVideoCodec(List<int> bytes) {
+  const codecs = {
+    'hvc1',
+    'hev1',
+    'avc1',
+    'avc3',
+    'av01',
+    'vp09',
+    'vp08',
+    'mp4v',
+  };
+  for (var index = 0; index + 4 <= bytes.length; index += 1) {
+    final value = String.fromCharCodes(bytes.sublist(index, index + 4));
+    if (codecs.contains(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+bool _containsAscii(List<int> bytes, String value) {
+  for (var index = 0; index + value.length <= bytes.length; index += 1) {
+    if (_asciiAt(bytes, index, value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool _asciiAt(List<int> bytes, int start, String value) {
+  if (start < 0 || start + value.length > bytes.length) {
+    return false;
+  }
+  for (var offset = 0; offset < value.length; offset += 1) {
+    if (bytes[start + offset] != value.codeUnitAt(offset)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 class RemoteFilePreviewResolvedContent {
   final RemoteFilePreviewKind kind;
   final Uint8List bytes;

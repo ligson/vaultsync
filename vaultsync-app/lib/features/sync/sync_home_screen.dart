@@ -17,6 +17,7 @@ import '../media_timeline/media_timeline_models.dart';
 import '../media_timeline/media_timeline_screen.dart';
 import '../media_timeline/media_timeline_service.dart';
 import '../preview/file_preview_screen.dart';
+import '../preview/external_video_player.dart';
 import '../preview/remote_file_preview.dart';
 import '../preview/remote_file_thumbnail.dart';
 import 'android_sync_keep_alive.dart';
@@ -34,6 +35,8 @@ import 'search_center_screen.dart';
 import 'sync_models.dart';
 import 'sync_pull_executor.dart';
 import 'sync_service.dart';
+import 'sync_root_display_name_protector.dart';
+import 'upload_key_store.dart';
 import 'wechat_folder_discovery.dart';
 
 const _androidDownloadsPath = '/storage/emulated/0/Download';
@@ -144,6 +147,7 @@ class SyncHomeScreen extends StatefulWidget {
 class _SyncHomeScreenState extends State<SyncHomeScreen>
     with WidgetsBindingObserver {
   static const _androidSyncKeepAlive = AndroidSyncKeepAlive();
+  static final _rootDisplayNameProtector = SyncRootDisplayNameProtector();
   static const _slowServerThreshold = Duration(milliseconds: 1200);
   static const _remoteBackupLoadConcurrency = 3;
   late Future<_SyncHomeData> _homeFuture;
@@ -289,6 +293,14 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
         : currentDeviceName;
     final roots = await widget.syncRoots.listSyncRoots(token: token);
     final mappings = await widget.syncRootMappings.loadSyncRootMappings();
+    unawaited(
+      _backfillCurrentRootDisplayNames(
+        token: token,
+        roots: roots,
+        mappings: mappings,
+        currentDeviceId: currentDeviceId ?? '',
+      ),
+    );
     final uploadTasks = await widget.uploadTasks.loadUploadTasks();
     final autoSyncStatus =
         await widget.autoSyncStatus?.loadAutoSyncStatus() ??
@@ -298,6 +310,7 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
         : null;
     final operationStatuses =
         await operationStore?.loadSyncOperationStatuses() ?? const [];
+    final rootDisplayNames = await _decryptRootDisplayNames(roots);
     final prunedState = await _pruneLocalStateForCurrentRoots(
       roots: roots,
       mappings: mappings,
@@ -313,10 +326,111 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
       remoteBackupEntries: _remoteEntriesForCurrentRoots(roots),
       autoSyncStatus: autoSyncStatus,
       operationStatuses: operationStatuses,
+      rootDisplayNames: rootDisplayNames,
       currentDeviceId: currentDeviceId ?? '',
       currentDeviceName: currentDeviceDisplayName ?? '',
       remoteContentLoading: _canLoadRemoteBackups && roots.isNotEmpty,
     );
+  }
+
+  Future<void> _backfillCurrentRootDisplayNames({
+    required String token,
+    required List<SyncRoot> roots,
+    required List<LocalSyncRootMapping> mappings,
+    required String currentDeviceId,
+  }) async {
+    final gateway = widget.syncRoots;
+    if (gateway is! SyncRootDisplayNameGateway || currentDeviceId.isEmpty) {
+      return;
+    }
+    final displayNameGateway = gateway as SyncRootDisplayNameGateway;
+    final mappingsByRoot = {
+      for (final mapping in mappings) mapping.syncRootId: mapping,
+    };
+    for (final root in roots) {
+      if (root.deviceId != currentDeviceId ||
+          root.encryptedDisplayName.trim().isNotEmpty) {
+        continue;
+      }
+      final localPath = mappingsByRoot[root.id]?.localPath.trim() ?? '';
+      final displayName = _directoryDisplayName(localPath);
+      if (displayName.isEmpty) {
+        continue;
+      }
+      try {
+        final encryptedDisplayName = await _encryptRootDisplayName(
+          displayName: displayName,
+          encryptedPath: root.encryptedPath,
+        );
+        if (encryptedDisplayName.isEmpty) {
+          continue;
+        }
+        await displayNameGateway.updateSyncRootDisplayName(
+          token: token,
+          syncRootId: root.id,
+          encryptedDisplayName: encryptedDisplayName,
+        );
+      } catch (error) {
+        debugPrint(
+          'VaultSync root display name backfill failed [${root.id}]: $error',
+        );
+      }
+    }
+  }
+
+  Future<String> _encryptRootDisplayName({
+    required String displayName,
+    required String encryptedPath,
+  }) async {
+    final keyStore = widget.storage is UploadKeyStore
+        ? widget.storage as UploadKeyStore
+        : null;
+    if (keyStore == null || displayName.trim().isEmpty) {
+      return '';
+    }
+    try {
+      final keys = await keyStore.loadUploadKeys();
+      return _rootDisplayNameProtector.encrypt(
+        displayName: displayName.trim(),
+        encryptedPath: encryptedPath,
+        keyBytes: keys.metadataKeyBytes,
+      );
+    } catch (error) {
+      debugPrint('VaultSync root display name encrypt failed: $error');
+      return '';
+    }
+  }
+
+  Future<Map<String, String>> _decryptRootDisplayNames(
+    List<SyncRoot> roots,
+  ) async {
+    final keyStore = widget.storage is UploadKeyStore
+        ? widget.storage as UploadKeyStore
+        : null;
+    if (keyStore == null) {
+      return const {};
+    }
+    try {
+      final keys = await keyStore.loadUploadKeys();
+      final names = <String, String>{};
+      for (final root in roots) {
+        if (root.encryptedDisplayName.trim().isEmpty) {
+          continue;
+        }
+        final name = await _rootDisplayNameProtector.decrypt(
+          encryptedDisplayName: root.encryptedDisplayName,
+          encryptedPath: root.encryptedPath,
+          keyBytes: keys.metadataKeyBytes,
+        );
+        if (name != null) {
+          names[root.id] = name;
+        }
+      }
+      return names;
+    } catch (error) {
+      debugPrint('VaultSync root display name decrypt failed: $error');
+      return const {};
+    }
   }
 
   Future<_SyncHomeData> _loadAndCacheHomeData({
@@ -898,16 +1012,35 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
         _reloadSyncRoots();
         return;
       }
-      final root = await widget.syncRoots.createSyncRoot(
-        token: token,
-        deviceId: deviceId,
-        encryptedPath: _isWechatBackupSource(draft.sourceType)
-            ? 'wechat-backup:v1:${draft.sourceType == 'wechat_archive' ? 'archive' : 'files'}-${DateTime.now().microsecondsSinceEpoch}'
-            : draft.encryptedPath,
-        encryptionEnabled: draft.encryptionEnabled,
-        cleanupPolicy: draft.cleanupPolicy,
-        archivePath: draft.archivePath,
+      final encryptedPath = _isWechatBackupSource(draft.sourceType)
+          ? 'wechat-backup:v1:${draft.sourceType == 'wechat_archive' ? 'archive' : 'files'}-${DateTime.now().microsecondsSinceEpoch}'
+          : draft.encryptedPath;
+      final displayName = _isWechatBackupSource(draft.sourceType)
+          ? (draft.sourceType == 'wechat_archive' ? '微信电脑完整归档' : '微信文件备份')
+          : _directoryDisplayName(draft.localPath);
+      final encryptedDisplayName = await _encryptRootDisplayName(
+        displayName: displayName,
+        encryptedPath: encryptedPath,
       );
+      final root = widget.syncRoots is SyncRootDisplayNameGateway
+          ? await (widget.syncRoots as SyncRootDisplayNameGateway)
+                .createSyncRootWithDisplayName(
+                  token: token,
+                  deviceId: deviceId,
+                  encryptedDisplayName: encryptedDisplayName,
+                  encryptedPath: encryptedPath,
+                  encryptionEnabled: draft.encryptionEnabled,
+                  cleanupPolicy: draft.cleanupPolicy,
+                  archivePath: draft.archivePath,
+                )
+          : await widget.syncRoots.createSyncRoot(
+              token: token,
+              deviceId: deviceId,
+              encryptedPath: encryptedPath,
+              encryptionEnabled: draft.encryptionEnabled,
+              cleanupPolicy: draft.cleanupPolicy,
+              archivePath: draft.archivePath,
+            );
       await widget.syncRootMappings.saveSyncRootMapping(
         LocalSyncRootMapping(
           syncRootId: root.id,
@@ -2996,6 +3129,22 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
       MaterialPageRoute<void>(
         builder: (context) => FilePreviewScreen(
           fileName: backup.name,
+          onDownload: () => _downloadRemoteFile(file),
+          onOpenExternal: _devicePlatform == 'android'
+              ? ({required fileName, required bytes}) async {
+                  final opened = await const ExternalVideoPlayer().open(
+                    fileName: fileName,
+                    bytes: bytes,
+                  );
+                  if (!opened && context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('没有找到可播放此视频的应用，请安装 VLC 或其他支持 H.265 的播放器'),
+                      ),
+                    );
+                  }
+                }
+              : null,
           loader: () async {
             final token = await widget.storage.loadAuthToken();
             if (token == null || token.isEmpty) {
@@ -3630,6 +3779,7 @@ class _SyncHomeData {
   final Map<String, List<RemoteBackupEntry>> remoteBackupEntries;
   final AutoSyncStatus autoSyncStatus;
   final List<LocalSyncOperationStatus> operationStatuses;
+  final Map<String, String> rootDisplayNames;
   final String currentDeviceId;
   final String currentDeviceName;
   final bool isLocalSnapshot;
@@ -3644,6 +3794,7 @@ class _SyncHomeData {
     this.remoteBackupEntries = const {},
     this.autoSyncStatus = const AutoSyncStatus(),
     this.operationStatuses = const [],
+    this.rootDisplayNames = const {},
     this.currentDeviceId = '',
     this.currentDeviceName = '',
     this.isLocalSnapshot = false,
@@ -3659,6 +3810,7 @@ class _SyncHomeData {
     Map<String, List<RemoteBackupEntry>>? remoteBackupEntries,
     AutoSyncStatus? autoSyncStatus,
     List<LocalSyncOperationStatus>? operationStatuses,
+    Map<String, String>? rootDisplayNames,
     String? currentDeviceId,
     String? currentDeviceName,
     bool? isLocalSnapshot,
@@ -3673,6 +3825,7 @@ class _SyncHomeData {
       remoteBackupEntries: remoteBackupEntries ?? this.remoteBackupEntries,
       autoSyncStatus: autoSyncStatus ?? this.autoSyncStatus,
       operationStatuses: operationStatuses ?? this.operationStatuses,
+      rootDisplayNames: rootDisplayNames ?? this.rootDisplayNames,
       currentDeviceId: currentDeviceId ?? this.currentDeviceId,
       currentDeviceName: currentDeviceName ?? this.currentDeviceName,
       isLocalSnapshot: isLocalSnapshot ?? this.isLocalSnapshot,
@@ -3722,6 +3875,7 @@ class _SyncHomeData {
         issues: _issuesByRoot[root.id] ?? const [],
         remoteBackups: remoteBackupEntries[root.id] ?? const [],
         operations: _operationsByRoot[root.id] ?? const [],
+        decryptedDisplayName: rootDisplayNames[root.id] ?? '',
         currentDeviceId: currentDeviceId,
         currentDeviceName: currentDeviceName,
       ),
@@ -9391,6 +9545,7 @@ class _SyncRootViewData {
   final List<LocalSyncOperationStatus> operations;
   final String currentDeviceId;
   final String currentDeviceName;
+  final String decryptedDisplayName;
 
   _SyncRootViewData({
     required this.root,
@@ -9401,6 +9556,7 @@ class _SyncRootViewData {
     this.operations = const [],
     required this.currentDeviceId,
     required this.currentDeviceName,
+    this.decryptedDisplayName = '',
   });
 
   String get displayName {
@@ -9419,6 +9575,10 @@ class _SyncRootViewData {
     final knownName = _knownDirectoryNameForEncryptedPath(root.encryptedPath);
     if (knownName != null) {
       return knownName;
+    }
+    final remoteDisplayName = decryptedDisplayName.trim();
+    if (remoteDisplayName.isNotEmpty) {
+      return remoteDisplayName;
     }
     if (!isCurrentDeviceRoot) {
       return '同步目录 $shortRootId';
@@ -9818,6 +9978,12 @@ String? _knownDirectoryNameForEncryptedPath(String encryptedPath) {
     return 'Pictures';
   }
   return null;
+}
+
+String _directoryDisplayName(String path) {
+  final normalized = path.trim().replaceAll('\\', '/');
+  final parts = normalized.split('/').where((part) => part.isNotEmpty).toList();
+  return parts.isEmpty ? '' : parts.last;
 }
 
 String _syncIssueTypeLabel(String type) {

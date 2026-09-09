@@ -21,11 +21,12 @@ func NewSyncRootHandler(service *service.SyncRootService) *SyncRootHandler {
 func (h *SyncRootHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.MustUserID(r.Context())
 	var req struct {
-		DeviceID          string `json:"device_id"`
-		EncryptedPath     string `json:"encrypted_path"`
-		EncryptionEnabled *bool  `json:"encryption_enabled"`
-		CleanupPolicy     string `json:"cleanup_policy"`
-		ArchivePath       string `json:"archive_path"`
+		DeviceID             string `json:"device_id"`
+		EncryptedDisplayName string `json:"encrypted_display_name"`
+		EncryptedPath        string `json:"encrypted_path"`
+		EncryptionEnabled    *bool  `json:"encryption_enabled"`
+		CleanupPolicy        string `json:"cleanup_policy"`
+		ArchivePath          string `json:"archive_path"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
@@ -37,7 +38,7 @@ func (h *SyncRootHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if req.EncryptionEnabled != nil {
 		encryptionEnabled = *req.EncryptionEnabled
 	}
-	root, err := h.service.Create(r.Context(), userID, req.DeviceID, req.EncryptedPath, req.CleanupPolicy, req.ArchivePath, encryptionEnabled)
+	root, err := h.service.CreateWithDisplayName(r.Context(), userID, req.DeviceID, req.EncryptedDisplayName, req.EncryptedPath, req.CleanupPolicy, req.ArchivePath, encryptionEnabled)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -59,11 +60,21 @@ func (h *SyncRootHandler) UpdateCleanupPolicy(w http.ResponseWriter, r *http.Req
 	userID := middleware.MustUserID(r.Context())
 	syncRootID := r.PathValue("syncRootID")
 	var req struct {
-		CleanupPolicy string `json:"cleanup_policy"`
-		ArchivePath   string `json:"archive_path"`
+		CleanupPolicy        string `json:"cleanup_policy"`
+		ArchivePath          string `json:"archive_path"`
+		EncryptedDisplayName string `json:"encrypted_display_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
+		return
+	}
+	if req.CleanupPolicy == "" && req.EncryptedDisplayName != "" {
+		root, err := h.service.UpdateDisplayName(r.Context(), userID, syncRootID, req.EncryptedDisplayName)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		response.Write(w, http.StatusOK, "", root)
 		return
 	}
 	root, err := h.service.UpdateCleanupPolicy(r.Context(), userID, syncRootID, req.CleanupPolicy, req.ArchivePath)

@@ -26,6 +26,24 @@ abstract interface class SyncRootGateway {
   });
 }
 
+abstract interface class SyncRootDisplayNameGateway {
+  Future<SyncRoot> createSyncRootWithDisplayName({
+    required String token,
+    required String deviceId,
+    required String encryptedDisplayName,
+    required String encryptedPath,
+    required bool encryptionEnabled,
+    required String cleanupPolicy,
+    required String archivePath,
+  });
+
+  Future<SyncRoot> updateSyncRootDisplayName({
+    required String token,
+    required String syncRootId,
+    required String encryptedDisplayName,
+  });
+}
+
 abstract interface class SyncChangeGateway {
   Future<SyncChangePage> listChanges({
     required String token,
@@ -56,6 +74,7 @@ abstract interface class RemoteObjectDeleteGateway {
 class SyncService
     implements
         SyncRootGateway,
+        SyncRootDisplayNameGateway,
         SyncChangeGateway,
         RemoteBackupGateway,
         RemoteObjectDeleteGateway {
@@ -93,6 +112,45 @@ class SyncService
         'cleanup_policy': cleanupPolicy,
         'archive_path': archivePath,
       },
+    );
+    return SyncRoot.fromJson(data);
+  }
+
+  @override
+  Future<SyncRoot> createSyncRootWithDisplayName({
+    required String token,
+    required String deviceId,
+    required String encryptedDisplayName,
+    required String encryptedPath,
+    required bool encryptionEnabled,
+    required String cleanupPolicy,
+    required String archivePath,
+  }) async {
+    final data = await apiClient.post(
+      '/api/v1/sync-roots',
+      token: token,
+      body: {
+        'device_id': deviceId,
+        'encrypted_display_name': encryptedDisplayName,
+        'encrypted_path': encryptedPath,
+        'encryption_enabled': encryptionEnabled,
+        'cleanup_policy': cleanupPolicy,
+        'archive_path': archivePath,
+      },
+    );
+    return SyncRoot.fromJson(data);
+  }
+
+  @override
+  Future<SyncRoot> updateSyncRootDisplayName({
+    required String token,
+    required String syncRootId,
+    required String encryptedDisplayName,
+  }) async {
+    final data = await apiClient.patch(
+      '/api/v1/sync-roots/$syncRootId',
+      token: token,
+      body: {'encrypted_display_name': encryptedDisplayName},
     );
     return SyncRoot.fromJson(data);
   }

@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS sync_roots (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     device_id TEXT NOT NULL,
+    encrypted_display_name TEXT NOT NULL DEFAULT '',
     encrypted_path TEXT NOT NULL,
     encryption_enabled INTEGER NOT NULL DEFAULT 0,
     cleanup_policy TEXT NOT NULL,

@@ -5,6 +5,7 @@
 ## 2026-09-09
 
 - `v1.0.0+2026090902`：修复其他设备查看同步目录时显示短 ID（例如 `dc059b87`）的问题：同步根新增客户端加密的显示名称字段，原设备打开首页时会从本地目录映射非破坏性补齐，其他设备使用账号密钥解密显示 `Downloads`、`Pictures` 等目录名。SQLite 仅为 `sync_roots` 非破坏性新增 `encrypted_display_name` 空字符串默认列；回滚旧后端时保留该列即可。服务器不保存明文路径，不删除或改写既有同步文件、目录绑定、上传任务和密钥；详见 `docs/specs/2026-09-09-sync-root-display-name.md`。
+- `v1.0.0+2026090902` 已完成 GitHub Release（Actions run `34345390324` 的全部 13 个 job 成功）并同步到 NAS：12 个 Release 制品按 `SHA256SUMS.txt` 校验通过，五个平台客户端包和校验文件已在 staging 校验后原子替换，公网下载的大小与 SHA-256 均回查一致。后端已切换为固定镜像 `ligson/vaultsync-be:2026090902-568ba5d`（digest `sha256:9c4488ac8bd8bbfa39512863c3db2917d1bbfd6868a78f70b6b218750bc8e963`；NAS 本地加载镜像 ID `sha256:03d6936afe0f0493d0ce217ef8ab78313e14f4d91647caee59c6b6bc45fea209`），数据库迁移后 `PRAGMA quick_check` 为 `ok`，新增 `sync_roots.encrypted_display_name`；更新前备份数据库、配置、Compose 和旧客户端包到 `data/backups/release-20260910-071033-2026090902/`。6 个用户、5 台设备、10 个同步目录、39705 个文件版本、58694 个上传会话和 8384 条媒体索引均保留，未删除或重写用户数据、同步历史、密文对象、上传队列、目录绑定或加密密钥。
 - 改进远端视频预览失败诊断：区分无效 MP4、文件不完整和设备缺少视频解码器，并识别 H.265/HEVC、H.264/AVC 等常见编码。
 - 视频预览失败时新增“下载原文件”入口，便于使用系统播放器打开设备无法在线解码的视频。
 - Android 视频预览失败时新增“用其他播放器打开”，通过只读 `FileProvider` URI 调起系统播放器，不转码、不修改原始视频字节。

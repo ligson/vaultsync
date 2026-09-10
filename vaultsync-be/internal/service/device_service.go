@@ -22,10 +22,11 @@ func NewDeviceService(repo *store.DeviceRepo) *DeviceService {
 	}
 }
 
-func (s *DeviceService) Register(ctx context.Context, userID, name, platform, clientKey string) (domain.Device, error) {
+func (s *DeviceService) Register(ctx context.Context, userID, name, platform, clientKey, currentDeviceID string) (domain.Device, error) {
 	name = strings.TrimSpace(name)
 	platform = strings.TrimSpace(platform)
 	clientKey = strings.TrimSpace(clientKey)
+	currentDeviceID = strings.TrimSpace(currentDeviceID)
 	if name == "" {
 		return domain.Device{}, InvalidRequest("设备名称不能为空")
 	}
@@ -34,6 +35,9 @@ func (s *DeviceService) Register(ctx context.Context, userID, name, platform, cl
 	}
 	if len(clientKey) > 200 {
 		return domain.Device{}, InvalidRequest("设备识别信息过长")
+	}
+	if len(currentDeviceID) > 100 {
+		return domain.Device{}, InvalidRequest("当前设备 ID 过长")
 	}
 	if clientKey == "" {
 		if device, found, err := s.repo.FindLatestUnclaimedByNamePlatform(ctx, userID, name, platform); err != nil {
@@ -50,6 +54,13 @@ func (s *DeviceService) Register(ctx context.Context, userID, name, platform, cl
 			device.Name = name
 			device.Platform = platform
 			return s.repo.UpdateClientKeyAndProfile(ctx, device)
+		}
+		if strings.HasPrefix(clientKey, "vaultsync-device:v2:android:") && currentDeviceID != "" {
+			if device, found, err := s.reconcileAndroidDevice(ctx, userID, currentDeviceID, name, platform, clientKey); err != nil {
+				return domain.Device{}, err
+			} else if found {
+				return device, nil
+			}
 		}
 		if device, found, err := s.repo.FindSingleUnclaimedByNamePlatform(ctx, userID, name, platform); err != nil {
 			return domain.Device{}, err
@@ -78,6 +89,38 @@ func (s *DeviceService) Register(ctx context.Context, userID, name, platform, cl
 		CreatedAt: s.now().Format(time.RFC3339),
 	}
 	return s.repo.Create(ctx, device)
+}
+
+func (s *DeviceService) reconcileAndroidDevice(ctx context.Context, userID, currentDeviceID, name, platform, clientKey string) (domain.Device, bool, error) {
+	current, found, err := s.repo.GetForUser(ctx, userID, currentDeviceID)
+	if err != nil || !found {
+		return domain.Device{}, false, err
+	}
+	if current.Name != name || current.Platform != platform {
+		return domain.Device{}, false, nil
+	}
+	hasData, err := s.repo.HasAssociatedData(ctx, userID, current.ID)
+	if err != nil {
+		return domain.Device{}, false, err
+	}
+	if !hasData {
+		canonical, unique, err := s.repo.FindUniqueDataBearingByNamePlatform(ctx, userID, name, platform, current.ID)
+		if err != nil {
+			return domain.Device{}, false, err
+		}
+		if unique {
+			canonical.ClientKey = clientKey
+			canonical.Name = name
+			canonical.Platform = platform
+			updated, err := s.repo.UpdateClientKeyAndProfile(ctx, canonical)
+			return updated, err == nil, err
+		}
+	}
+	current.ClientKey = clientKey
+	current.Name = name
+	current.Platform = platform
+	updated, err := s.repo.UpdateClientKeyAndProfile(ctx, current)
+	return updated, err == nil, err
 }
 
 func (s *DeviceService) Remove(ctx context.Context, userID, deviceID, currentDeviceID string) error {

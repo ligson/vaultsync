@@ -405,6 +405,7 @@ class FakeDeviceGateway implements DeviceGateway {
   String? name;
   String? platform;
   String? clientKey;
+  String? currentDeviceId;
 
   FakeDeviceGateway({this.errorMessage});
 
@@ -414,11 +415,13 @@ class FakeDeviceGateway implements DeviceGateway {
     required String name,
     required String platform,
     required String clientKey,
+    String currentDeviceId = '',
   }) async {
     this.token = token;
     this.name = name;
     this.platform = platform;
     this.clientKey = clientKey;
+    this.currentDeviceId = currentDeviceId;
     final message = errorMessage;
     if (message != null) {
       throw ApiException(

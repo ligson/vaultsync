@@ -46,6 +46,69 @@ func (r *DeviceRepo) FindByClientKey(ctx context.Context, userID, clientKey stri
 	return device, true, nil
 }
 
+func (r *DeviceRepo) GetForUser(ctx context.Context, userID, deviceID string) (domain.Device, bool, error) {
+	var device domain.Device
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, user_id, name, platform, client_key, created_at
+		FROM devices
+		WHERE user_id = ? AND id = ?
+	`, userID, deviceID).Scan(&device.ID, &device.UserID, &device.Name, &device.Platform, &device.ClientKey, &device.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.Device{}, false, nil
+	}
+	if err != nil {
+		return domain.Device{}, false, err
+	}
+	return device, true, nil
+}
+
+func (r *DeviceRepo) HasAssociatedData(ctx context.Context, userID, deviceID string) (bool, error) {
+	var count int64
+	err := r.db.QueryRowContext(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM sync_roots WHERE user_id = ? AND device_id = ?) +
+			(SELECT COUNT(*) FROM upload_sessions WHERE user_id = ? AND device_id = ?) +
+			(SELECT COUNT(*) FROM file_tombstones WHERE user_id = ? AND device_id = ?) +
+			(SELECT COUNT(*) FROM media_assets WHERE user_id = ? AND device_id = ?)
+	`, userID, deviceID, userID, deviceID, userID, deviceID, userID, deviceID).Scan(&count)
+	return count > 0, err
+}
+
+func (r *DeviceRepo) FindUniqueDataBearingByNamePlatform(ctx context.Context, userID, name, platform, excludedDeviceID string) (domain.Device, bool, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, user_id, name, platform, client_key, created_at
+		FROM devices d
+		WHERE user_id = ? AND name = ? AND platform = ? AND id <> ?
+			AND (
+				(SELECT COUNT(*) FROM sync_roots WHERE user_id = d.user_id AND device_id = d.id) +
+				(SELECT COUNT(*) FROM upload_sessions WHERE user_id = d.user_id AND device_id = d.id) +
+				(SELECT COUNT(*) FROM file_tombstones WHERE user_id = d.user_id AND device_id = d.id) +
+				(SELECT COUNT(*) FROM media_assets WHERE user_id = d.user_id AND device_id = d.id)
+			) > 0
+		ORDER BY created_at, id
+		LIMIT 2
+	`, userID, name, platform, excludedDeviceID)
+	if err != nil {
+		return domain.Device{}, false, err
+	}
+	defer rows.Close()
+	devices := make([]domain.Device, 0, 2)
+	for rows.Next() {
+		var device domain.Device
+		if err := rows.Scan(&device.ID, &device.UserID, &device.Name, &device.Platform, &device.ClientKey, &device.CreatedAt); err != nil {
+			return domain.Device{}, false, err
+		}
+		devices = append(devices, device)
+	}
+	if err := rows.Err(); err != nil {
+		return domain.Device{}, false, err
+	}
+	if len(devices) != 1 {
+		return domain.Device{}, false, nil
+	}
+	return devices[0], true, nil
+}
+
 func (r *DeviceRepo) FindSingleUnclaimedByNamePlatform(ctx context.Context, userID, name, platform string) (domain.Device, bool, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, user_id, name, platform, client_key, created_at

@@ -34,4 +34,25 @@ void main() {
 
     expect(first, isNot(second));
   });
+
+  test(
+    'v2 Android key uses stable Android ID instead of build fingerprint',
+    () {
+      final beforeSystemUpdate = DeviceProfile.stableClientKeyV2('android', [
+        '8238b5d3aaf0b045',
+        'Solana Mobile Inc.',
+        'solanamobile',
+        'Seeker',
+      ]);
+      final afterSystemUpdate = DeviceProfile.stableClientKeyV2('android', [
+        '8238b5d3aaf0b045',
+        'Solana Mobile Inc.',
+        'solanamobile',
+        'Seeker',
+      ]);
+
+      expect(beforeSystemUpdate, afterSystemUpdate);
+      expect(beforeSystemUpdate, startsWith('vaultsync-device:v2:android:'));
+    },
+  );
 }

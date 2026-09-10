@@ -236,6 +236,7 @@ class _LoginScreenState extends State<LoginScreen> {
         name: widget.deviceProfile.name,
         platform: widget.deviceProfile.platform,
         clientKey: widget.deviceProfile.clientKey,
+        currentDeviceId: await widget.storage.loadDeviceId() ?? '',
       );
     } catch (error) {
       throw Exception('登录已成功，但注册当前设备失败：${userReadableErrorMessage(error)}');

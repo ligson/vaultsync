@@ -7,6 +7,7 @@ abstract interface class DeviceGateway {
     required String name,
     required String platform,
     required String clientKey,
+    String currentDeviceId = '',
   });
 }
 
@@ -21,6 +22,7 @@ class DeviceService implements DeviceGateway {
     required String name,
     required String platform,
     required String clientKey,
+    String currentDeviceId = '',
   }) async {
     final data = await apiClient.post(
       '/api/v1/devices',
@@ -29,6 +31,8 @@ class DeviceService implements DeviceGateway {
         'name': name,
         'platform': platform,
         if (clientKey.trim().isNotEmpty) 'client_key': clientKey.trim(),
+        if (currentDeviceId.trim().isNotEmpty)
+          'current_device_id': currentDeviceId.trim(),
       },
     );
     return RegisteredDevice.fromJson(data);

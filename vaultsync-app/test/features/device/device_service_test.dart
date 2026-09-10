@@ -19,6 +19,7 @@ void main() {
             'name': 'Alice iPhone',
             'platform': 'ios',
             'client_key': 'vaultsync-device:v1:ios:test-key',
+            'current_device_id': 'device-old',
           });
           return http.Response(
             jsonEncode({
@@ -45,6 +46,7 @@ void main() {
       name: 'Alice iPhone',
       platform: 'ios',
       clientKey: 'vaultsync-device:v1:ios:test-key',
+      currentDeviceId: 'device-old',
     );
 
     expect(device.id, 'device-1');

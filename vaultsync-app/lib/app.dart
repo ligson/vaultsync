@@ -51,6 +51,8 @@ class VaultSyncApp extends StatefulWidget {
   final AutoSyncStatusStore? autoSyncStatus;
   final SyncHistoryStore? syncHistory;
   final AuthGateway? authGateway;
+  final DeviceGateway? deviceGateway;
+  final DeviceProfile? deviceProfile;
   final SyncRootGateway? syncRoots;
   final UploadGateway? uploads;
   final LocalUploadExecutionGateway? uploadExecutor;
@@ -73,6 +75,8 @@ class VaultSyncApp extends StatefulWidget {
     AutoSyncStatusStore? autoSyncStatus,
     SyncHistoryStore? syncHistory,
     this.authGateway,
+    this.deviceGateway,
+    this.deviceProfile,
     this.syncRoots,
     this.uploads,
     this.uploadExecutor,
@@ -255,8 +259,10 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
   void initState() {
     super.initState();
     _apiBaseUrl = widget.config.apiBaseUrl;
-    _deviceProfile = DeviceProfile.current();
-    _loadDeviceProfile();
+    _deviceProfile = widget.deviceProfile ?? DeviceProfile.current();
+    if (widget.deviceProfile == null) {
+      _loadDeviceProfile();
+    }
     _loadServerSettings();
     _loadThemePreference();
   }
@@ -284,7 +290,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
       sessionStore: widget.storage,
       refreshAuthSession: (token) => _refreshSession(auth, token),
     );
-    final devices = DeviceService(apiClient);
+    final devices = widget.deviceGateway ?? DeviceService(apiClient);
     final resolvedSyncRoots = widget.syncRoots ?? SyncService(apiClient);
     final resolvedSyncChanges = resolvedSyncRoots is SyncChangeGateway
         ? resolvedSyncRoots as SyncChangeGateway
@@ -465,7 +471,11 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
       title: 'VaultSync',
       theme: buildVaultTheme(_themePreset),
       home: FutureBuilder<bool>(
-        future: _localSessionFuture ??= _hasLocalSession(auth),
+        future: _localSessionFuture ??= _hasLocalSession(
+          auth,
+          devices,
+          deviceProfile,
+        ),
         builder: (context, snapshot) {
           if (!snapshot.hasData) {
             return const Scaffold(
@@ -517,10 +527,15 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
     }
     setState(() {
       _deviceProfile = profile;
+      _localSessionFuture = null;
     });
   }
 
-  Future<bool> _hasLocalSession(AuthGateway auth) async {
+  Future<bool> _hasLocalSession(
+    AuthGateway auth,
+    DeviceGateway devices,
+    DeviceProfile deviceProfile,
+  ) async {
     final token = await widget.storage.loadAuthToken();
     final expiresAt = await widget.storage.loadAuthExpiresAt();
     final deviceId = await widget.storage.loadDeviceId();
@@ -539,6 +554,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
     final now = DateTime.now().toUtc();
     final expiresAtUtc = expiresAtTime.toUtc();
     final accessTokenExpired = !expiresAtUtc.isAfter(now);
+    var activeToken = token;
     if (accessTokenExpired ||
         expiresAtUtc.difference(now) <= const Duration(hours: 1)) {
       final refreshStore = widget.storage is RefreshTokenStore
@@ -561,8 +577,23 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
           refreshToken: canRefreshExpiredToken ? refreshToken : '',
         );
         await widget.storage.saveAuthSession(refreshed);
+        activeToken = refreshed.token;
       } catch (_) {
         return false;
+      }
+    }
+    if (deviceProfile.clientKey.isNotEmpty) {
+      try {
+        final registered = await devices.registerDevice(
+          token: activeToken,
+          name: deviceProfile.name,
+          platform: deviceProfile.platform,
+          clientKey: deviceProfile.clientKey,
+          currentDeviceId: deviceId,
+        );
+        await widget.storage.saveDevice(registered);
+      } catch (error) {
+        debugPrint('VaultSync current device reconciliation failed: $error');
       }
     }
     return true;

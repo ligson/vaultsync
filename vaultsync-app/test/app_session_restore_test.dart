@@ -3,9 +3,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vaultsync_app/app.dart';
 import 'package:vaultsync_app/core/storage/app_storage.dart';
+import 'package:vaultsync_app/core/device/device_profile.dart';
 import 'package:vaultsync_app/features/auth/auth_models.dart';
 import 'package:vaultsync_app/features/auth/auth_service.dart';
 import 'package:vaultsync_app/features/device/device_models.dart';
+import 'package:vaultsync_app/features/device/device_service.dart';
 import 'package:vaultsync_app/features/sync/sync_models.dart';
 import 'package:vaultsync_app/features/sync/sync_service.dart';
 
@@ -37,6 +39,37 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('登录'), findsNothing);
+  });
+
+  testWidgets('restored session reconciles and saves the canonical device', (
+    tester,
+  ) async {
+    final storage = FakeSessionStore(
+      token: 'token-1',
+      deviceId: 'duplicate-seeker',
+      expiresAt: '2999-01-01T00:00:00Z',
+    );
+    final devices = FakeDeviceGateway();
+
+    await tester.pumpWidget(
+      VaultSyncApp(
+        storage: storage,
+        deviceGateway: devices,
+        deviceProfile: const DeviceProfile(
+          name: 'Solana Mobile Inc. Seeker',
+          platform: 'android',
+          clientKey: 'vaultsync-device:v2:android:stable',
+        ),
+        syncRootMappings: FakeSyncRootMappingStore(),
+        uploadTasks: FakeUploadTaskStore(),
+        syncIssues: FakeSyncIssueStore(),
+        syncRoots: FakeSyncRootGateway(const []),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(devices.currentDeviceId, 'duplicate-seeker');
+    expect(storage.savedDevice?.id, 'canonical-seeker');
   });
 
   testWidgets('VaultSync app opens login when local session is incomplete', (
@@ -305,6 +338,7 @@ class FakeSessionStore implements SessionStore, RefreshTokenStore {
   final String? refreshToken;
   final String? refreshExpiresAt;
   AuthSession? savedSession;
+  RegisteredDevice? savedDevice;
 
   FakeSessionStore({
     this.token,
@@ -318,7 +352,7 @@ class FakeSessionStore implements SessionStore, RefreshTokenStore {
   Future<String?> loadAuthToken() async => savedSession?.token ?? token;
 
   @override
-  Future<String?> loadDeviceId() async => deviceId;
+  Future<String?> loadDeviceId() async => savedDevice?.id ?? deviceId;
 
   @override
   Future<String?> loadAuthExpiresAt() async =>
@@ -338,7 +372,32 @@ class FakeSessionStore implements SessionStore, RefreshTokenStore {
   }
 
   @override
-  Future<void> saveDevice(RegisteredDevice device) async {}
+  Future<void> saveDevice(RegisteredDevice device) async {
+    savedDevice = device;
+  }
+}
+
+class FakeDeviceGateway implements DeviceGateway {
+  String? currentDeviceId;
+
+  @override
+  Future<RegisteredDevice> registerDevice({
+    required String token,
+    required String name,
+    required String platform,
+    required String clientKey,
+    String currentDeviceId = '',
+  }) async {
+    this.currentDeviceId = currentDeviceId;
+    return RegisteredDevice(
+      id: 'canonical-seeker',
+      userId: 'user-1',
+      name: name,
+      platform: platform,
+      clientKey: clientKey,
+      createdAt: '2026-07-07T03:39:13Z',
+    );
+  }
 }
 
 class FakeAuthGateway implements AuthGateway, UserProfileGateway {

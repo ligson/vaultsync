@@ -2,9 +2,12 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 
 class DeviceProfile {
+  static const _deviceInfoChannel = MethodChannel('vaultsync/device_info');
+
   final String name;
   final String platform;
   final String clientKey;
@@ -23,13 +26,26 @@ class DeviceProfile {
   static Future<DeviceProfile> currentFriendly({
     DeviceInfoPlugin? plugin,
     TargetPlatform? targetPlatform,
+    Future<String> Function()? androidIdLoader,
   }) async {
     final resolvedPlatform = targetPlatform ?? defaultTargetPlatform;
     final platform = _platformName(resolvedPlatform);
     final deviceInfo = plugin ?? DeviceInfoPlugin();
     try {
+      if (resolvedPlatform == TargetPlatform.android) {
+        final info = await deviceInfo.androidInfo;
+        final androidId = await (androidIdLoader ?? _loadAndroidId)();
+        final name = _cleanName(_androidName(info));
+        if (name.isNotEmpty) {
+          return DeviceProfile(
+            name: name,
+            platform: platform,
+            clientKey: _androidClientKey(info, androidId),
+          );
+        }
+      }
       final name = switch (resolvedPlatform) {
-        TargetPlatform.android => _androidName(await deviceInfo.androidInfo),
+        TargetPlatform.android => '',
         TargetPlatform.iOS => _iosName(await deviceInfo.iosInfo),
         TargetPlatform.macOS => _macosName(await deviceInfo.macOsInfo),
         TargetPlatform.windows => _windowsName(await deviceInfo.windowsInfo),
@@ -38,9 +54,7 @@ class DeviceProfile {
       };
       final normalizedName = _cleanName(name);
       final clientKey = switch (resolvedPlatform) {
-        TargetPlatform.android => _androidClientKey(
-          await deviceInfo.androidInfo,
-        ),
+        TargetPlatform.android => '',
         TargetPlatform.iOS => _iosClientKey(await deviceInfo.iosInfo),
         TargetPlatform.macOS => _macosClientKey(await deviceInfo.macOsInfo),
         TargetPlatform.windows => _windowsClientKey(
@@ -77,7 +91,16 @@ class DeviceProfile {
     return _joinUnique([info.manufacturer, info.model]);
   }
 
-  static String _androidClientKey(AndroidDeviceInfo info) {
+  static String _androidClientKey(AndroidDeviceInfo info, String androidId) {
+    final stableAndroidId = _cleanName(androidId);
+    if (stableAndroidId.isNotEmpty) {
+      return stableClientKeyV2('android', [
+        stableAndroidId,
+        info.manufacturer,
+        info.brand,
+        info.model,
+      ]);
+    }
     return stableClientKey('android', [
       info.manufacturer,
       info.brand,
@@ -88,6 +111,16 @@ class DeviceProfile {
       info.fingerprint,
       info.isPhysicalDevice ? 'physical' : 'emulator',
     ]);
+  }
+
+  static Future<String> _loadAndroidId() async {
+    try {
+      return await _deviceInfoChannel.invokeMethod<String>('androidId') ?? '';
+    } on PlatformException {
+      return '';
+    } on MissingPluginException {
+      return '';
+    }
   }
 
   static String _iosName(IosDeviceInfo info) {
@@ -146,6 +179,19 @@ class DeviceProfile {
 
   @visibleForTesting
   static String stableClientKey(String platform, List<String> values) {
+    return _stableClientKey(version: 1, platform: platform, values: values);
+  }
+
+  @visibleForTesting
+  static String stableClientKeyV2(String platform, List<String> values) {
+    return _stableClientKey(version: 2, platform: platform, values: values);
+  }
+
+  static String _stableClientKey({
+    required int version,
+    required String platform,
+    required List<String> values,
+  }) {
     final cleanedValues = values
         .map(_cleanName)
         .where((value) => value.isNotEmpty)
@@ -156,7 +202,7 @@ class DeviceProfile {
     final normalizedPlatform = _cleanName(platform).toLowerCase();
     final payload = '$normalizedPlatform|${cleanedValues.join('|')}';
     final digest = sha256.convert(utf8.encode(payload)).toString();
-    return 'vaultsync-device:v1:$normalizedPlatform:$digest';
+    return 'vaultsync-device:v$version:$normalizedPlatform:$digest';
   }
 
   static String _joinUnique(List<String> parts) {

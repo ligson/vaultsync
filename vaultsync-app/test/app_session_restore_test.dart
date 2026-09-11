@@ -63,13 +63,35 @@ void main() {
         syncRootMappings: FakeSyncRootMappingStore(),
         uploadTasks: FakeUploadTaskStore(),
         syncIssues: FakeSyncIssueStore(),
-        syncRoots: FakeSyncRootGateway(const []),
+        syncRoots: FakeSyncRootGateway(const [
+          SyncRoot(
+            id: 'root-1',
+            userId: 'user-1',
+            deviceId: 'canonical-seeker',
+            deviceName: 'Solana Mobile Inc. Seeker',
+            encryptedPath: '/Pictures',
+            cleanupPolicy: 'keep',
+            archivePath: '',
+            createdAt: '2026-07-07T03:39:13Z',
+          ),
+          SyncRoot(
+            id: 'root-2',
+            userId: 'user-1',
+            deviceId: 'other-device',
+            deviceName: 'Other device',
+            encryptedPath: '/Other',
+            cleanupPolicy: 'keep',
+            archivePath: '',
+            createdAt: '2026-07-08T03:39:13Z',
+          ),
+        ]),
       ),
     );
     await tester.pumpAndSettle();
 
     expect(devices.currentDeviceId, 'duplicate-seeker');
     expect(storage.savedDevice?.id, 'canonical-seeker');
+    expect(find.text('当前设备（1）'), findsOneWidget);
   });
 
   testWidgets('VaultSync app opens login when local session is incomplete', (

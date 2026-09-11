@@ -253,6 +253,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
   final DownloadProgressChannel _downloadProgress = DownloadProgressChannel();
   bool _serverSettingsLoaded = false;
   VaultThemePreset _themePreset = VaultThemePreset.celadon;
+  Future<void>? _deviceProfileFuture;
   Future<bool>? _localSessionFuture;
 
   @override
@@ -261,7 +262,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
     _apiBaseUrl = widget.config.apiBaseUrl;
     _deviceProfile = widget.deviceProfile ?? DeviceProfile.current();
     if (widget.deviceProfile == null) {
-      _loadDeviceProfile();
+      _deviceProfileFuture = _loadDeviceProfile();
     }
     _loadServerSettings();
     _loadThemePreference();
@@ -471,11 +472,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
       title: 'VaultSync',
       theme: buildVaultTheme(_themePreset),
       home: FutureBuilder<bool>(
-        future: _localSessionFuture ??= _hasLocalSession(
-          auth,
-          devices,
-          deviceProfile,
-        ),
+        future: _localSessionFuture ??= _restoreLocalSession(auth, devices),
         builder: (context, snapshot) {
           if (!snapshot.hasData) {
             return const Scaffold(
@@ -521,14 +518,27 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
   }
 
   Future<void> _loadDeviceProfile() async {
-    final profile = await DeviceProfile.currentFriendly();
+    final profile = await DeviceProfile.currentFriendly().timeout(
+      const Duration(seconds: 1),
+      onTimeout: DeviceProfile.current,
+    );
     if (!mounted) {
       return;
     }
     setState(() {
       _deviceProfile = profile;
-      _localSessionFuture = null;
     });
+  }
+
+  Future<bool> _restoreLocalSession(
+    AuthGateway auth,
+    DeviceGateway devices,
+  ) async {
+    final profileFuture = _deviceProfileFuture;
+    if (profileFuture != null) {
+      await profileFuture;
+    }
+    return _hasLocalSession(auth, devices, _deviceProfile);
   }
 
   Future<bool> _hasLocalSession(

@@ -61,6 +61,39 @@ class MediaUploadIndex {
   };
 }
 
+class DocumentUploadIndex {
+  final String documentType;
+  final String documentFormat;
+  final DateTime updatedAt;
+
+  const DocumentUploadIndex({
+    required this.documentType,
+    required this.documentFormat,
+    required this.updatedAt,
+  });
+
+  Map<String, Object?> toJson() => {
+    'document_type': documentType,
+    'document_format': documentFormat,
+    'updated_at': updatedAt.toUtc().toIso8601String(),
+  };
+}
+
+abstract interface class DocumentIndexedUploadGateway {
+  Future<UploadSession> createDocumentUploadSession({
+    required String token,
+    required String deviceId,
+    required String syncRootId,
+    required String objectId,
+    required String versionId,
+    required int totalSize,
+    required int chunkSize,
+    required String encryptedName,
+    required String metadataJson,
+    required DocumentUploadIndex documentIndex,
+  });
+}
+
 abstract interface class MediaIndexedUploadGateway {
   Future<UploadSession> createMediaUploadSession({
     required String token,
@@ -88,6 +121,7 @@ class UploadApiService
     implements
         UploadGateway,
         MediaIndexedUploadGateway,
+        DocumentIndexedUploadGateway,
         MediaThumbnailUploadGateway {
   final ApiClient apiClient;
 
@@ -145,6 +179,33 @@ class UploadApiService
     );
   }
 
+  @override
+  Future<UploadSession> createDocumentUploadSession({
+    required String token,
+    required String deviceId,
+    required String syncRootId,
+    required String objectId,
+    required String versionId,
+    required int totalSize,
+    required int chunkSize,
+    required String encryptedName,
+    required String metadataJson,
+    required DocumentUploadIndex documentIndex,
+  }) {
+    return _createUploadSession(
+      token: token,
+      deviceId: deviceId,
+      syncRootId: syncRootId,
+      objectId: objectId,
+      versionId: versionId,
+      totalSize: totalSize,
+      chunkSize: chunkSize,
+      encryptedName: encryptedName,
+      metadataJson: metadataJson,
+      documentIndex: documentIndex,
+    );
+  }
+
   Future<UploadSession> _createUploadSession({
     required String token,
     required String deviceId,
@@ -156,6 +217,7 @@ class UploadApiService
     required String encryptedName,
     required String metadataJson,
     MediaUploadIndex? mediaIndex,
+    DocumentUploadIndex? documentIndex,
   }) async {
     final data = await apiClient.post(
       '/api/v1/upload-sessions',
@@ -170,6 +232,7 @@ class UploadApiService
         'encrypted_name': encryptedName,
         'metadata_json': metadataJson,
         if (mediaIndex != null) 'media_index': mediaIndex.toJson(),
+        if (documentIndex != null) 'document_index': documentIndex.toJson(),
       },
     );
     return UploadSession.fromJson(data);

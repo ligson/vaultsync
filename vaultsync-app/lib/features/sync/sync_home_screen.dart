@@ -8,6 +8,9 @@ import 'package:flutter/services.dart';
 import '../../core/device/device_profile.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/storage/app_storage.dart';
+import '../document_center/document_center_models.dart';
+import '../document_center/document_center_screen.dart';
+import '../document_center/document_center_service.dart';
 import '../download/remote_file_download.dart';
 import '../media_backup/media_backup_models.dart';
 import '../media_backup/media_backup_screen.dart';
@@ -95,6 +98,7 @@ class SyncHomeScreen extends StatefulWidget {
   final MediaBackupGateway? mediaGateway;
   final MediaAssetThumbnailGateway? mediaThumbnails;
   final MediaTimelineGateway? mediaTimeline;
+  final DocumentCenterGateway? documentCenter;
   final String? devicePlatform;
   final String? currentDeviceDisplayName;
   final String? serverAddress;
@@ -133,6 +137,7 @@ class SyncHomeScreen extends StatefulWidget {
     this.mediaGateway,
     this.mediaThumbnails,
     this.mediaTimeline,
+    this.documentCenter,
     this.devicePlatform,
     this.currentDeviceDisplayName,
     this.serverAddress,
@@ -2468,6 +2473,12 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
             icon: const Icon(Icons.photo_library_outlined),
           ),
           IconButton(
+            key: const ValueKey('open_document_center_button'),
+            tooltip: '文档',
+            onPressed: _openDocumentCenter,
+            icon: const Icon(Icons.description_outlined),
+          ),
+          IconButton(
             key: const ValueKey('open_search_center_button'),
             tooltip: '搜索',
             onPressed: _openSearchCenter,
@@ -2668,6 +2679,50 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
           onOpen: _openMediaTimelineEntry,
           onDownload: _downloadMediaTimelineEntry,
           onDetails: _showMediaTimelineDetails,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openDocumentCenter() async {
+    final gateway = widget.documentCenter;
+    if (gateway == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('文档中心暂不可用')));
+      return;
+    }
+    final currentDeviceId = await widget.storage.loadDeviceId() ?? '';
+    if (!mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => DocumentCenterScreen(
+          documents: gateway,
+          currentDeviceId: currentDeviceId,
+          onOpen: _openDocumentEntry,
+          onDownload: _downloadDocumentEntry,
+        ),
+      ),
+    );
+  }
+
+  void _openDocumentEntry(DocumentCenterEntry entry) {
+    unawaited(
+      _openFilePreview(
+        _UnifiedFileRecord(
+          path: entry.relativePath,
+          backup: entry.remoteBackup,
+        ),
+      ),
+    );
+  }
+
+  void _downloadDocumentEntry(DocumentCenterEntry entry) {
+    unawaited(
+      _downloadRemoteFile(
+        _UnifiedFileRecord(
+          path: entry.relativePath,
+          backup: entry.remoteBackup,
         ),
       ),
     );

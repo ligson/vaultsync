@@ -20,10 +20,11 @@ func (r *ObjectRepo) CreateUploadSession(ctx context.Context, session domain.Upl
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO upload_sessions (
 			id, user_id, device_id, sync_root_id, object_id, version_id,
-			total_size, chunk_size, received_size, status, metadata_json, media_index_json, created_at
+			total_size, chunk_size, received_size, status, metadata_json,
+			media_index_json, document_index_json, created_at
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, session.ID, session.UserID, session.DeviceID, session.SyncRootID, session.ObjectID, session.VersionID, session.TotalSize, session.ChunkSize, session.ReceivedSize, session.Status, session.MetadataJSON, session.MediaIndexJSON, session.CreatedAt)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, session.ID, session.UserID, session.DeviceID, session.SyncRootID, session.ObjectID, session.VersionID, session.TotalSize, session.ChunkSize, session.ReceivedSize, session.Status, session.MetadataJSON, session.MediaIndexJSON, session.DocumentIndexJSON, session.CreatedAt)
 	if err != nil {
 		return domain.UploadSession{}, err
 	}
@@ -34,10 +35,11 @@ func (r *ObjectRepo) GetUploadSession(ctx context.Context, userID, sessionID str
 	var session domain.UploadSession
 	err := r.db.QueryRowContext(ctx, `
 		SELECT id, user_id, device_id, sync_root_id, object_id, version_id,
-			total_size, chunk_size, received_size, status, metadata_json, media_index_json, created_at
+			total_size, chunk_size, received_size, status, metadata_json,
+			media_index_json, document_index_json, created_at
 		FROM upload_sessions
 		WHERE user_id = ? AND id = ?
-	`, userID, sessionID).Scan(&session.ID, &session.UserID, &session.DeviceID, &session.SyncRootID, &session.ObjectID, &session.VersionID, &session.TotalSize, &session.ChunkSize, &session.ReceivedSize, &session.Status, &session.MetadataJSON, &session.MediaIndexJSON, &session.CreatedAt)
+	`, userID, sessionID).Scan(&session.ID, &session.UserID, &session.DeviceID, &session.SyncRootID, &session.ObjectID, &session.VersionID, &session.TotalSize, &session.ChunkSize, &session.ReceivedSize, &session.Status, &session.MetadataJSON, &session.MediaIndexJSON, &session.DocumentIndexJSON, &session.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.UploadSession{}, ErrNotFound
 	}
@@ -73,7 +75,7 @@ func (r *ObjectRepo) AddReceivedBytes(ctx context.Context, userID, sessionID str
 	return err
 }
 
-func (r *ObjectRepo) CompleteUpload(ctx context.Context, sessionID string, version domain.FileVersion, media *domain.MediaAsset) (domain.FileVersion, error) {
+func (r *ObjectRepo) CompleteUpload(ctx context.Context, sessionID string, version domain.FileVersion, media *domain.MediaAsset, document *domain.DocumentAsset) (domain.FileVersion, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return domain.FileVersion{}, err
@@ -118,6 +120,35 @@ func (r *ObjectRepo) CompleteUpload(ctx context.Context, sessionID string, versi
 			version.ObjectID, version.ID, media.MediaType, media.CapturedAt,
 			media.CapturedYear, media.CapturedMonth, media.Width,
 			media.Height, media.DurationMS, media.CapturedAt)
+		if err != nil {
+			return domain.FileVersion{}, err
+		}
+	}
+
+	if document != nil {
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO document_assets (
+				id, user_id, device_id, sync_root_id, object_id, version_id,
+				document_type, document_format, updated_at
+			)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(user_id, sync_root_id, object_id) DO UPDATE SET
+				device_id = excluded.device_id,
+				version_id = excluded.version_id,
+				document_type = excluded.document_type,
+				document_format = excluded.document_format,
+				updated_at = excluded.updated_at
+		`, document.ID, version.UserID, document.DeviceID, version.SyncRootID,
+			version.ObjectID, version.ID, document.DocumentType,
+			document.DocumentFormat, document.UpdatedAt)
+		if err != nil {
+			return domain.FileVersion{}, err
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO document_index_marks (user_id, version_id, indexed_at)
+			VALUES (?, ?, ?)
+			ON CONFLICT(user_id, version_id) DO NOTHING
+		`, version.UserID, version.ID, document.UpdatedAt)
 		if err != nil {
 			return domain.FileVersion{}, err
 		}

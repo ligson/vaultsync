@@ -16,6 +16,7 @@ type Dependencies struct {
 	SyncRootHandler *handlers.SyncRootHandler
 	UploadHandler   *handlers.UploadHandler
 	MediaHandler    *handlers.MediaHandler
+	DocumentHandler *handlers.DocumentHandler
 	ChangeHandler   *handlers.ChangeHandler
 	DownloadHandler *handlers.DownloadHandler
 	DeleteHandler   *handlers.DeleteHandler
@@ -64,6 +65,10 @@ func RegisterRoutes(mux *http.ServeMux, deps Dependencies) {
 	secured.HandleFunc("POST /api/v1/media/indexes", deps.MediaHandler.Backfill)
 	secured.HandleFunc("PUT /api/v1/media/{mediaID}/thumbnail", deps.MediaHandler.PutThumbnail)
 	secured.HandleFunc("GET /api/v1/media/{mediaID}/thumbnail", deps.MediaHandler.GetThumbnail)
+	secured.HandleFunc("GET /api/v1/documents/overview", deps.DocumentHandler.Overview)
+	secured.HandleFunc("GET /api/v1/documents/items", deps.DocumentHandler.Items)
+	secured.HandleFunc("GET /api/v1/documents/candidates", deps.DocumentHandler.Candidates)
+	secured.HandleFunc("POST /api/v1/documents/indexes", deps.DocumentHandler.Backfill)
 	secured.HandleFunc("GET /api/v1/changes", deps.ChangeHandler.List)
 	secured.HandleFunc("GET /api/v1/objects/{versionID}", deps.DownloadHandler.Download)
 	secured.HandleFunc("DELETE /api/v1/objects/{objectID}", deps.DeleteHandler.DeleteObject)
@@ -95,6 +100,7 @@ func RegisterRoutes(mux *http.ServeMux, deps Dependencies) {
 	mux.Handle("/api/v1/upload-sessions", middleware.Auth(deps.AuthService, secured))
 	mux.Handle("/api/v1/upload-sessions/", middleware.Auth(deps.AuthService, secured))
 	mux.Handle("/api/v1/media/", middleware.Auth(deps.AuthService, secured))
+	mux.Handle("/api/v1/documents/", middleware.Auth(deps.AuthService, secured))
 	mux.Handle("/api/v1/changes", middleware.Auth(deps.AuthService, secured))
 	mux.Handle("/api/v1/objects/", middleware.Auth(deps.AuthService, secured))
 	mux.Handle("/api/v1/admin/", middleware.Auth(deps.AuthService, middleware.AdminOnly(deps.AdminService, admin)))

@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
     status TEXT NOT NULL,
     metadata_json TEXT NOT NULL,
     media_index_json TEXT NOT NULL DEFAULT '',
+    document_index_json TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id),
     FOREIGN KEY (device_id) REFERENCES devices(id),
@@ -120,6 +121,32 @@ CREATE TABLE IF NOT EXISTS file_versions (
     created_at TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id),
     FOREIGN KEY (sync_root_id) REFERENCES sync_roots(id)
+);
+
+CREATE TABLE IF NOT EXISTS document_assets (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    sync_root_id TEXT NOT NULL,
+    object_id TEXT NOT NULL,
+    version_id TEXT NOT NULL,
+    document_type TEXT NOT NULL,
+    document_format TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id, sync_root_id, object_id),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (device_id) REFERENCES devices(id),
+    FOREIGN KEY (sync_root_id) REFERENCES sync_roots(id),
+    FOREIGN KEY (version_id) REFERENCES file_versions(id)
+);
+
+CREATE TABLE IF NOT EXISTS document_index_marks (
+    user_id TEXT NOT NULL,
+    version_id TEXT NOT NULL,
+    indexed_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, version_id),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (version_id) REFERENCES file_versions(id)
 );
 
 CREATE TABLE IF NOT EXISTS file_tombstones (
@@ -203,6 +230,15 @@ ON media_assets(
     user_id, captured_year, captured_month, captured_at DESC, id DESC
 );
 
+CREATE INDEX IF NOT EXISTS idx_document_assets_time
+ON document_assets(user_id, updated_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_document_assets_device_time
+ON document_assets(user_id, device_id, updated_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_document_assets_type_time
+ON document_assets(user_id, document_type, updated_at DESC, id DESC);
+
 `
 
 func migrate(db *sql.DB) error {
@@ -237,6 +273,9 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	if err := ensureColumn(db, "upload_sessions", "media_index_json", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "upload_sessions", "document_index_json", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	for _, column := range []struct {

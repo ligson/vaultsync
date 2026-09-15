@@ -21,22 +21,23 @@ func NewUploadHandler(service *service.UploadService) *UploadHandler {
 func (h *UploadHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.MustUserID(r.Context())
 	var req struct {
-		DeviceID      string                  `json:"device_id"`
-		SyncRootID    string                  `json:"sync_root_id"`
-		ObjectID      string                  `json:"object_id"`
-		VersionID     string                  `json:"version_id"`
-		TotalSize     int64                   `json:"total_size"`
-		ChunkSize     int64                   `json:"chunk_size"`
-		EncryptedName string                  `json:"encrypted_name"`
-		MetadataJSON  string                  `json:"metadata_json"`
-		MediaIndex    *domain.MediaIndexInput `json:"media_index"`
+		DeviceID      string                     `json:"device_id"`
+		SyncRootID    string                     `json:"sync_root_id"`
+		ObjectID      string                     `json:"object_id"`
+		VersionID     string                     `json:"version_id"`
+		TotalSize     int64                      `json:"total_size"`
+		ChunkSize     int64                      `json:"chunk_size"`
+		EncryptedName string                     `json:"encrypted_name"`
+		MetadataJSON  string                     `json:"metadata_json"`
+		MediaIndex    *domain.MediaIndexInput    `json:"media_index"`
+		DocumentIndex *domain.DocumentIndexInput `json:"document_index"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, errorCodeInvalidRequest, "请求内容不是有效 JSON")
 		return
 	}
 
-	session, err := h.service.CreateSession(r.Context(), userID, req.DeviceID, req.SyncRootID, req.ObjectID, req.VersionID, req.EncryptedName, req.MetadataJSON, req.TotalSize, req.ChunkSize, req.MediaIndex)
+	session, err := h.service.CreateSession(r.Context(), userID, req.DeviceID, req.SyncRootID, req.ObjectID, req.VersionID, req.EncryptedName, req.MetadataJSON, req.TotalSize, req.ChunkSize, req.MediaIndex, req.DocumentIndex)
 	if err != nil {
 		writeServiceError(w, err)
 		return

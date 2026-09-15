@@ -13,6 +13,7 @@ import 'features/auth/auth_models.dart';
 import 'features/auth/auth_service.dart';
 import 'features/auth/login_screen.dart';
 import 'features/device/device_service.dart';
+import 'features/document_center/document_center_service.dart';
 import 'features/download/download_service.dart';
 import 'features/download/remote_file_download.dart';
 import 'features/media_backup/media_upload_content_reader.dart';
@@ -340,6 +341,11 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
       localThumbnails: mediaGateway,
       remoteFileThumbnails: resolvedRemoteFileThumbnails,
     );
+    final documentCenter = DocumentCenterApiService(
+      apiClient: apiClient,
+      sessionStore: widget.storage,
+      keyStore: widget.uploadKeys,
+    );
     final mediaThumbnailPublisher =
         resolvedUploads is MediaThumbnailUploadGateway
         ? EncryptedMediaThumbnailPublisher(
@@ -459,6 +465,7 @@ class _VaultSyncAppState extends State<VaultSyncApp> {
           mediaGateway: mediaGateway,
           mediaThumbnails: mediaGateway,
           mediaTimeline: mediaTimeline,
+          documentCenter: documentCenter,
           currentDeviceDisplayName: deviceProfile.name,
           autoSyncEnabled: widget.autoSyncEnabled,
           serverAddress: _apiBaseUrl.toString(),

@@ -8,6 +8,7 @@ import '../../core/network/api_exception.dart';
 import '../../core/storage/app_storage.dart';
 import '../media_backup/media_backup_gateway.dart';
 import '../media_timeline/media_timeline_service.dart';
+import '../document_center/document_center_models.dart';
 import 'sync_models.dart';
 import 'upload_api_service.dart';
 
@@ -1097,6 +1098,26 @@ class LocalUploadExecutor
           capturedAt: task.capturedAt ?? task.modifiedAt,
           capturedYear: _mediaYearMonth(task).$1,
           capturedMonth: _mediaYearMonth(task).$2,
+        ),
+      );
+    }
+    final document = documentClassificationForPath(task.relativePath);
+    if (document != null && uploads is DocumentIndexedUploadGateway) {
+      final documentUploads = uploads as DocumentIndexedUploadGateway;
+      return documentUploads.createDocumentUploadSession(
+        token: token,
+        deviceId: deviceId,
+        syncRootId: task.syncRootId,
+        objectId: objectId,
+        versionId: versionId,
+        totalSize: payload.length,
+        chunkSize: chunkSize,
+        encryptedName: payload.encryptedName,
+        metadataJson: payload.metadataJson,
+        documentIndex: DocumentUploadIndex(
+          documentType: document.type,
+          documentFormat: document.format,
+          updatedAt: task.modifiedAt,
         ),
       );
     }

@@ -81,21 +81,22 @@ type SyncRoot struct {
 }
 
 type UploadSession struct {
-	ID             string `json:"id"`
-	UserID         string `json:"user_id"`
-	DeviceID       string `json:"device_id"`
-	SyncRootID     string `json:"sync_root_id"`
-	ObjectID       string `json:"object_id"`
-	VersionID      string `json:"version_id"`
-	EncryptedName  string `json:"encrypted_name"`
-	TotalSize      int64  `json:"total_size"`
-	ChunkSize      int64  `json:"chunk_size"`
-	ReceivedSize   int64  `json:"received_size"`
-	Status         string `json:"status"`
-	MetadataJSON   string `json:"metadata_json"`
-	MediaIndexJSON string `json:"-"`
-	MediaID        string `json:"media_id,omitempty"`
-	CreatedAt      string `json:"created_at"`
+	ID                string `json:"id"`
+	UserID            string `json:"user_id"`
+	DeviceID          string `json:"device_id"`
+	SyncRootID        string `json:"sync_root_id"`
+	ObjectID          string `json:"object_id"`
+	VersionID         string `json:"version_id"`
+	EncryptedName     string `json:"encrypted_name"`
+	TotalSize         int64  `json:"total_size"`
+	ChunkSize         int64  `json:"chunk_size"`
+	ReceivedSize      int64  `json:"received_size"`
+	Status            string `json:"status"`
+	MetadataJSON      string `json:"metadata_json"`
+	MediaIndexJSON    string `json:"-"`
+	DocumentIndexJSON string `json:"-"`
+	MediaID           string `json:"media_id,omitempty"`
+	CreatedAt         string `json:"created_at"`
 }
 
 type MediaIndexInput struct {
@@ -146,6 +147,43 @@ type MediaAssetPage struct {
 	Items      []MediaAsset `json:"items"`
 	NextCursor string       `json:"next_cursor"`
 	HasMore    bool         `json:"has_more"`
+}
+
+type DocumentIndexInput struct {
+	DocumentType   string `json:"document_type"`
+	DocumentFormat string `json:"document_format"`
+	UpdatedAt      string `json:"updated_at"`
+}
+
+type DocumentBackfillInput struct {
+	SyncRootID string `json:"sync_root_id"`
+	ObjectID   string `json:"object_id"`
+	VersionID  string `json:"version_id"`
+	DocumentIndexInput
+}
+
+type DocumentAsset struct {
+	ID                       string `json:"id"`
+	DeviceID                 string `json:"device_id"`
+	DeviceName               string `json:"device_name"`
+	SyncRootID               string `json:"sync_root_id"`
+	EncryptedRootDisplayName string `json:"encrypted_root_display_name,omitempty"`
+	EncryptedRootPath        string `json:"encrypted_root_path"`
+	ObjectID                 string `json:"object_id"`
+	VersionID                string `json:"version_id"`
+	EncryptedName            string `json:"encrypted_name"`
+	MetadataJSON             string `json:"metadata_json"`
+	ContentHash              string `json:"content_hash"`
+	SizeBytes                int64  `json:"size_bytes"`
+	DocumentType             string `json:"document_type"`
+	DocumentFormat           string `json:"document_format"`
+	UpdatedAt                string `json:"updated_at"`
+}
+
+type DocumentAssetPage struct {
+	Items      []DocumentAsset `json:"items"`
+	NextCursor int             `json:"next_cursor"`
+	HasMore    bool            `json:"has_more"`
 }
 
 type FileVersion struct {

@@ -18,22 +18,24 @@ type UploadService struct {
 	deviceRepo   *store.DeviceRepo
 	syncRootRepo *store.SyncRootRepo
 	mediaRepo    *store.MediaRepo
+	documentRepo *store.DocumentRepo
 	storage      *storage.FSStorage
 	now          func() time.Time
 }
 
-func NewUploadService(repo *store.ObjectRepo, deviceRepo *store.DeviceRepo, syncRootRepo *store.SyncRootRepo, mediaRepo *store.MediaRepo, storage *storage.FSStorage) *UploadService {
+func NewUploadService(repo *store.ObjectRepo, deviceRepo *store.DeviceRepo, syncRootRepo *store.SyncRootRepo, mediaRepo *store.MediaRepo, documentRepo *store.DocumentRepo, storage *storage.FSStorage) *UploadService {
 	return &UploadService{
 		repo:         repo,
 		deviceRepo:   deviceRepo,
 		syncRootRepo: syncRootRepo,
 		mediaRepo:    mediaRepo,
+		documentRepo: documentRepo,
 		storage:      storage,
 		now:          func() time.Time { return time.Now().UTC() },
 	}
 }
 
-func (s *UploadService) CreateSession(ctx context.Context, userID, deviceID, syncRootID, objectID, versionID, encryptedName, metadataJSON string, totalSize, chunkSize int64, mediaIndex *domain.MediaIndexInput) (domain.UploadSession, error) {
+func (s *UploadService) CreateSession(ctx context.Context, userID, deviceID, syncRootID, objectID, versionID, encryptedName, metadataJSON string, totalSize, chunkSize int64, mediaIndex *domain.MediaIndexInput, documentIndex *domain.DocumentIndexInput) (domain.UploadSession, error) {
 	if strings.TrimSpace(deviceID) == "" {
 		return domain.UploadSession{}, InvalidRequest("设备 ID 不能为空")
 	}
@@ -70,6 +72,10 @@ func (s *UploadService) CreateSession(ctx context.Context, userID, deviceID, syn
 	if err != nil {
 		return domain.UploadSession{}, err
 	}
+	documentIndexJSON, err := validateDocumentIndex(documentIndex)
+	if err != nil {
+		return domain.UploadSession{}, err
+	}
 
 	mergedMetadata, err := mergeUploadMetadata(metadataJSON, encryptedName)
 	if err != nil {
@@ -92,20 +98,21 @@ func (s *UploadService) CreateSession(ctx context.Context, userID, deviceID, syn
 	}
 
 	session := domain.UploadSession{
-		ID:             newID(),
-		UserID:         userID,
-		DeviceID:       deviceID,
-		SyncRootID:     syncRootID,
-		ObjectID:       objectID,
-		VersionID:      versionID,
-		EncryptedName:  encryptedName,
-		TotalSize:      totalSize,
-		ChunkSize:      chunkSize,
-		ReceivedSize:   0,
-		Status:         "pending",
-		MetadataJSON:   mergedMetadata,
-		MediaIndexJSON: mediaIndexJSON,
-		CreatedAt:      s.now().Format(time.RFC3339),
+		ID:                newID(),
+		UserID:            userID,
+		DeviceID:          deviceID,
+		SyncRootID:        syncRootID,
+		ObjectID:          objectID,
+		VersionID:         versionID,
+		EncryptedName:     encryptedName,
+		TotalSize:         totalSize,
+		ChunkSize:         chunkSize,
+		ReceivedSize:      0,
+		Status:            "pending",
+		MetadataJSON:      mergedMetadata,
+		MediaIndexJSON:    mediaIndexJSON,
+		DocumentIndexJSON: documentIndexJSON,
+		CreatedAt:         s.now().Format(time.RFC3339),
 	}
 	return s.repo.CreateUploadSession(ctx, session)
 }
@@ -235,12 +242,21 @@ func (s *UploadService) Complete(ctx context.Context, userID, sessionID string) 
 	if err != nil {
 		return domain.FileVersion{}, err
 	}
+	document, err := documentAssetFromSession(session)
+	if err != nil {
+		return domain.FileVersion{}, err
+	}
+	if document != nil && s.documentRepo != nil {
+		if existingID, existingErr := s.documentRepo.GetIDForObject(ctx, userID, session.SyncRootID, session.ObjectID); existingErr == nil {
+			document.ID = existingID
+		}
+	}
 	if media != nil {
 		if existingID, existingErr := s.mediaRepo.GetIDForObject(ctx, userID, session.SyncRootID, session.ObjectID); existingErr == nil {
 			media.ID = existingID
 		}
 	}
-	return s.repo.CompleteUpload(ctx, sessionID, version, media)
+	return s.repo.CompleteUpload(ctx, sessionID, version, media, document)
 }
 
 func (s *UploadService) mediaID(ctx context.Context, userID, versionID string) string {
@@ -306,6 +322,46 @@ func mediaAssetFromSession(session domain.UploadSession, version domain.FileVers
 		Width:         input.Width,
 		Height:        input.Height,
 		DurationMS:    input.DurationMS,
+	}, nil
+}
+
+func validateDocumentIndex(input *domain.DocumentIndexInput) (string, error) {
+	if input == nil {
+		return "", nil
+	}
+	documentType, err := validateDocumentType(input.DocumentType, false)
+	if err != nil {
+		return "", err
+	}
+	documentFormat := strings.ToLower(strings.TrimSpace(input.DocumentFormat))
+	if !validDocumentFormat(documentType, documentFormat) {
+		return "", InvalidRequest("文档格式不正确")
+	}
+	updatedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(input.UpdatedAt))
+	if err != nil {
+		return "", InvalidRequest("文档更新时间格式不正确")
+	}
+	input.DocumentType = documentType
+	input.DocumentFormat = documentFormat
+	input.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
+func documentAssetFromSession(session domain.UploadSession) (*domain.DocumentAsset, error) {
+	if strings.TrimSpace(session.DocumentIndexJSON) == "" {
+		return nil, nil
+	}
+	var input domain.DocumentIndexInput
+	if err := json.Unmarshal([]byte(session.DocumentIndexJSON), &input); err != nil {
+		return nil, InvalidRequest("文档索引格式不正确")
+	}
+	return &domain.DocumentAsset{
+		ID: newID(), DeviceID: session.DeviceID, DocumentType: input.DocumentType,
+		DocumentFormat: input.DocumentFormat, UpdatedAt: input.UpdatedAt,
 	}, nil
 }
 

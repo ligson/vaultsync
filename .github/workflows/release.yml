@@ -304,6 +304,9 @@ jobs:
         working-directory: vaultsync-app
         env:
           ARTIFACT_VERSION: ${{ needs.validate-tag.outputs.artifact_version }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         shell: bash
         run: |
           set -euo pipefail
@@ -313,7 +316,26 @@ jobs:
             echo 'Android apksigner was not found.' >&2
             exit 1
           fi
+          "$apksigner" sign \
+            --ks android/vaultsync-release.jks \
+            --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --key-pass env:ANDROID_KEY_PASSWORD \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --out "$RUNNER_TEMP/vaultsync-signed.apk" \
+            build/app/outputs/flutter-apk/app-release.apk
+          mv "$RUNNER_TEMP/vaultsync-signed.apk" build/app/outputs/flutter-apk/app-release.apk
           "$apksigner" verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk
+          legacy_signing="$($apksigner verify --verbose --min-sdk-version 21 --max-sdk-version 23 build/app/outputs/flutter-apk/app-release.apk)"
+          modern_signing="$($apksigner verify --verbose --min-sdk-version 24 build/app/outputs/flutter-apk/app-release.apk)"
+          if ! grep -Fq 'Verified using v1 scheme (JAR signing): true' <<< "$legacy_signing" \
+            || ! grep -Fq 'Verified using v2 scheme (APK Signature Scheme v2): true' <<< "$modern_signing"; then
+            echo 'Android APK must include valid v1 and v2 signatures for installer compatibility.' >&2
+            printf '%s\n' "$legacy_signing" >&2
+            printf '%s\n' "$modern_signing" >&2
+            exit 1
+          fi
           actual_android_cert_sha256="$($apksigner verify --print-certs build/app/outputs/flutter-apk/app-release.apk \
             | sed -n 's/.*certificate SHA-256 digest: //p' \
             | tr -d ':[:space:]' \

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vaultsync_app/features/document_center/document_center_models.dart';
@@ -43,18 +45,51 @@ void main() {
       expect(find.text('查看'), findsNothing);
     },
   );
+
+  testWidgets('document list does not wait for device overview', (
+    tester,
+  ) async {
+    final overview = Completer<DocumentCenterOverview>();
+    final gateway = _FakeDocumentGateway(_entry(), overview: overview.future);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DocumentCenterScreen(
+          documents: gateway,
+          currentDeviceId: 'device-1',
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('项目说明.docx'), findsOneWidget);
+    expect(gateway.overviewCalls, 1);
+    expect(gateway.itemCalls, 1);
+
+    overview.complete(
+      const DocumentCenterOverview(
+        devices: [DocumentCenterDevice(id: 'device-1', name: 'Windows 笔记本')],
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('document_device_filter')));
+    await tester.pumpAndSettle();
+    expect(find.text('Windows 笔记本（当前）'), findsOneWidget);
+  });
 }
 
 class _FakeDocumentGateway implements DocumentCenterGateway {
   final DocumentCenterEntry entry;
   int overviewCalls = 0;
   int itemCalls = 0;
+  final Future<DocumentCenterOverview>? overview;
 
-  _FakeDocumentGateway(this.entry);
+  _FakeDocumentGateway(this.entry, {this.overview});
 
   @override
   Future<DocumentCenterOverview> loadOverview() async {
     overviewCalls += 1;
+    if (overview != null) return overview!;
     return const DocumentCenterOverview(
       devices: [DocumentCenterDevice(id: 'device-1', name: 'Windows 笔记本')],
     );
@@ -75,6 +110,20 @@ class _FakeDocumentGateway implements DocumentCenterGateway {
     }
     return DocumentCenterPage(items: [entry], nextCursor: 1, hasMore: false);
   }
+
+  @override
+  Future<List<DocumentBookshelfItem>> loadBookshelf() async => const [];
+
+  @override
+  Future<DocumentBookshelfItem> updateBookshelf({
+    required String documentId,
+    required String sectionId,
+    required int offset,
+    required double progress,
+  }) async => throw UnimplementedError();
+
+  @override
+  Future<void> removeFromBookshelf(String documentId) async {}
 }
 
 DocumentCenterEntry _entry() {
@@ -90,6 +139,7 @@ DocumentCenterEntry _entry() {
     documentFormat: 'docx',
     sizeBytes: 2048,
     updatedAt: DateTime.utc(2026, 9, 15, 10, 20),
+    encryptionEnabled: false,
     remoteBackup: const RemoteBackupEntry(
       syncRootId: 'root-1',
       objectId: 'object-1',

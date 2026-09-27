@@ -2699,19 +2699,10 @@ class _SyncHomeScreenState extends State<SyncHomeScreen>
         builder: (_) => DocumentCenterScreen(
           documents: gateway,
           currentDeviceId: currentDeviceId,
-          onOpen: _openDocumentEntry,
+          preview: gateway is DocumentCenterPreviewGateway
+              ? gateway as DocumentCenterPreviewGateway
+              : null,
           onDownload: _downloadDocumentEntry,
-        ),
-      ),
-    );
-  }
-
-  void _openDocumentEntry(DocumentCenterEntry entry) {
-    unawaited(
-      _openFilePreview(
-        _UnifiedFileRecord(
-          path: entry.relativePath,
-          backup: entry.remoteBackup,
         ),
       ),
     );

@@ -27,6 +27,8 @@ class ApiClient {
 
   Uri loginPath() => baseUrl.resolve('/api/v1/auth/login');
 
+  Uri resolveUri(String path) => _resolve(path);
+
   Future<void> ping() async {
     try {
       await get('/api/v1/health');
@@ -86,6 +88,26 @@ class ApiClient {
       send: (requestToken) async {
         final response = await _send(
           () => httpClient.patch(
+            _resolve(path),
+            headers: _headers(token: requestToken),
+            body: jsonEncode(body),
+          ),
+        );
+        return _decodeEnvelope(response);
+      },
+    );
+  }
+
+  Future<Map<String, Object?>> put(
+    String path, {
+    required Map<String, Object?> body,
+    String? token,
+  }) async {
+    return _withTokenRefresh(
+      token: token,
+      send: (requestToken) async {
+        final response = await _send(
+          () => httpClient.put(
             _resolve(path),
             headers: _headers(token: requestToken),
             body: jsonEncode(body),

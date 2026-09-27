@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -10,18 +13,20 @@ import (
 )
 
 const defaultDocumentCandidateLimit = 200
+const documentBookshelfLimit = 100
 
 type DocumentOverview struct {
 	Devices []domain.Device `json:"devices"`
 }
 
 type DocumentService struct {
-	repo *store.DocumentRepo
-	now  func() time.Time
+	repo    *store.DocumentRepo
+	dataDir string
+	now     func() time.Time
 }
 
-func NewDocumentService(repo *store.DocumentRepo) *DocumentService {
-	return &DocumentService{repo: repo, now: func() time.Time { return time.Now().UTC() }}
+func NewDocumentService(repo *store.DocumentRepo, dataDir string) *DocumentService {
+	return &DocumentService{repo: repo, dataDir: dataDir, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func (s *DocumentService) Overview(ctx context.Context, userID string) (DocumentOverview, error) {
@@ -30,6 +35,218 @@ func (s *DocumentService) Overview(ctx context.Context, userID string) (Document
 		return DocumentOverview{}, err
 	}
 	return DocumentOverview{Devices: devices}, nil
+}
+
+func (s *DocumentService) Bookshelf(ctx context.Context, userID string) ([]domain.DocumentBookshelfItem, error) {
+	return s.repo.ListBookshelf(ctx, userID, documentBookshelfLimit)
+}
+
+func (s *DocumentService) UpdateBookshelf(ctx context.Context, userID, documentID, sectionID string, offset int64, progress float64) (domain.DocumentBookshelfItem, error) {
+	if offset < 0 {
+		return domain.DocumentBookshelfItem{}, InvalidRequest("阅读位置不能小于 0")
+	}
+	if progress < 0 || progress > 1 {
+		return domain.DocumentBookshelfItem{}, InvalidRequest("阅读进度必须在 0 到 1 之间")
+	}
+	items, err := s.repo.ListBookshelf(ctx, userID, documentBookshelfLimit+1)
+	if err != nil {
+		return domain.DocumentBookshelfItem{}, err
+	}
+	if len(items) >= documentBookshelfLimit {
+		alreadyExists := false
+		for _, item := range items {
+			if item.DocumentID == documentID {
+				alreadyExists = true
+				break
+			}
+		}
+		if !alreadyExists {
+			return domain.DocumentBookshelfItem{}, InvalidRequest("书架最多保存 100 本书，请先移除一本再加入")
+		}
+	}
+	return s.repo.UpsertBookshelf(ctx, userID, strings.TrimSpace(documentID), strings.TrimSpace(sectionID), offset, progress, s.now().Format(time.RFC3339))
+}
+
+func (s *DocumentService) DeleteBookshelf(ctx context.Context, userID, documentID string) error {
+	return s.repo.DeleteBookshelf(ctx, userID, strings.TrimSpace(documentID))
+}
+
+func (s *DocumentService) BackfillPlain(ctx context.Context, userID string, cursorValue int64, limit int) (map[string]any, error) {
+	if cursorValue < 0 {
+		return nil, InvalidRequest("游标参数不能小于 0")
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+	candidates, err := s.repo.ListPlainUnindexedCandidates(ctx, userID, cursorValue, limit+1)
+	if err != nil {
+		return nil, err
+	}
+	hasMore := len(candidates) > limit
+	if hasMore {
+		candidates = candidates[:limit]
+	}
+	items := make([]domain.DocumentAsset, 0, len(candidates))
+	ignored := make([]string, 0)
+	for _, candidate := range candidates {
+		var metadata map[string]any
+		if err := json.Unmarshal([]byte(candidate.MetadataJSON), &metadata); err != nil || metadata["format"] != "vaultsync-metadata-plain-v1" {
+			ignored = append(ignored, candidate.VersionID)
+			continue
+		}
+		name, _ := metadata["name"].(string)
+		path, _ := metadata["relative_path"].(string)
+		classification := classifyDocumentPath(path)
+		if classification == "" {
+			classification = classifyDocumentPath(name)
+		}
+		if classification == "" {
+			ignored = append(ignored, candidate.VersionID)
+			continue
+		}
+		parts := strings.SplitN(classification, ":", 2)
+		items = append(items, domain.DocumentAsset{
+			ID: newID(), SyncRootID: candidate.SyncRootID, ObjectID: candidate.ObjectID,
+			VersionID: candidate.VersionID, DocumentType: parts[0], DocumentFormat: parts[1],
+			UpdatedAt: candidate.UpdatedAt,
+		})
+	}
+	indexed, marked, err := s.repo.InsertBackfill(ctx, userID, items, ignored, s.now().Format(time.RFC3339))
+	if err != nil {
+		return nil, err
+	}
+	nextCursor := cursorValue
+	if len(candidates) > 0 {
+		nextCursor = candidates[len(candidates)-1].CursorValue
+	}
+	return map[string]any{"indexed_count": indexed, "marked_count": marked, "next_cursor": nextCursor, "has_more": hasMore}, nil
+}
+
+func (s *DocumentService) Preview(ctx context.Context, userID, documentID string) (domain.DocumentPreview, error) {
+	source, err := s.repo.GetPreviewSource(ctx, userID, strings.TrimSpace(documentID))
+	if err != nil {
+		if err == store.ErrNotFound {
+			return domain.DocumentPreview{}, NotFound("文档不存在或无权访问")
+		}
+		return domain.DocumentPreview{}, err
+	}
+	if source.EncryptionEnabled {
+		return domain.DocumentPreview{}, Forbidden("为保护数据安全，加密文档不能在线预览，请下载后查看")
+	}
+	if source.SizeBytes > maxPreviewSourceBytes {
+		return domain.DocumentPreview{}, InvalidRequest("文档过大，在线预览上限为 64 MB")
+	}
+	path := source.ContentPath
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(s.dataDir, path)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return domain.DocumentPreview{}, err
+	}
+	defer file.Close()
+	return parseDocumentPreview(file, source, path)
+}
+
+func (s *DocumentService) PreviewPage(ctx context.Context, userID, documentID, mode, sectionID string, offset int64, limit int) (domain.DocumentPreview, error) {
+	source, err := s.repo.GetPreviewSource(ctx, userID, strings.TrimSpace(documentID))
+	if err != nil {
+		if err == store.ErrNotFound {
+			return domain.DocumentPreview{}, NotFound("文档不存在或无权访问")
+		}
+		return domain.DocumentPreview{}, err
+	}
+	if source.EncryptionEnabled {
+		return domain.DocumentPreview{}, Forbidden("为保护数据安全，加密文档不能在线预览，请下载后查看")
+	}
+	if source.SizeBytes > maxPreviewSourceBytes {
+		return domain.DocumentPreview{}, InvalidRequest("文档过大，在线预览上限为 64 MB")
+	}
+	if offset < 0 {
+		return domain.DocumentPreview{}, InvalidRequest("预览偏移量不能小于 0")
+	}
+	if limit <= 0 {
+		limit = defaultPreviewPageBytes
+	}
+	if limit > maxPreviewPageBytes {
+		limit = maxPreviewPageBytes
+	}
+	path := source.ContentPath
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(s.dataDir, path)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return domain.DocumentPreview{}, err
+	}
+	defer file.Close()
+	if strings.EqualFold(mode, "meta") {
+		return parseDocumentPreviewMetadata(file, source)
+	}
+	return parseDocumentPreviewPage(file, source, sectionID, offset, limit)
+}
+
+func (s *DocumentService) OpenPreviewContent(ctx context.Context, userID, documentID string) (*os.File, string, error) {
+	source, err := s.repo.GetPreviewSource(ctx, userID, strings.TrimSpace(documentID))
+	if err != nil {
+		if err == store.ErrNotFound {
+			return nil, "", NotFound("文档不存在或无权访问")
+		}
+		return nil, "", err
+	}
+	if source.EncryptionEnabled {
+		return nil, "", Forbidden("为保护数据安全，加密文档不能在线预览，请下载后查看")
+	}
+	if source.Format != "pdf" {
+		return nil, "", InvalidRequest("此内容接口只用于 PDF 在线预览")
+	}
+	path := source.ContentPath
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(s.dataDir, path)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, "", err
+	}
+	encrypted, err := isEncryptedPDF(file)
+	if err != nil {
+		_ = file.Close()
+		return nil, "", InvalidRequest("PDF 内容无法读取，请下载原文件查看")
+	}
+	if encrypted {
+		_ = file.Close()
+		return nil, "", Forbidden("为保护数据安全，带密码的 PDF 不能在线预览，请下载后查看")
+	}
+	return file, previewContentType(source.Format), nil
+}
+
+const maxPreviewSourceBytes int64 = 64 * 1024 * 1024
+
+func classifyDocumentPath(path string) string {
+	name := strings.ToLower(strings.ReplaceAll(path, "\\", "/"))
+	name = name[strings.LastIndex(name, "/")+1:]
+	dot := strings.LastIndex(name, ".")
+	if dot < 0 || dot == len(name)-1 {
+		return ""
+	}
+	format := name[dot+1:]
+	groups := map[string]string{
+		"doc": "office", "docx": "office", "docm": "office", "dot": "office", "dotx": "office", "dotm": "office",
+		"xls": "office", "xlsx": "office", "xlsm": "office", "xlt": "office", "xltx": "office", "xltm": "office",
+		"ppt": "office", "pptx": "office", "pptm": "office", "pot": "office", "potx": "office", "potm": "office",
+		"odt": "office", "ods": "office", "odp": "office", "pages": "office", "numbers": "office", "key": "office",
+		"pdf": "pdf",
+		"txt": "text", "md": "text", "markdown": "text", "rtf": "text", "csv": "text", "tsv": "text", "json": "text", "xml": "text", "yaml": "text", "yml": "text", "log": "text",
+		"epub": "ebook", "mobi": "ebook", "azw": "ebook", "azw3": "ebook", "fb2": "ebook", "djvu": "ebook", "cbz": "ebook", "cbr": "ebook",
+	}
+	group := groups[format]
+	if group == "" {
+		return ""
+	}
+	return group + ":" + format
 }
 
 func (s *DocumentService) Items(ctx context.Context, userID string, limit, cursor int, documentType, deviceID, sortBy, order string) (domain.DocumentAssetPage, error) {

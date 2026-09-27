@@ -149,6 +149,20 @@ CREATE TABLE IF NOT EXISTS document_index_marks (
     FOREIGN KEY (version_id) REFERENCES file_versions(id)
 );
 
+CREATE TABLE IF NOT EXISTS document_bookshelf (
+    user_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    added_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_read_at TEXT NOT NULL DEFAULT '',
+    section_id TEXT NOT NULL DEFAULT '',
+    offset INTEGER NOT NULL DEFAULT 0,
+    progress REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY(user_id, document_id),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (document_id) REFERENCES document_assets(id)
+);
+
 CREATE TABLE IF NOT EXISTS file_tombstones (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -238,6 +252,9 @@ ON document_assets(user_id, device_id, updated_at DESC, id DESC);
 
 CREATE INDEX IF NOT EXISTS idx_document_assets_type_time
 ON document_assets(user_id, document_type, updated_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_document_bookshelf_recent
+ON document_bookshelf(user_id, updated_at DESC);
 
 `
 

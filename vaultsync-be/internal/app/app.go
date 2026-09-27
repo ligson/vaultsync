@@ -58,7 +58,7 @@ func New(cfg config.Config) (*App, error) {
 		syncRootService: service.NewSyncRootService(syncRootRepo, deviceRepo, objectRepo),
 		uploadService:   service.NewUploadService(objectRepo, deviceRepo, syncRootRepo, mediaRepo, documentRepo, fsStorage),
 		mediaService:    service.NewMediaService(mediaRepo, syncRootRepo, fsStorage),
-		documentService: service.NewDocumentService(documentRepo),
+		documentService: service.NewDocumentService(documentRepo, cfg.DataDir),
 		changeService:   service.NewChangeService(db, deviceRepo, cfg.DataDir),
 		downloadService: service.NewDownloadService(db, cfg.DataDir),
 		deleteService:   service.NewDeleteService(db, deviceRepo, syncRootRepo),

@@ -19,20 +19,46 @@ abstract interface class DocumentCenterGateway {
     int cursor = 0,
     int limit = 60,
   });
+
+  Future<List<DocumentBookshelfItem>> loadBookshelf();
+
+  Future<DocumentBookshelfItem> updateBookshelf({
+    required String documentId,
+    required String sectionId,
+    required int offset,
+    required double progress,
+  });
+
+  Future<void> removeFromBookshelf(String documentId);
 }
 
 abstract interface class DocumentCenterBackfillGateway {
   Future<int> backfillHistory();
 }
 
+abstract interface class DocumentCenterPreviewGateway {
+  Future<DocumentPreviewData> loadPreview(DocumentCenterEntry entry);
+
+  Future<DocumentPreviewChunk> loadPreviewChunk(
+    DocumentCenterEntry entry, {
+    required String sectionId,
+    required int offset,
+    int limit = 16384,
+  });
+}
+
 class DocumentCenterApiService
-    implements DocumentCenterGateway, DocumentCenterBackfillGateway {
+    implements
+        DocumentCenterGateway,
+        DocumentCenterBackfillGateway,
+        DocumentCenterPreviewGateway {
   final ApiClient apiClient;
   final SessionStore sessionStore;
   final UploadKeyStore keyStore;
   Future<UploadKeyMaterial>? _keysFuture;
   Future<RemoteMetadataDecrypter>? _metadataDecrypterFuture;
   Future<int>? _backfillInFlight;
+  final Map<String, Future<String?>> _rootNameCache = {};
 
   DocumentCenterApiService({
     required this.apiClient,
@@ -51,6 +77,41 @@ class DocumentCenterApiService
         for (final raw in data['devices'] as List<Object?>? ?? const [])
           _device(Map<String, Object?>.from(raw! as Map)),
       ],
+    );
+  }
+
+  @override
+  Future<List<DocumentBookshelfItem>> loadBookshelf() async {
+    final data = await apiClient.get(
+      '/api/v1/documents/bookshelf',
+      token: await _token(),
+    );
+    return [
+      for (final raw in data['items'] as List<Object?>? ?? const [])
+        DocumentBookshelfItem.fromJson(Map<String, Object?>.from(raw! as Map)),
+    ];
+  }
+
+  @override
+  Future<DocumentBookshelfItem> updateBookshelf({
+    required String documentId,
+    required String sectionId,
+    required int offset,
+    required double progress,
+  }) async {
+    final data = await apiClient.put(
+      '/api/v1/documents/bookshelf/${Uri.encodeComponent(documentId)}',
+      token: await _token(),
+      body: {'section_id': sectionId, 'offset': offset, 'progress': progress},
+    );
+    return DocumentBookshelfItem.fromJson(data);
+  }
+
+  @override
+  Future<void> removeFromBookshelf(String documentId) async {
+    await apiClient.delete(
+      '/api/v1/documents/bookshelf/${Uri.encodeComponent(documentId)}',
+      token: await _token(),
     );
   }
 
@@ -165,7 +226,16 @@ class DocumentCenterApiService
   Future<int> backfillHistory() => _backfillInFlight ??= _backfillHistoryOnce();
 
   Future<int> _backfillHistoryOnce() async {
-    const pageSize = 200;
+    final plainResult = await _backfillPlainPage(cursor: 0, limit: 5000);
+    final plainIndexed = plainResult.$1;
+    if (plainResult.$3) {
+      unawaited(_continuePlainBackfill(cursor: plainResult.$2));
+    }
+    const pageSize = 40;
+    if (plainIndexed > 0) {
+      unawaited(_continueBackfill(cursor: 0, pageSize: pageSize));
+      return plainIndexed;
+    }
     var indexed = 0;
     var cursor = 0;
     var hasMore = true;
@@ -178,7 +248,43 @@ class DocumentCenterApiService
     if (hasMore) {
       unawaited(_continueBackfill(cursor: cursor, pageSize: pageSize));
     }
-    return indexed;
+    return plainIndexed + indexed;
+  }
+
+  Future<(int, int, bool)> _backfillPlainPage({
+    required int cursor,
+    required int limit,
+  }) async {
+    final data = await apiClient.post(
+      Uri(
+        path: '/api/v1/documents/plain-indexes',
+        queryParameters: {'cursor': '$cursor', 'limit': '$limit'},
+      ).toString(),
+      token: await _token(),
+      body: const {},
+    );
+    return (
+      (data['indexed_count'] as num?)?.toInt() ?? 0,
+      (data['next_cursor'] as num?)?.toInt() ?? cursor,
+      data['has_more'] as bool? ?? false,
+    );
+  }
+
+  Future<void> _continuePlainBackfill({required int cursor}) async {
+    try {
+      var nextCursor = cursor;
+      var hasMore = true;
+      while (hasMore) {
+        final result = await _backfillPlainPage(
+          cursor: nextCursor,
+          limit: 5000,
+        );
+        nextCursor = result.$2;
+        hasMore = result.$3;
+      }
+    } catch (_) {
+      // A later open resumes from the remaining unmarked plain documents.
+    }
   }
 
   Future<void> _continueBackfill({
@@ -261,18 +367,36 @@ class DocumentCenterApiService
       metadataJson: item['metadata_json'] as String,
       updatedAt: item['updated_at'] as String,
     );
-    final decrypted = await (await _metadataDecrypter()).decrypt(object);
+    final plainName = item['plain_name'] as String? ?? '';
+    final plainRelativePath = item['plain_relative_path'] as String? ?? '';
+    final encryptionEnabled = item['encryption_enabled'] as bool? ?? true;
+    final decrypted = !encryptionEnabled && plainName.isNotEmpty
+        ? RemoteBackupEntry(
+            syncRootId: object.syncRootId,
+            objectId: object.objectId,
+            versionId: object.versionId,
+            name: plainName,
+            relativePath: plainRelativePath.isEmpty
+                ? plainName
+                : plainRelativePath,
+            sizeBytes: object.sizeBytes,
+            updatedAt: object.updatedAt,
+            contentHash: object.contentHash,
+          )
+        : await (await _metadataDecrypter()).decrypt(object);
     final backup = decrypted.withPayloadMetadata(
       encryptedName: object.encryptedName,
       metadataJson: object.metadataJson,
     );
     final keys = await _keys();
-    final rootName = await SyncRootDisplayNameProtector().decrypt(
-      encryptedDisplayName:
-          item['encrypted_root_display_name'] as String? ?? '',
-      encryptedPath: item['encrypted_root_path'] as String? ?? '',
-      keyBytes: keys.metadataKeyBytes,
-    );
+    final encryptedRootPath = item['encrypted_root_path'] as String? ?? '';
+    final rootName = await (_rootNameCache[encryptedRootPath] ??=
+        _decryptRootName(
+          encryptedDisplayName:
+              item['encrypted_root_display_name'] as String? ?? '',
+          encryptedPath: encryptedRootPath,
+          keyBytes: keys.metadataKeyBytes,
+        ));
     return DocumentCenterEntry(
       id: item['id'] as String,
       deviceId: item['device_id'] as String,
@@ -285,9 +409,97 @@ class DocumentCenterApiService
       documentFormat: item['document_format'] as String,
       sizeBytes: object.sizeBytes,
       updatedAt: DateTime.parse(object.updatedAt),
+      encryptionEnabled: encryptionEnabled,
       remoteBackup: backup,
     );
   }
+
+  Future<String?> _decryptRootName({
+    required String encryptedDisplayName,
+    required String encryptedPath,
+    required List<int> keyBytes,
+  }) {
+    return SyncRootDisplayNameProtector().decrypt(
+      encryptedDisplayName: encryptedDisplayName,
+      encryptedPath: encryptedPath,
+      keyBytes: keyBytes,
+    );
+  }
+
+  @override
+  Future<DocumentPreviewData> loadPreview(DocumentCenterEntry entry) async {
+    if (entry.encryptionEnabled) {
+      throw Exception('为保护数据安全，加密文档不能在线预览，请下载后查看');
+    }
+    final data = await apiClient.get(
+      '/api/v1/documents/${Uri.encodeComponent(entry.id)}/preview?mode=meta',
+      token: await _token(),
+    );
+    final sections = [
+      for (final raw in data['sections'] as List<Object?>? ?? const [])
+        _previewSection(Map<String, Object?>.from(raw! as Map)),
+    ];
+    final token = await _token();
+    final pdfPath =
+        '/api/v1/documents/${Uri.encodeComponent(entry.id)}/content';
+    return DocumentPreviewData(
+      name: data['name'] as String? ?? entry.name,
+      format: data['format'] as String? ?? entry.documentFormat,
+      kind: data['kind'] as String? ?? 'text',
+      sections: sections,
+      pdfUri: data['kind'] == 'pdf' ? apiClient.resolveUri(pdfPath) : null,
+      pdfHeaders: data['kind'] == 'pdf'
+          ? {'authorization': 'Bearer $token'}
+          : const {},
+      truncated: data['truncated'] as bool? ?? false,
+      paged: data['paged'] as bool? ?? false,
+      totalBytes: (data['total_bytes'] as num?)?.toInt() ?? entry.sizeBytes,
+    );
+  }
+
+  @override
+  Future<DocumentPreviewChunk> loadPreviewChunk(
+    DocumentCenterEntry entry, {
+    required String sectionId,
+    required int offset,
+    int limit = 16384,
+  }) async {
+    if (entry.encryptionEnabled) {
+      throw Exception('为保护数据安全，加密文档不能在线预览，请下载后查看');
+    }
+    final query = Uri(
+      path: '/api/v1/documents/${Uri.encodeComponent(entry.id)}/preview',
+      queryParameters: {
+        'mode': 'page',
+        'section_id': sectionId,
+        'offset': '$offset',
+        'limit': '$limit',
+      },
+    ).toString();
+    final data = await apiClient.get(query, token: await _token());
+    return DocumentPreviewChunk(
+      sectionId: data['section_id'] as String? ?? sectionId,
+      offset: (data['offset'] as num?)?.toInt() ?? offset,
+      nextOffset: (data['next_offset'] as num?)?.toInt() ?? offset,
+      hasMore: data['has_more'] as bool? ?? false,
+      content:
+          data['sections'] is List<Object?> &&
+              (data['sections'] as List<Object?>).isNotEmpty
+          ? _previewSection(
+              Map<String, Object?>.from(
+                ((data['sections'] as List<Object?>).first! as Map),
+              ),
+            ).content
+          : '',
+    );
+  }
+
+  DocumentPreviewSection _previewSection(Map<String, Object?> item) =>
+      DocumentPreviewSection(
+        id: item['id'] as String? ?? '',
+        title: item['title'] as String? ?? '正文',
+        content: item['content'] as String? ?? '',
+      );
 
   Future<String> _token() async {
     final token = await sessionStore.loadAuthToken();

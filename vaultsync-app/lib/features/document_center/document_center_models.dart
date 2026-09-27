@@ -100,6 +100,7 @@ class DocumentCenterEntry {
   final String documentFormat;
   final int sizeBytes;
   final DateTime updatedAt;
+  final bool encryptionEnabled;
   final RemoteBackupEntry remoteBackup;
 
   const DocumentCenterEntry({
@@ -114,8 +115,177 @@ class DocumentCenterEntry {
     required this.documentFormat,
     required this.sizeBytes,
     required this.updatedAt,
+    required this.encryptionEnabled,
     required this.remoteBackup,
   });
+}
+
+class DocumentBookshelfItem {
+  final String documentId;
+  final String deviceId;
+  final String deviceName;
+  final String syncRootId;
+  final String objectId;
+  final String versionId;
+  final String encryptedName;
+  final String metadataJson;
+  final String contentHash;
+  final String name;
+  final String relativePath;
+  final String documentType;
+  final String documentFormat;
+  final int sizeBytes;
+  final DateTime updatedAt;
+  final bool encryptionEnabled;
+  final String sectionId;
+  final int offset;
+  final double progress;
+  final DateTime addedAt;
+  final DateTime? lastReadAt;
+
+  const DocumentBookshelfItem({
+    required this.documentId,
+    required this.deviceId,
+    required this.deviceName,
+    required this.syncRootId,
+    required this.objectId,
+    required this.versionId,
+    required this.encryptedName,
+    required this.metadataJson,
+    required this.contentHash,
+    required this.name,
+    required this.relativePath,
+    required this.documentType,
+    required this.documentFormat,
+    required this.sizeBytes,
+    required this.updatedAt,
+    required this.encryptionEnabled,
+    required this.sectionId,
+    required this.offset,
+    required this.progress,
+    required this.addedAt,
+    required this.lastReadAt,
+  });
+
+  factory DocumentBookshelfItem.fromJson(Map<String, Object?> json) {
+    return DocumentBookshelfItem(
+      documentId: json['document_id'] as String,
+      deviceId: json['device_id'] as String? ?? '',
+      deviceName: json['device_name'] as String? ?? '未命名设备',
+      syncRootId: json['sync_root_id'] as String? ?? '',
+      objectId: json['object_id'] as String? ?? '',
+      versionId: json['version_id'] as String? ?? '',
+      encryptedName: json['encrypted_name'] as String? ?? '',
+      metadataJson: json['metadata_json'] as String? ?? '',
+      contentHash: json['content_hash'] as String? ?? '',
+      name: json['name'] as String? ?? '未命名文档',
+      relativePath: json['relative_path'] as String? ?? '',
+      documentType: json['document_type'] as String? ?? 'ebook',
+      documentFormat: json['document_format'] as String? ?? '',
+      sizeBytes: (json['size_bytes'] as num?)?.toInt() ?? 0,
+      updatedAt: DateTime.parse(json['updated_at'] as String),
+      encryptionEnabled: json['encryption_enabled'] as bool? ?? true,
+      sectionId: json['section_id'] as String? ?? '',
+      offset: (json['offset'] as num?)?.toInt() ?? 0,
+      progress: (json['progress'] as num?)?.toDouble() ?? 0,
+      addedAt: DateTime.parse(json['added_at'] as String),
+      lastReadAt: _documentOptionalDateTime(json['last_read_at']),
+    );
+  }
+}
+
+class DocumentPreviewSection {
+  final String id;
+  final String title;
+  final String content;
+
+  const DocumentPreviewSection({
+    required this.id,
+    required this.title,
+    required this.content,
+  });
+}
+
+class DocumentPreviewData {
+  final String name;
+  final String format;
+  final String kind;
+  final List<DocumentPreviewSection> sections;
+  final Uri? pdfUri;
+  final Map<String, String> pdfHeaders;
+  final bool truncated;
+  final bool paged;
+  final int totalBytes;
+
+  const DocumentPreviewData({
+    required this.name,
+    required this.format,
+    required this.kind,
+    required this.sections,
+    this.pdfUri,
+    this.pdfHeaders = const {},
+    this.truncated = false,
+    this.paged = false,
+    this.totalBytes = 0,
+  });
+}
+
+class DocumentPreviewChunk {
+  final String sectionId;
+  final int offset;
+  final int nextOffset;
+  final bool hasMore;
+  final String content;
+
+  const DocumentPreviewChunk({
+    required this.sectionId,
+    required this.offset,
+    required this.nextOffset,
+    required this.hasMore,
+    required this.content,
+  });
+}
+
+bool documentCanOnlinePreview(DocumentCenterEntry entry) {
+  if (entry.encryptionEnabled) return false;
+  return const {
+    'pdf',
+    'txt',
+    'md',
+    'markdown',
+    'rtf',
+    'csv',
+    'tsv',
+    'json',
+    'xml',
+    'yaml',
+    'yml',
+    'log',
+    'docx',
+    'docm',
+    'dotx',
+    'dotm',
+    'xlsx',
+    'xlsm',
+    'xltx',
+    'xltm',
+    'pptx',
+    'pptm',
+    'potx',
+    'potm',
+    'odt',
+    'ods',
+    'odp',
+    'epub',
+    'mobi',
+    'fb2',
+  }.contains(entry.documentFormat.toLowerCase());
+}
+
+DateTime? _documentOptionalDateTime(Object? value) {
+  final text = value as String?;
+  if (text == null || text.isEmpty) return null;
+  return DateTime.tryParse(text);
 }
 
 class DocumentCenterPage {

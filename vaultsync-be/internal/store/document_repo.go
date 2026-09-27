@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 
 	"github.com/ligson/vaultsync/internal/domain"
 )
@@ -54,6 +55,7 @@ func (r *DocumentRepo) ListItems(ctx context.Context, userID, documentType, devi
 	query := `
 		SELECT da.id, da.device_id, COALESCE(d.name, ''), da.sync_root_id,
 			COALESCE(sr.encrypted_display_name, ''), sr.encrypted_path,
+			sr.encryption_enabled,
 			da.object_id, da.version_id, fv.encrypted_name, fv.metadata_json,
 			fv.content_hash, fv.size_bytes, da.document_type,
 			da.document_format, da.updated_at
@@ -81,17 +83,255 @@ func (r *DocumentRepo) ListItems(ctx context.Context, userID, documentType, devi
 	items := make([]domain.DocumentAsset, 0)
 	for rows.Next() {
 		var item domain.DocumentAsset
+		var encryptionEnabled int
 		if err := rows.Scan(&item.ID, &item.DeviceID, &item.DeviceName,
 			&item.SyncRootID, &item.EncryptedRootDisplayName,
-			&item.EncryptedRootPath, &item.ObjectID, &item.VersionID,
+			&item.EncryptedRootPath, &encryptionEnabled,
+			&item.ObjectID, &item.VersionID,
 			&item.EncryptedName, &item.MetadataJSON, &item.ContentHash,
 			&item.SizeBytes, &item.DocumentType, &item.DocumentFormat,
 			&item.UpdatedAt); err != nil {
 			return nil, err
 		}
+		item.EncryptionEnabled = encryptionEnabled != 0
+		if !item.EncryptionEnabled {
+			var metadata struct {
+				Name         string `json:"name"`
+				RelativePath string `json:"relative_path"`
+				Format       string `json:"format"`
+			}
+			if json.Unmarshal([]byte(item.MetadataJSON), &metadata) == nil &&
+				metadata.Format == "vaultsync-metadata-plain-v1" {
+				item.PlainName = metadata.Name
+				item.PlainRelativePath = metadata.RelativePath
+			}
+		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (r *DocumentRepo) ListBookshelf(ctx context.Context, userID string, limit int) ([]domain.DocumentBookshelfItem, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT db.document_id, da.device_id, COALESCE(d.name, ''), da.sync_root_id,
+			da.object_id, da.version_id, fv.encrypted_name, fv.metadata_json, fv.content_hash,
+			COALESCE(json_extract(fv.metadata_json, '$.name'), fv.encrypted_name),
+			COALESCE(json_extract(fv.metadata_json, '$.relative_path'), ''),
+			da.document_type, da.document_format, fv.size_bytes, da.updated_at,
+			sr.encryption_enabled, db.section_id, db.offset, db.progress,
+			db.added_at, db.last_read_at
+		FROM document_bookshelf db
+		JOIN document_assets da ON da.id = db.document_id AND da.user_id = db.user_id
+		JOIN file_versions fv ON fv.id = da.version_id AND fv.user_id = da.user_id
+		JOIN sync_roots sr ON sr.id = da.sync_root_id AND sr.user_id = da.user_id
+		LEFT JOIN devices d ON d.id = da.device_id AND d.user_id = da.user_id
+		WHERE db.user_id = ?
+			AND NOT EXISTS (
+				SELECT 1 FROM file_tombstones ft
+				WHERE ft.user_id = da.user_id
+					AND ft.sync_root_id = da.sync_root_id
+					AND ft.object_id = da.object_id
+			)
+		ORDER BY db.updated_at DESC, db.document_id
+		LIMIT ?
+	`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]domain.DocumentBookshelfItem, 0)
+	for rows.Next() {
+		var item domain.DocumentBookshelfItem
+		var encryptionEnabled int
+		if err := rows.Scan(&item.DocumentID, &item.DeviceID, &item.DeviceName,
+			&item.SyncRootID, &item.ObjectID, &item.VersionID, &item.EncryptedName,
+			&item.MetadataJSON, &item.ContentHash, &item.Name, &item.RelativePath,
+			&item.DocumentType, &item.DocumentFormat, &item.SizeBytes,
+			&item.UpdatedAt, &encryptionEnabled, &item.SectionID, &item.Offset,
+			&item.Progress, &item.AddedAt, &item.LastReadAt); err != nil {
+			return nil, err
+		}
+		item.EncryptionEnabled = encryptionEnabled != 0
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *DocumentRepo) UpsertBookshelf(ctx context.Context, userID, documentID, sectionID string, offset int64, progress float64, now string) (domain.DocumentBookshelfItem, error) {
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 1 {
+		progress = 1
+	}
+	result, err := r.db.ExecContext(ctx, `
+		INSERT INTO document_bookshelf(user_id, document_id, added_at, updated_at, last_read_at, section_id, offset, progress)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE EXISTS (SELECT 1 FROM document_assets WHERE user_id = ? AND id = ?)
+		ON CONFLICT(user_id, document_id) DO UPDATE SET
+			updated_at = excluded.updated_at,
+			last_read_at = excluded.last_read_at,
+			section_id = excluded.section_id,
+			offset = excluded.offset,
+			progress = excluded.progress
+	`, userID, documentID, now, now, now, sectionID, offset, progress, userID, documentID)
+	if err != nil {
+		return domain.DocumentBookshelfItem{}, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return domain.DocumentBookshelfItem{}, err
+	}
+	if count == 0 {
+		return domain.DocumentBookshelfItem{}, ErrNotFound
+	}
+	items, err := r.ListBookshelfByDocument(ctx, userID, documentID)
+	if err != nil {
+		return domain.DocumentBookshelfItem{}, err
+	}
+	return items, nil
+}
+
+func (r *DocumentRepo) ListBookshelfByDocument(ctx context.Context, userID, documentID string) (domain.DocumentBookshelfItem, error) {
+	items, err := r.listBookshelfQuery(ctx, userID, documentID)
+	if err != nil {
+		return domain.DocumentBookshelfItem{}, err
+	}
+	if len(items) == 0 {
+		return domain.DocumentBookshelfItem{}, ErrNotFound
+	}
+	return items[0], nil
+}
+
+func (r *DocumentRepo) DeleteBookshelf(ctx context.Context, userID, documentID string) error {
+	result, err := r.db.ExecContext(ctx, `DELETE FROM document_bookshelf WHERE user_id = ? AND document_id = ?`, userID, documentID)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *DocumentRepo) listBookshelfQuery(ctx context.Context, userID, documentID string) ([]domain.DocumentBookshelfItem, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT db.document_id, da.device_id, COALESCE(d.name, ''), da.sync_root_id,
+			da.object_id, da.version_id, fv.encrypted_name, fv.metadata_json, fv.content_hash,
+			COALESCE(json_extract(fv.metadata_json, '$.name'), fv.encrypted_name),
+			COALESCE(json_extract(fv.metadata_json, '$.relative_path'), ''),
+			da.document_type, da.document_format, fv.size_bytes, da.updated_at,
+			sr.encryption_enabled, db.section_id, db.offset, db.progress,
+			db.added_at, db.last_read_at
+		FROM document_bookshelf db
+		JOIN document_assets da ON da.id = db.document_id AND da.user_id = db.user_id
+		JOIN file_versions fv ON fv.id = da.version_id AND fv.user_id = da.user_id
+		JOIN sync_roots sr ON sr.id = da.sync_root_id AND sr.user_id = da.user_id
+		LEFT JOIN devices d ON d.id = da.device_id AND d.user_id = da.user_id
+		WHERE db.user_id = ? AND db.document_id = ?
+	`, userID, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]domain.DocumentBookshelfItem, 0, 1)
+	for rows.Next() {
+		var item domain.DocumentBookshelfItem
+		var encryptionEnabled int
+		if err := rows.Scan(&item.DocumentID, &item.DeviceID, &item.DeviceName,
+			&item.SyncRootID, &item.ObjectID, &item.VersionID, &item.EncryptedName,
+			&item.MetadataJSON, &item.ContentHash, &item.Name, &item.RelativePath,
+			&item.DocumentType, &item.DocumentFormat, &item.SizeBytes,
+			&item.UpdatedAt, &encryptionEnabled, &item.SectionID, &item.Offset,
+			&item.Progress, &item.AddedAt, &item.LastReadAt); err != nil {
+			return nil, err
+		}
+		item.EncryptionEnabled = encryptionEnabled != 0
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *DocumentRepo) ListPlainUnindexedCandidates(ctx context.Context, userID string, cursorValue int64, limit int) ([]domain.RemoteBackupObject, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT fv.rowid, fv.sync_root_id, fv.object_id, fv.id,
+			fv.encrypted_name, fv.content_hash, fv.size_bytes,
+			fv.metadata_json, fv.created_at
+		FROM file_versions fv
+		JOIN sync_roots sr ON sr.user_id = fv.user_id AND sr.id = fv.sync_root_id
+		WHERE fv.user_id = ? AND sr.encryption_enabled = 0
+			AND fv.rowid > ?
+			AND NOT EXISTS (
+				SELECT 1 FROM file_versions newer
+				WHERE newer.user_id = fv.user_id
+					AND newer.sync_root_id = fv.sync_root_id
+					AND newer.object_id = fv.object_id
+					AND newer.rowid > fv.rowid
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM document_index_marks dim
+				WHERE dim.user_id = fv.user_id AND dim.version_id = fv.id
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM file_tombstones ft
+				WHERE ft.user_id = fv.user_id
+					AND ft.sync_root_id = fv.sync_root_id
+					AND ft.object_id = fv.object_id
+			)
+		ORDER BY fv.rowid
+		LIMIT ?
+	`, userID, cursorValue, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]domain.RemoteBackupObject, 0)
+	for rows.Next() {
+		var item domain.RemoteBackupObject
+		if err := rows.Scan(&item.CursorValue, &item.SyncRootID, &item.ObjectID,
+			&item.VersionID, &item.EncryptedName, &item.ContentHash,
+			&item.SizeBytes, &item.MetadataJSON, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+type DocumentPreviewSource struct {
+	ID                string
+	Name              string
+	Format            string
+	MetadataJSON      string
+	ContentPath       string
+	SizeBytes         int64
+	EncryptionEnabled bool
+}
+
+func (r *DocumentRepo) GetPreviewSource(ctx context.Context, userID, documentID string) (DocumentPreviewSource, error) {
+	var source DocumentPreviewSource
+	var encryptionEnabled int
+	err := r.db.QueryRowContext(ctx, `
+		SELECT da.id, fv.encrypted_name, da.document_format, fv.metadata_json,
+			fv.content_path, fv.size_bytes, sr.encryption_enabled
+		FROM document_assets da
+		JOIN file_versions fv ON fv.user_id = da.user_id AND fv.id = da.version_id
+		JOIN sync_roots sr ON sr.user_id = da.user_id AND sr.id = da.sync_root_id
+		WHERE da.user_id = ? AND da.id = ?
+	`, userID, documentID).Scan(&source.ID, &source.Name, &source.Format,
+		&source.MetadataJSON, &source.ContentPath, &source.SizeBytes, &encryptionEnabled)
+	if err == sql.ErrNoRows {
+		return DocumentPreviewSource{}, ErrNotFound
+	}
+	if err != nil {
+		return DocumentPreviewSource{}, err
+	}
+	source.EncryptionEnabled = encryptionEnabled != 0
+	return source, nil
 }
 
 func (r *DocumentRepo) ListUnindexedCandidates(ctx context.Context, userID string, cursorValue int64, limit int) ([]domain.RemoteBackupObject, error) {

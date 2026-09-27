@@ -178,12 +178,61 @@ type DocumentAsset struct {
 	DocumentType             string `json:"document_type"`
 	DocumentFormat           string `json:"document_format"`
 	UpdatedAt                string `json:"updated_at"`
+	EncryptionEnabled        bool   `json:"encryption_enabled"`
+	PlainName                string `json:"plain_name,omitempty"`
+	PlainRelativePath        string `json:"plain_relative_path,omitempty"`
 }
 
 type DocumentAssetPage struct {
 	Items      []DocumentAsset `json:"items"`
 	NextCursor int             `json:"next_cursor"`
 	HasMore    bool            `json:"has_more"`
+}
+
+type DocumentBookshelfItem struct {
+	DocumentID        string  `json:"document_id"`
+	DeviceID          string  `json:"device_id"`
+	DeviceName        string  `json:"device_name"`
+	SyncRootID        string  `json:"sync_root_id"`
+	ObjectID          string  `json:"object_id"`
+	VersionID         string  `json:"version_id"`
+	EncryptedName     string  `json:"encrypted_name"`
+	MetadataJSON      string  `json:"metadata_json"`
+	ContentHash       string  `json:"content_hash"`
+	Name              string  `json:"name"`
+	RelativePath      string  `json:"relative_path"`
+	DocumentType      string  `json:"document_type"`
+	DocumentFormat    string  `json:"document_format"`
+	SizeBytes         int64   `json:"size_bytes"`
+	UpdatedAt         string  `json:"updated_at"`
+	EncryptionEnabled bool    `json:"encryption_enabled"`
+	SectionID         string  `json:"section_id"`
+	Offset            int64   `json:"offset"`
+	Progress          float64 `json:"progress"`
+	AddedAt           string  `json:"added_at"`
+	LastReadAt        string  `json:"last_read_at"`
+}
+
+type DocumentPreviewSection struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Content string `json:"content"`
+}
+
+type DocumentPreview struct {
+	ID                string                   `json:"id"`
+	Name              string                   `json:"name"`
+	Format            string                   `json:"format"`
+	Kind              string                   `json:"kind"`
+	EncryptionEnabled bool                     `json:"encryption_enabled"`
+	Sections          []DocumentPreviewSection `json:"sections"`
+	Truncated         bool                     `json:"truncated"`
+	Paged             bool                     `json:"paged,omitempty"`
+	SectionID         string                   `json:"section_id,omitempty"`
+	Offset            int64                    `json:"offset,omitempty"`
+	NextOffset        int64                    `json:"next_offset,omitempty"`
+	HasMore           bool                     `json:"has_more,omitempty"`
+	TotalBytes        int64                    `json:"total_bytes,omitempty"`
 }
 
 type FileVersion struct {
